@@ -157,6 +157,13 @@ async function openArchive(repo) {
   message("info");
   try {
     const t = await token();
+    // an empty repository (no commit yet) is not an archive, and GitHub cannot
+    // add commits to it through its API: it must be made from the template
+    const meta = await gh.api(t, `/repos/${repo}`);
+    if (!(await gh.listDir(t, repo, "")).length) {
+      showEmpty(repo, meta);
+      return;
+    }
     state.hasWorkflow = (await gh.readText(t, repo, ".github/workflows/from-request.yml")) !== null;
     state.settings = await gh.readJSON(t, repo, "osheaf.json");
     state.objects = [];
@@ -178,6 +185,26 @@ async function openArchive(repo) {
   } catch (e) {
     show("#archive", el("p", { class: "notice bad" }, `Could not read ${repo}: ${e.message}`));
   }
+}
+
+function showEmpty(repo, meta) {
+  const fromTemplate = "https://github.com/new?template_owner=opensheaf&template_name=archive-template";
+  const install = APP_SLUG ? `https://github.com/apps/${APP_SLUG}/installations/new`
+                           : "https://github.com/settings/installations";
+  show("#archive",
+    el("div", { class: "notice warn" },
+      el("p", {}, el("strong", {}, `${repo} is empty. `),
+        "An archive's repository is made from the archive template, which brings the files and the " +
+        "workflows that carry out the manager's requests; an empty repository has none, and GitHub " +
+        "does not let a page add the first commit."),
+      el("p", {}, "To start an archive:"),
+      el("ol", {},
+        el("li", {}, el("a", { href: fromTemplate }, "Create a repository from the archive template"),
+           " (public, so that GitHub Pages can publish it); you may delete ",
+           el("a", { href: meta && meta.html_url ? `${meta.html_url}/settings` : `https://github.com/${repo}/settings` },
+              "this empty one"), ", or use its name for the new one after deleting it."),
+        el("li", {}, el("a", { href: install }, "Install the OpenSheaf app"), " on the new repository."),
+        el("li", {}, "Come back here, open it, and set it up."))));
 }
 
 // Titles of the documents, read after the page is shown.
