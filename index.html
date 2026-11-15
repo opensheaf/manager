@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src https://opensheaf.org; img-src 'self' data:; connect-src https://api.github.com https://raw.githubusercontent.com https://opensheaf-gh-auth.opensheaf.workers.dev; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
+<title>OpenSheaf Manager</title>
+<meta name="description" content="Keep an OpenSheaf archive from the browser: deposit papers, give notices, curate collections.">
+<link rel="icon" href="opensheaf-symbol.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="site">
+  <a class="brand" href="./"><img class="symbol" src="opensheaf-symbol.svg" alt="" width="20" height="20">OpenSheaf Manager</a>
+  <nav class="nav">
+    <a href="https://opensheaf.org/explorer/">Explorer</a>
+    <a href="https://opensheaf.org/">OpenSheaf</a>
+  </nav>
+</header>
+<main>
+  <h1>Keep your archive from the browser</h1>
+  <p class="lead">For an archive made from the
+  <a href="https://github.com/opensheaf/archive-template">archive template</a>: deposit papers and new
+  versions, give notices and new licences, withdraw, and curate collections. Each change is sent to
+  the archive's repository as a request, which the archive's own workflow carries out with
+  <code>osheaf</code>, exactly as from the command line.</p>
+  <div id="message"></div>
+  <section id="account"><noscript><p>The manager is a JavaScript application.</p></noscript></section>
+  <section id="archive"></section>
+  <section id="form"></section>
+</main>
+<footer class="site">
+  <p><strong>Draft.</strong> OpenSheaf 0.1 is a draft specification: until version 1.0, a revision may
+  change the format in incompatible ways.</p>
+  <p><a href="https://github.com/opensheaf/manager">Source code</a> (GPL-3.0-or-later) ·
+  sign-in through <a href="https://github.com/opensheaf/gh-auth">gh-auth</a> ·
+  the OpenSheaf symbol is licensed under CC BY 4.0.</p>
+</footer>
+</body>
+</html>

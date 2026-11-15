@@ -1,0 +1,152 @@
+/* The OpenSheaf Manager, in the design of opensheaf.org: the block of --os-*
+   variables is that of the site's resources/opensheaf.css, copied whole. */
+:root {
+    color-scheme: light;
+    --os-paper: #f9f8f5;
+    --os-surface: #f1efea;
+    --os-rule: #dedbd3;
+    --os-ink: #171716;
+    --os-muted: #6a6861;
+    --os-faint: #a09d95;
+    --os-ok: #2c6a3e;
+    --os-ok-bg: #e6efe4;
+    --os-bad: #9d2b22;
+    --os-bad-bg: #f6e4e0;
+    --os-warn: #7d5200;
+    --os-warn-bg: #f5ecd6;
+    --os-serif: "CMU Serif", "Latin Modern Roman", "Computer Modern", "Times New Roman", serif;
+    --os-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --os-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --os-paper: #12141a;
+        --os-surface: #1b1e25;
+        --os-rule: #31353e;
+        --os-ink: #e6e7ea;
+        --os-muted: #9a9ea8;
+        --os-faint: #646975;
+        --os-ok: #93cfa1;
+        --os-ok-bg: #182a23;
+        --os-bad: #eda59c;
+        --os-bad-bg: #342025;
+        --os-warn: #e7c277;
+        --os-warn-bg: #2d281c;
+    }
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --os-paper: #12141a;
+    --os-surface: #1b1e25;
+    --os-rule: #31353e;
+    --os-ink: #e6e7ea;
+    --os-muted: #9a9ea8;
+    --os-faint: #646975;
+    --os-ok: #93cfa1;
+    --os-ok-bg: #182a23;
+    --os-bad: #eda59c;
+    --os-bad-bg: #342025;
+    --os-warn: #e7c277;
+    --os-warn-bg: #2d281c;
+}
+@media print {
+    :root, :root[data-theme] {
+        color-scheme: light !important;
+        --os-paper: #fff !important;
+        --os-surface: #fff !important;
+        --os-rule: #999 !important;
+        --os-ink: #000 !important;
+        --os-muted: #333 !important;
+        --os-faint: #666 !important;
+        --os-ok: #000 !important;
+        --os-ok-bg: #fff !important;
+        --os-bad: #000 !important;
+        --os-bad-bg: #fff !important;
+        --os-warn: #000 !important;
+        --os-warn-bg: #fff !important;
+    }
+}
+@font-face { font-family: "IBM Plex Sans"; font-style: normal; font-weight: 100 700; font-display: swap;
+             src: url("https://opensheaf.org/resources/fonts/plex/IBMPlexSans-Roman.woff2") format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-style: italic; font-weight: 100 700; font-display: swap;
+             src: url("https://opensheaf.org/resources/fonts/plex/IBMPlexSans-Italic.woff2") format("woff2"); }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 100 800; font-display: swap;
+             src: url("https://opensheaf.org/resources/fonts/jetbrains/JetBrainsMono-Roman.woff2") format("woff2"); }
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--os-paper); color: var(--os-ink); font: 16px/1.6 var(--os-sans);
+       -webkit-font-smoothing: antialiased; }
+main, header.site, footer.site { max-width: 50rem; margin: 0 auto; padding-left: 16px; padding-right: 16px; }
+main { padding-bottom: 4rem; }
+a, a:visited { color: inherit; text-decoration: underline; text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em; text-decoration-color: var(--os-faint); }
+a:hover, a:focus { text-decoration-color: currentColor; }
+:focus-visible { outline: 1.5px solid var(--os-ink); outline-offset: 3px; }
+h1, h2, h3, h4 { font-weight: 700; line-height: 1.2; }
+h1 { font-size: 2rem; letter-spacing: -0.02em; margin: 0.5em 0 0.4em; }
+h2 { font-size: 1.4rem; margin: 2rem 0 0.4rem; }
+h3 { font-size: 1.1rem; margin: 2rem 0 0.6rem; }
+h4 { font-size: 1rem; margin: 0 0 0.2rem; }
+code, pre { font-family: var(--os-mono); font-size: 0.85em; font-variant-ligatures: none; }
+pre { white-space: pre-wrap; background: var(--os-surface); padding: 0.6em 0.8em; border-radius: 4px; }
+.lead { color: var(--os-muted); }
+.muted, .help { color: var(--os-muted); }
+.small, .help { font-size: 0.85rem; }
+.loading { color: var(--os-muted); }
+
+header.site { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3em 1.2em; padding-top: 1.4rem; }
+header.site .brand { display: inline-flex; align-items: center; gap: 0.45em; font-size: 1.05rem;
+  text-decoration: none; align-self: center; }
+header.site .nav { display: flex; gap: 1.5em; margin-left: auto; font-size: 0.82rem; }
+header.site .nav a { color: var(--os-muted); text-decoration: none; }
+header.site .nav a:hover { color: var(--os-ink); }
+img.symbol { width: 20px; height: 20px; }
+@media (prefers-color-scheme: dark) { img.symbol { filter: invert(1); } }
+footer.site { color: var(--os-muted); font-size: 0.78rem; line-height: 1.5; padding-bottom: 2.5rem; }
+footer.site a { color: inherit; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 0.5em; align-items: center; margin: 0.8em 0; }
+input, select, textarea, button { font: inherit; color: inherit; }
+input:not([type="file"]), select, textarea { padding: 0.4em 0.6em; border: 1px solid var(--os-rule);
+  border-radius: 4px; background: var(--os-paper); }
+textarea { width: 100%; }
+.controls input:not([type="file"]) { flex: 1 1 14rem; min-width: 0; }
+button { padding: 0.4em 0.9em; border: 1px solid var(--os-rule); border-radius: 4px; background: var(--os-paper);
+  cursor: pointer; }
+button:hover { border-color: var(--os-muted); }
+button.small { padding: 0.1em 0.6em; font-size: 0.82rem; }
+button.primary { background: var(--os-ink); border-color: var(--os-ink); color: var(--os-paper); font-weight: 600; }
+
+.notice { margin: 1em 0; padding: 0.8em 1.1em; border-radius: 4px; background: var(--os-surface); }
+.notice.ok { background: var(--os-ok-bg); }
+.notice.bad { background: var(--os-bad-bg); }
+.notice.warn { background: var(--os-warn-bg); }
+.notice p { margin: 0.3em 0; }
+.chip { display: inline-block; padding: 0.05em 0.6em; border-radius: 999px; font-size: 0.72rem; line-height: 1.6;
+  background: var(--os-surface); white-space: nowrap; margin-left: 0.3em; vertical-align: 0.1em; }
+.chip.ok { background: var(--os-ok-bg); color: var(--os-ok); }
+.chip.bad { background: var(--os-bad-bg); color: var(--os-bad); }
+.chip.warn { background: var(--os-warn-bg); color: var(--os-warn); }
+
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; border-bottom: 1px solid var(--os-ink); }
+th, td { text-align: left; padding: 0.45em 0.8em 0.45em 0; border-bottom: 1px solid var(--os-rule); vertical-align: top; }
+th { color: var(--os-muted); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+  border-top: 1px solid var(--os-ink); border-bottom-color: var(--os-ink); }
+td.actions { white-space: nowrap; }
+td.actions button { margin: 0 0.2em 0.2em 0; }
+section.collection { padding: 0.8em 0; border-bottom: 1px solid var(--os-rule); }
+ol.members { margin: 0.3em 0; padding-left: 1.4em; font-size: 0.92rem; }
+li::marker { color: var(--os-faint); }
+
+form.op { margin: 2rem 0; padding: 1.2em 1.4em; background: var(--os-surface); border-radius: 4px; }
+form.op h3 { margin-top: 0; }
+.field { margin: 0.8em 0; display: grid; gap: 0.2em; }
+.field label { font-weight: 600; font-size: 0.92rem; }
+.field .required { font-weight: 400; color: var(--os-muted); }
+.field .help { margin: 0; }
+.result { margin: 0.4em 0; padding: 0.5em 0; border-bottom: 1px solid var(--os-rule); }
+.result summary { cursor: pointer; }
+.signed-in { margin: 0.5em 0; }
+@media (max-width: 40rem) { h1 { font-size: 1.6rem; } td.actions { white-space: normal; } }
