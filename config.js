@@ -5,6 +5,6 @@
 export const SERVICE = "https://opensheaf-gh-auth.opensheaf.workers.dev";
 // The GitHub App of the service (https://github.com/apps/<APP_SLUG>), for
 // the link to install it on an archive's repository; empty if unknown.
-export const APP_SLUG = "";
+export const APP_SLUG = "opensheaf-authenticator";
 // Where the archive template lives, for archives that lack its workflows.
 export const TEMPLATE = "https://github.com/opensheaf/archive-template";
