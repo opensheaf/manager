@@ -23,7 +23,10 @@ export async function api(token, path, { method = "GET", body, accept, fetchImpl
     method, headers, body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (response.status === 204) return null;
-  const isJson = (response.headers.get("content-type") || "").includes("json");
+  // raw file contents come labelled application/vnd.github.raw+json, whatever
+  // the file holds: they are read as text, and parsed by readJSON
+  const raw = (accept || "").includes(".raw");
+  const isJson = !raw && (response.headers.get("content-type") || "").includes("json");
   const data = isJson ? await response.json().catch(() => null) : await response.text();
   if (!response.ok) {
     const message = (data && data.message) || `GitHub answered ${response.status}`;

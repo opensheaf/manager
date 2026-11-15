@@ -84,3 +84,14 @@ test("forms: the labels the archive's script reads, and the required fields", ()
   for (const form of Object.values(FORMS))
     for (const f of form.fields) assert.ok(f.label && !f.label.includes("\n"));
 });
+
+test("raw contents are text, whatever GitHub labels them", async () => {
+  const { readText, readJSON } = await import("../github.js");
+  const fetchImpl = async () => ({ ok: true, status: 200,
+    headers: { get: () => "application/vnd.github.raw+json; charset=utf-8" },
+    json: async () => { throw new Error("not JSON"); }, text: async () => "name: verify\n" });
+  assert.equal(await readText("t", "o/r", ".github/workflows/verify.yml", fetchImpl), "name: verify\n");
+  const jsonFetch = async () => ({ ok: true, status: 200,
+    headers: { get: () => "application/vnd.github.raw+json" }, text: async () => '{"a": 1}' });
+  assert.deepEqual(await readJSON("t", "o/r", "x.json", jsonFetch), { a: 1 });
+});
