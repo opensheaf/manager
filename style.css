@@ -129,6 +129,8 @@ button.primary { background: var(--os-ink); border-color: var(--os-ink); color: 
 .chip.ok { background: var(--os-ok-bg); color: var(--os-ok); }
 .chip.bad { background: var(--os-bad-bg); color: var(--os-bad); }
 .chip.warn { background: var(--os-warn-bg); color: var(--os-warn); }
+a.chip.arxiv { text-decoration: none; }
+a.chip.arxiv:hover { text-decoration: underline; }
 
 table { border-collapse: collapse; width: 100%; font-size: 0.9rem; border-bottom: 1px solid var(--os-ink); }
 th, td { text-align: left; padding: 0.45em 0.8em 0.45em 0; border-bottom: 1px solid var(--os-rule); vertical-align: top; }

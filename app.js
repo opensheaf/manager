@@ -145,11 +145,18 @@ async function showRepositories() {
 // --- reading the archive -------------------------------------------------------
 
 async function headFile(t, repo, obj, name) {
+  return (await headFiles(t, repo, obj, [name]))[0];
+}
+
+// Several files of the head version of an object, its inventory read once.
+async function headFiles(t, repo, obj, names) {
   const inv = await gh.readJSON(t, repo, `ocfl/${obj}/inventory.json`);
-  if (!inv) return null;
+  if (!inv) return names.map(() => null);
   const st = inv.versions[inv.head].state;
-  const digest = Object.keys(st).find((d) => st[d].includes(name));
-  return digest ? gh.readJSON(t, repo, `ocfl/${obj}/${inv.manifest[digest][0]}`) : null;
+  return Promise.all(names.map((name) => {
+    const digest = Object.keys(st).find((d) => st[d].includes(name));
+    return digest ? gh.readJSON(t, repo, `ocfl/${obj}/${inv.manifest[digest][0]}`) : null;
+  }));
 }
 
 async function openArchive(repo) {
@@ -209,13 +216,23 @@ function showEmpty(repo, meta) {
         el("li", {}, "Come back here, open it, and set it up."))));
 }
 
-// Titles of the documents, read after the page is shown.
+// Titles of the documents, read after the page is shown, and a label for
+// those imported from arXiv (object.json: an external source on arXiv),
+// linking to the arXiv page of the current version.
 async function loadTitles(t, repo) {
   for (const o of state.objects.filter((x) => x.kind === "document").slice(0, 60)) {
     try {
-      const dc = await headFile(t, repo, o.id, "datacite.json");
+      const [dc, obj] = await headFiles(t, repo, o.id, ["datacite.json", "object.json"]);
       const cell = document.querySelector(`[data-title="${CSS.escape(o.id)}"]`);
-      if (dc && cell) cell.textContent = dc.titles[0].title;
+      if (!cell) continue;
+      if (dc) cell.textContent = dc.titles[0].title;
+      const ax = ((obj && obj.external) || []).find((e) => e.service === "arXiv" && e.role === "source");
+      if (ax) {
+        const label = ax.record && /^https:\/\/arxiv\.org\//.test(ax.record)
+          ? el("a", { class: "chip arxiv", href: ax.record, title: `Imported from arXiv (${ax.label || ""})` }, "arXiv")
+          : el("span", { class: "chip arxiv", title: "Imported from arXiv" }, "arXiv");
+        cell.append(" ", label);
+      }
     } catch (_) { /* a title is a convenience */ }
     if (state.repo !== repo) return;
   }
