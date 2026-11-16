@@ -44,6 +44,8 @@ export const FORMS = {
       { label: "PDF of this version", type: "file", required: true, accept: ".pdf,application/pdf" },
       { label: "Sources", type: "files", help: "One zip, or the source files (then say which is the main one)." },
       { label: "Main source", help: "The main file, as a path inside the zip (e.g. paper.tex)." },
+      { label: "Licence file", placeholder: "LICENSE",
+        help: "Optional: the file among the sources that holds the full text or terms of the licence, as a path inside the zip; recorded as the licence of the paper's files." },
       { label: "If there are no sources, why" },
       { label: "Related identifiers", type: "textarea", placeholder: "IsIdenticalTo:arxiv:1508.07764" },
       { label: "What changed (for a new version)" },
