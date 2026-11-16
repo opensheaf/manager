@@ -73,15 +73,32 @@ async function token() {
   return state.auth.access_token;
 }
 
+// The open repository is kept in the page's address (#repo=owner/name), so
+// that a reload reopens it and the address can be bookmarked; the part after
+// # never leaves the browser.
+function repoInAddress() {
+  const m = /(?:^#|&)repo=([^&]+)/.exec(location.hash);
+  const repo = m ? decodeURIComponent(m[1]) : "";
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ? repo : "";
+}
+
+function setRepoInAddress(repo) {
+  const url = location.pathname + location.search + (repo ? `#repo=${encodeURIComponent(repo).replace("%2F", "/")}` : "");
+  history.replaceState(null, "", url);
+}
+
 async function afterSignIn() {
   state.user = await gh.whoAmI(await token());
   saveAuth();
   await showRepositories();
+  const repo = repoInAddress();
+  if (repo) await openArchive(repo);
 }
 
 function signOut() {
   state.auth = state.user = state.repo = null;
   saveAuth();
+  setRepoInAddress("");
   show("#archive");
   show("#form");
   showSignIn();
@@ -122,7 +139,7 @@ async function showRepositories() {
   const { repos, installations } = await gh.repositories(await token());
   const select = el("select", { id: "repo", "aria-label": "Repository" },
     el("option", { value: "" }, "Choose the archive's repository"),
-    repos.map((r) => el("option", { value: r.full_name }, r.full_name)));
+    repos.map((r) => el("option", { value: r.full_name, selected: r.full_name === repoInAddress() }, r.full_name)));
   const typed = el("input", { id: "repo-typed", placeholder: "owner/repository", "aria-label": "Repository" });
   const install = APP_SLUG ? `https://github.com/apps/${APP_SLUG}/installations/new`
                            : "https://github.com/settings/installations";
@@ -160,7 +177,9 @@ async function headFiles(t, repo, obj, names) {
 }
 
 async function openArchive(repo) {
+  if (state.repo !== repo) state.pending.clear();
   state.repo = repo;
+  setRepoInAddress(repo);
   show("#form");
   show("#archive", el("p", { class: "loading" }, `Reading ${repo} ...`));
   message("info");
@@ -191,6 +210,7 @@ async function openArchive(repo) {
     }
     showArchive();
     loadTitles(t, repo);
+    resumePending(repo);
   } catch (e) {
     show("#archive", el("p", { class: "notice bad" }, `Could not read ${repo}: ${e.message}`));
   }
@@ -410,6 +430,27 @@ async function poll(id) {
     state.pending.get(id) && (state.pending.get(id).late = true);
     showResults();
   }
+}
+
+// Requests still waiting in the repository (requests/ID/, removed by the
+// workflow once carried out), sent before a reload or from another tab:
+// shown as waiting, and their answers awaited.
+async function resumePending(repo) {
+  try {
+    const t = await token();
+    const dirs = (await gh.listDir(t, repo, "requests"))
+      .filter((d) => d.type === "dir" && d.name !== "results" && !state.pending.has(d.name));
+    for (const d of dirs) {
+      const r = await gh.readJSON(t, repo, `requests/${d.name}/request.json`).catch(() => null);
+      if (state.repo !== repo) return;
+      const form = r && FORMS[r.operation];
+      const what = form ? `${form.title}${subject(r.operation, r.fields || {}) ? `: ${subject(r.operation, r.fields || {})}` : ""}`
+                        : `request ${d.name}`;
+      state.pending.set(d.name, { what, since: Date.now() });
+      poll(d.name);
+    }
+    if (dirs.length) showResults();
+  } catch (_) { /* waiting requests are a convenience */ }
 }
 
 async function showResults() {
