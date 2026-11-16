@@ -258,6 +258,16 @@ async function loadTitles(t, repo) {
   }
 }
 
+// A member of a collection in the Explorer, which shows the objects of any
+// published archive: the paper or collection, or one of its versions
+// (v5); a member of this archive is looked up in this archive.
+function memberLink(m, ownBase, version) {
+  const archive = m.archiveUrl || ownBase;
+  const page = m.kind === "collection" ? "collection" : "object";
+  return `https://opensheaf.org/explorer/?url=${encodeURIComponent(archive)}` +
+         `#/${page}/${encodeURIComponent(m.id)}${version ? `/${encodeURIComponent(version)}` : ""}`;
+}
+
 function docs() {
   return state.objects.filter((o) => o.kind === "document");
 }
@@ -305,8 +315,11 @@ function showArchive() {
          s.index && s.index.html && s.index.html.featured === c.id ? el("span", { class: "chip ok" }, "featured") : null),
       el("p", { class: "small muted" }, el("code", {}, c.id)),
       c.members.length ? el("ol", { class: "members" }, c.members.map((m) => el("li", {},
-        el("code", {}, m.id), m.cite && m.cite.title ? ` ${m.cite.title}` : "",
-        m.revisions ? el("span", { class: "muted" }, ` (vetted: ${m.revisions.map((r) => r.documentVersion).join(", ")})`) : null)))
+        el("a", { href: memberLink(m, s.baseUrl) }, el("code", {}, m.id), m.cite && m.cite.title ? ` ${m.cite.title}` : ""),
+        m.revisions ? el("span", { class: "muted" }, " (vetted: ",
+          m.revisions.map((r, i) => [i ? ", " : "",
+            el("a", { href: memberLink(m, s.baseUrl, r.version), title: `Version ${r.documentVersion}` },
+               String(r.documentVersion))]), ")") : null)))
         : el("p", { class: "muted" }, "No members yet."),
       el("div", { class: "controls" },
         el("button", { class: "small", onclick: () => openForm("add", { "In collection": c.id }) }, "Add a member"),
