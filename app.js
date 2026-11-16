@@ -35,16 +35,18 @@ function el(tag, attrs = {}, ...children) {
     else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
     else node.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of children.flat()) {
+  // children may be nested in lists at any depth (a list of sections, each
+  // with its own lists)
+  for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined || c === false) continue;
-    node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    node.appendChild(c instanceof Node ? c : document.createTextNode(String(c)));
   }
   return node;
 }
 
 function show(target, ...nodes) {
   const t = typeof target === "string" ? $(target) : target;
-  t.replaceChildren(...nodes.flat().filter(Boolean));
+  t.replaceChildren(...nodes.flat(Infinity).filter(Boolean));
 }
 
 function message(kind, ...content) {
