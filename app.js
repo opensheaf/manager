@@ -245,7 +245,7 @@ async function loadTitles(t, repo) {
       const [dc, obj] = await headFiles(t, repo, o.id, ["datacite.json", "object.json"]);
       const cell = document.querySelector(`[data-title="${CSS.escape(o.id)}"]`);
       if (!cell) continue;
-      if (dc) cell.textContent = dc.titles[0].title;
+      if (dc) cell.replaceChildren(el("a", { href: memberLink({ id: o.id }, state.settings.baseUrl) }, dc.titles[0].title));
       const ax = ((obj && obj.external) || []).find((e) => e.service === "arXiv" && e.role === "source");
       if (ax) {
         const label = ax.record && /^https:\/\/arxiv\.org\//.test(ax.record)
@@ -300,7 +300,8 @@ function showArchive() {
     docs().length ? el("table", {},
       el("tr", {}, el("th", {}, "Identifier"), el("th", {}, "Title"), el("th", {}, "")),
       docs().map((o) => el("tr", {},
-        el("td", {}, el("code", {}, o.id), o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
+        el("td", {}, el("a", { href: memberLink({ id: o.id }, s.baseUrl) }, el("code", {}, o.id)),
+           o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
         el("td", { "data-title": o.id }, ""),
         el("td", { class: "actions" },
           el("button", { class: "small", onclick: () => openForm("deposit", { "Identifier": o.id }) }, "New version"),
