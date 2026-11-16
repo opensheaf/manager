@@ -90,8 +90,21 @@ export async function listDir(token, repo, path, fetchImpl) {
   }
 }
 
-function encodePath(path) {
-  return path.split("/").map(encodeURIComponent).join("/");
+// A path of the repository, encoded for the API. Paths come from the
+// archive's own files (identifiers, inventories), and a segment . or ..
+// would lead the request elsewhere in the API once the address is
+// normalised: such paths are refused.
+export function encodePath(path) {
+  const parts = String(path).split("/");
+  if (parts.some((p) => p === "." || p === ".."))
+    throw new GitHubError(`Not a path in the repository: ${path}`, 400);
+  return parts.map(encodeURIComponent).join("/");
+}
+
+// A repository's full name, owner/name, as GitHub allows it (not . or ..).
+export function isRepo(name) {
+  const m = /^([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+)$/.exec(String(name));
+  return Boolean(m) && m[2] !== "." && m[2] !== "..";
 }
 
 // A request's identifier: the date and time, so that requests are carried

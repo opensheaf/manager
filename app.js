@@ -10,6 +10,7 @@ import { signIn, refresh } from "./gh-auth.js";
 import * as gh from "./github.js";
 import { FORMS, check, subject } from "./forms.js";
 import { render } from "./markdown.js";
+import { tokenSource } from "./session.js";
 
 const $ = (sel) => document.querySelector(sel);
 const KEY = "opensheaf-manager-auth";
@@ -22,7 +23,10 @@ const state = {
   objects: [],       // from opensheaf.json
   collections: [],   // [{ id, title, type, members: [{ id, archive, archiveUrl, title, revisions }] }]
   hasWorkflow: false,
+  warnings: [],      // about the open repository: no write access, app not installed
+  reachable: null,   // with the app: the repositories where it is installed (lower case)
   pending: new Map(),// request id -> { what, since }
+  sent: new Map(),   // request id -> { name, values }: the forms sent in this tab, to correct
 };
 
 // --- small DOM helpers --------------------------------------------------------
@@ -62,24 +66,23 @@ function saveAuth() {
   } catch (_) { /* the page works without storage */ }
 }
 
-async function token() {
-  const a = state.auth;
-  if (!a) throw new Error("Not signed in.");
-  if (a.kind === "app" && a.expires_at && a.refresh_token && a.expires_at - Date.now() < 5 * 60_000) {
-    const renewed = await refresh(SERVICE, a.refresh_token);
-    state.auth = { ...renewed, kind: "app" };
-    saveAuth();
-  }
-  return state.auth.access_token;
-}
+// The token, renewed before it expires, one renewal at a time (session.js);
+// once it has expired and cannot be renewed, the page asks to sign in again.
+const token = tokenSource({
+  get: () => state.auth,
+  set: (auth) => { state.auth = auth; saveAuth(); },
+  renew: (refreshToken) => refresh(SERVICE, refreshToken),
+  expired: () => { signOut(); message("bad", "Your sign-in has expired: sign in again."); },
+});
 
 // The open repository is kept in the page's address (#repo=owner/name), so
 // that a reload reopens it and the address can be bookmarked; the part after
 // # never leaves the browser.
 function repoInAddress() {
   const m = /(?:^#|&)repo=([^&]+)/.exec(location.hash);
-  const repo = m ? decodeURIComponent(m[1]) : "";
-  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) ? repo : "";
+  let repo = "";
+  try { repo = m ? decodeURIComponent(m[1]) : ""; } catch (_) { /* not an address of ours */ }
+  return gh.isRepo(repo) ? repo : "";
 }
 
 function setRepoInAddress(repo) {
@@ -137,6 +140,7 @@ function showSignIn() {
 
 async function showRepositories() {
   const { repos, installations } = await gh.repositories(await token());
+  state.reachable = installations ? new Set(repos.map((r) => r.full_name.toLowerCase())) : null;
   const select = el("select", { id: "repo", "aria-label": "Repository" },
     el("option", { value: "" }, "Choose the archive's repository"),
     repos.map((r) => el("option", { value: r.full_name, selected: r.full_name === repoInAddress() }, r.full_name)));
@@ -150,7 +154,9 @@ async function showRepositories() {
     el("form", { class: "controls", onsubmit: (ev) => {
       ev.preventDefault();
       const repo = typed.value.trim() || select.value;
-      if (repo) openArchive(repo);
+      if (!repo) return;
+      if (!gh.isRepo(repo)) { message("bad", `${repo} is not a repository's name (owner/repository).`); return; }
+      openArchive(repo);
     } }, select, el("span", { class: "muted" }, "or"), typed, el("button", { type: "submit" }, "Open")),
     installations && !repos.length ? el("p", { class: "small" },
       "The app is not installed on any repository yet: ",
@@ -177,6 +183,7 @@ async function headFiles(t, repo, obj, names) {
 }
 
 async function openArchive(repo) {
+  if (!gh.isRepo(repo)) { message("bad", `${repo} is not a repository's name (owner/repository).`); return; }
   if (state.repo !== repo) state.pending.clear();
   state.repo = repo;
   setRepoInAddress(repo);
@@ -188,6 +195,7 @@ async function openArchive(repo) {
     // an empty repository (no commit yet) is not an archive, and GitHub cannot
     // add commits to it through its API: it must be made from the template
     const meta = await gh.api(t, `/repos/${repo}`);
+    state.warnings = accessWarnings(repo, meta);
     if (!(await gh.listDir(t, repo, "")).length) {
       showEmpty(repo, meta);
       return;
@@ -216,11 +224,29 @@ async function openArchive(repo) {
   }
 }
 
+// What would make every request fail, said before one is sent: the account
+// cannot write to the repository, or the app it signed in with is not
+// installed there (its token can then read a public repository, not write).
+function accessWarnings(repo, meta) {
+  const out = [];
+  if (meta && meta.permissions && meta.permissions.push === false)
+    out.push(el("div", { class: "notice warn" }, el("strong", {}, "You cannot write to this repository. "),
+      `Requests are written to ${repo} with your account, which may only read it: ask its owner to make you a collaborator.`));
+  else if (state.auth && state.auth.kind === "app" && state.reachable && !state.reachable.has(repo.toLowerCase())) {
+    const install = APP_SLUG ? `https://github.com/apps/${APP_SLUG}/installations/new`
+                             : "https://github.com/settings/installations";
+    out.push(el("div", { class: "notice warn" }, el("strong", {}, "The OpenSheaf app is not installed on this repository. "),
+      "The page can read it, but not write requests to it. ",
+      el("a", { href: install }, "Install the app on it"), ", then open it again."));
+  }
+  return out;
+}
+
 function showEmpty(repo, meta) {
   const fromTemplate = "https://github.com/new?template_owner=opensheaf&template_name=archive-template";
   const install = APP_SLUG ? `https://github.com/apps/${APP_SLUG}/installations/new`
                            : "https://github.com/settings/installations";
-  show("#archive",
+  show("#archive", state.warnings,
     el("div", { class: "notice warn" },
       el("p", {}, el("strong", {}, `${repo} is empty. `),
         "An archive's repository is made from the archive template, which brings the files and the " +
@@ -243,6 +269,7 @@ async function loadTitles(t, repo) {
   for (const o of state.objects.filter((x) => x.kind === "document").slice(0, 60)) {
     try {
       const [dc, obj] = await headFiles(t, repo, o.id, ["datacite.json", "object.json"]);
+      if (state.repo !== repo) return;
       const cell = document.querySelector(`[data-title="${CSS.escape(o.id)}"]`);
       if (!cell) continue;
       if (dc) cell.replaceChildren(el("a", { href: memberLink({ id: o.id }, state.settings.baseUrl) }, dc.titles[0].title));
@@ -274,7 +301,7 @@ function docs() {
 
 function showArchive() {
   const s = state.settings;
-  const parts = [];
+  const parts = [...state.warnings];
   if (!state.hasWorkflow) parts.push(el("div", { class: "notice warn" },
     el("strong", {}, "Warning. "),
     "This repository has no workflow to carry out the manager's requests " +
@@ -289,7 +316,7 @@ function showArchive() {
   const explorer = `https://opensheaf.org/explorer/?url=${encodeURIComponent(s.baseUrl)}`;
   parts.push(
     el("h2", {}, s.name),
-    el("p", { class: "facts" }, el("a", { href: s.baseUrl }, s.baseUrl), " · ",
+    el("p", { class: "facts" }, /^https:\/\//.test(s.baseUrl || "") ? el("a", { href: s.baseUrl }, s.baseUrl) : s.baseUrl, " · ",
        el("a", { href: explorer }, "open in the Explorer"), " · ",
        el("a", { href: `https://github.com/${state.repo}` }, state.repo)),
     el("div", { class: "controls" },
@@ -351,7 +378,7 @@ function openForm(name, preset = {}) {
   const form = FORMS[name];
   const values = { ...preset };
   const inputs = {};
-  const body = el("form", { class: "op", onsubmit: (ev) => { ev.preventDefault(); submit(name, inputs); } },
+  const body = el("form", { class: "op", onsubmit: (ev) => { ev.preventDefault(); submit(name, inputs, body); } },
     el("h3", {}, form.title),
     form.help ? el("p", { class: "muted" }, form.help) : null,
     form.fields.map((f) => {
@@ -389,8 +416,25 @@ function collect(inputs) {
   return values;
 }
 
-async function submit(name, inputs) {
+// Sends a form as a request. The form is disabled from the click until the
+// request is written or refused, so that a second click does not send it
+// twice (a deposit sent twice would make two versions, which stay). Its
+// values are kept, to correct them if the archive refuses the request.
+async function submit(name, inputs, formNode) {
+  const controls = formNode ? [...formNode.querySelectorAll("input, select, textarea, button")] : [];
+  if (controls.some((c) => c.disabled)) return;
+  controls.forEach((c) => { c.disabled = true; });
+  const enable = () => controls.forEach((c) => { c.disabled = false; });
+  try {
+    await send(name, inputs);
+  } finally {
+    if (formNode && formNode.isConnected) enable();
+  }
+}
+
+async function send(name, inputs) {
   const values = collect(inputs);
+  const typed = { ...values };
   // a member chosen in a list carries its archive, for members of the same name
   for (const label of ["Member", "Member to remove"])
     if (values[label] && values[label].startsWith("[")) {
@@ -413,6 +457,7 @@ async function submit(name, inputs) {
     await gh.commitFiles(await token(), state.repo, gh.buildRequest(id, name, fields, files),
                          `Request ${id}: ${what}`);
     state.pending.set(id, { what, since: Date.now() });
+    state.sent.set(id, { name, values: typed });
     show("#form");
     message("info", `Sent: ${what}. The archive's workflow carries it out in a minute or two; ` +
                     "its answer appears under Requests.");
@@ -435,8 +480,9 @@ async function poll(id) {
     catch (_) { /* try again */ }
     if (result) {
       state.pending.delete(id);
-      message(result.ok ? "ok" : "bad", render(result.message));
+      // the archive is read again first: reading it clears the messages
       await openArchive(repo);
+      if (state.repo === repo) message(result.ok ? "ok" : "bad", render(result.message), correctButton(id, result));
       return;
     }
   }
@@ -467,6 +513,15 @@ async function resumePending(repo) {
   } catch (_) { /* waiting requests are a convenience */ }
 }
 
+// For a request sent from this tab and refused: a button that opens its form
+// again, filled in as it was sent (files must be chosen again).
+function correctButton(id, result) {
+  const sent = state.sent.get(id);
+  if (!sent || result.ok) return null;
+  return el("p", {}, el("button", { onclick: () => openForm(sent.name, sent.values) },
+    "Correct and send again"));
+}
+
 async function showResults() {
   const box = $("#requests");
   if (!box) return;
@@ -485,7 +540,7 @@ async function showResults() {
       nodes.push(el("details", { class: `result ${r.ok ? "ok" : "bad"}` },
         el("summary", {}, el("span", { class: `chip ${r.ok ? "ok" : "bad"}` }, r.ok ? "done" : "not done"), " ",
            r.title || `request ${r.id}`, el("span", { class: "small muted" }, ` ${r.date || ""}`)),
-        el("div", {}, render(r.message))));
+        el("div", {}, render(r.message), correctButton(r.id, r))));
     }
   } catch (_) { /* results are a convenience */ }
   show(box, nodes.length ? nodes : [el("p", { class: "muted" }, "No requests yet.")]);

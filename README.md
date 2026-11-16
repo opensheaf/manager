@@ -52,6 +52,8 @@ archive's workflow needs no further check.
 - `github.js`: the GitHub API: reading files, and writing a request as one
   commit (blobs, a tree, a commit, the branch moved; made again on top if
   the branch moved meanwhile).
+- `session.js`: the token of the session, renewed before it expires, one
+  renewal at a time (a GitHub App's refresh token works only once).
 - `markdown.js`: the answers' Markdown, as DOM nodes (never `innerHTML`).
 - `gh-auth.js`: a copy of the client of
   [gh-auth](https://github.com/opensheaf/gh-auth) (`client/gh-auth.js`).

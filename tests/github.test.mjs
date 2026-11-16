@@ -104,3 +104,15 @@ test("a deposit from arXiv needs the right to deposit it", async () => {
   assert.deepEqual(ok.missing, []);
   assert.equal(ok.fields["Right to deposit it"], "I am an author of the paper");
 });
+
+test("paths with . or .. segments are refused, repository names are checked", async () => {
+  const { encodePath, isRepo, readText } = await import("../github.js");
+  assert.equal(encodePath("ocfl/a b/v1/content/x.json"), "ocfl/a%20b/v1/content/x.json");
+  assert.throws(() => encodePath("ocfl/../../user"));
+  assert.throws(() => encodePath("./x"));
+  let called = false;
+  await assert.rejects(readText("t", "o/r", "ocfl/../x", async () => { called = true; }));
+  assert.equal(called, false);
+  assert.ok(isRepo("opensheaf/my-test") && isRepo("a-b/c.d_e"));
+  for (const bad of ["opensheaf/..", "opensheaf/.", "a/b/c", "a", "../x", "a b/c", ""]) assert.ok(!isRepo(bad), bad);
+});
