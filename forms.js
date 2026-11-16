@@ -8,7 +8,8 @@ export const LICENCES = ["CC BY 4.0 (cc-by-4.0)", "CC BY-SA 4.0 (cc-by-sa-4.0)",
 
 // A field: label, type (text, textarea, select, file, files), and options:
 // required, help, options (for a select; "collections" or "documents" are
-// filled with the archive's), placeholder, accept (for files).
+// filled with the archive's), blank (a select of fixed options that starts
+// with no choice, so that one must be made), placeholder, accept (for files).
 export const FORMS = {
   setup: {
     title: "Set up the archive",
@@ -51,6 +52,29 @@ export const FORMS = {
       { label: "What changed (for a new version)" },
       { label: "Date this version became public", placeholder: "YYYY-MM-DD", help: "Empty for today." },
       { label: "Date the paper first appeared", placeholder: "YYYY-MM-DD" },
+      { label: "In collection", type: "select", options: "collections", optional: true,
+        help: "Optional: a collection of the archive to add the paper to." },
+      { label: "Position", help: "Where in that collection (1 for the first); empty for the end." },
+    ],
+  },
+  arxiv: {
+    title: "Deposit from arXiv",
+    help: "A paper on arXiv, with all its versions or some of them, byte for byte. arXiv's licence lets " +
+          "arXiv distribute a paper, not others: deposit it only if you are one of its authors, or if its " +
+          "authors gave you permission. What you state is recorded with each version.",
+    fields: [
+      { label: "arXiv identifier", required: true, placeholder: "2303.18112",
+        help: "The paper's identifier, or the address of its page. With a version (2303.18112v2), only that version." },
+      { label: "Identifier", required: true, placeholder: "kpz-uniqueness",
+        help: "Its identifier in this archive, permanent: at most 32 characters, lower-case letters and digits, " +
+              "words joined by -. For a paper already imported from arXiv, its identifier adds the new versions." },
+      { label: "Versions", placeholder: "v1, v3", help: "Empty for all the versions on arXiv." },
+      { label: "Right to deposit it", type: "select", blank: true, required: true,
+        options: ["I am an author of the paper", "The authors gave me permission"] },
+      { label: "Who agreed", type: "textarea", required: true, placeholder: "Doe, Jane",
+        help: "Your name if you are an author; otherwise the authors who gave permission, one per line (Family, Given)." },
+      { label: "How the permission was given", placeholder: "by e-mail, 3 May 2026",
+        help: "If the authors gave permission: how and when. No e-mail addresses." },
       { label: "In collection", type: "select", options: "collections", optional: true,
         help: "Optional: a collection of the archive to add the paper to." },
       { label: "Position", help: "Where in that collection (1 for the first); empty for the end." },

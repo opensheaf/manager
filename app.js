@@ -245,6 +245,7 @@ function showArchive() {
        el("a", { href: `https://github.com/${state.repo}` }, state.repo)),
     el("div", { class: "controls" },
       el("button", { class: "primary", onclick: () => openForm("deposit") }, "Deposit a paper"),
+      el("button", { onclick: () => openForm("arxiv") }, "Deposit from arXiv"),
       el("button", { onclick: () => openForm("new_collection") }, "Create a collection")),
     el("h3", {}, "Papers"),
     docs().length ? el("table", {},
@@ -308,7 +309,7 @@ function openForm(name, preset = {}) {
         input = el("input", { id, type: "file", multiple: f.type === "files", accept: f.accept });
       else if (f.type === "select") {
         // a list filled from the archive starts with an empty choice
-        const first = typeof f.options !== "string" ? null
+        const first = typeof f.options !== "string" && !f.blank ? null
           : el("option", { value: "" }, f.required ? "Choose ..." : "(none)");
         input = el("select", { id }, first,
           options(f.options, values).map(([v, text]) => el("option", { value: v }, text)));

@@ -8,7 +8,8 @@
 A page for keeping an [OpenSheaf](https://opensheaf.org) archive from the
 browser, at <https://opensheaf.org/manager/>. It works with archives made
 from the [archive template](https://github.com/opensheaf/archive-template):
-set the archive up, deposit papers and new versions, give notices and new
+set the archive up, deposit papers and new versions (also from arXiv, by
+their authors or with their permission), give notices and new
 licences, withdraw, create collections (reading lists, journal issues) and
 add, vet and remove their members.
 

@@ -95,3 +95,12 @@ test("raw contents are text, whatever GitHub labels them", async () => {
     headers: { get: () => "application/vnd.github.raw+json" }, text: async () => '{"a": 1}' });
   assert.deepEqual(await readJSON("t", "o/r", "x.json", jsonFetch), { a: 1 });
 });
+
+test("a deposit from arXiv needs the right to deposit it", async () => {
+  const { check } = await import("../forms.js");
+  const base = { "arXiv identifier": "2303.18112", "Identifier": "kpz", "Who agreed": "Doe, Jane" };
+  assert.deepEqual(check("arxiv", base).missing, ["Right to deposit it"]);
+  const ok = check("arxiv", { ...base, "Right to deposit it": "I am an author of the paper" });
+  assert.deepEqual(ok.missing, []);
+  assert.equal(ok.fields["Right to deposit it"], "I am an author of the paper");
+});
