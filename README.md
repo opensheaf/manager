@@ -1,17 +1,19 @@
 # OpenSheaf Manager
 
 > [!WARNING]
-> **Draft.** OpenSheaf 0.1 is a draft specification. Until version 1.0, any
+> **Draft.** OpenSheaf 0.2 is a draft specification. Until version 1.0, any
 > revision may change the format in incompatible ways, and the tools follow
 > the latest draft.
 
 A page for keeping an [OpenSheaf](https://opensheaf.org) archive from the
 browser, at <https://opensheaf.org/manager/>. It works with archives made
-from the [archive template](https://github.com/opensheaf/archive-template):
-set the archive up, deposit papers and new versions (also from arXiv, by
-their authors or with their permission), give notices and new
-licences, withdraw, create collections (reading lists, journal issues) and
-add, vet and remove their members.
+from the [archive template](https://github.com/opensheaf/archive-template),
+specification 0.2: set the archive up, deposit papers and new versions
+(also from arXiv, by their authors or with their permission), give notices
+and new licences, withdraw, create collections (reading lists, journal
+issues) and add, vet and remove their members. Papers are named by their
+labels in the archive; members of collections by their `sheaf:` URIs (or a
+label, in this archive or in another given by its address).
 
 It does not change the archive itself. Each operation is sent to the
 archive's repository as a **request**, one commit adding
@@ -22,6 +24,20 @@ exactly as the issue forms and the command line do, commits the result,
 and writes its answer to `requests/results/ID.json`, which the page reads.
 So there is only one implementation of every operation, `osheaf`, and the
 archive stays plain files that any tool can keep.
+
+## The owner and its keys
+
+Every version of an archive is signed by its owner (section 6 of the
+specification). The manager never makes, holds or sees a key. The owner is
+made on the author's computer with `osheaf`, and the archive's workflows
+sign with a current key of their own, kept in the repository secret
+`OPENSHEAF_SIGNING_KEY`: the *key ceremony* of the template's README. For
+a repository not set up yet, the page shows the ceremony step by step (the
+commands to run, a link to the repository's settings where the secret is
+set, whether the secret and the folder `key-log/` are there), then sends
+the setup request with the owner's key log (a zip of the folder of its
+owner object: public keys only). It reads whether the secret is set when
+the sign-in may (never its value), and warns when it is not.
 
 ## Signing in
 
@@ -47,8 +63,13 @@ archive's workflow needs no further check.
   content security policy allows only GitHub's API and the sign-in service.
 - `app.js`: the interface: signing in, choosing the repository, reading the
   archive (`osheaf.json`, `opensheaf.json`, the collections' heads), the
-  forms, sending requests and reading their answers.
+  key ceremony of a repository not set up, the forms, sending requests and
+  reading their answers.
 - `forms.js`: the forms, with the labels of the archive's issue forms.
+- `archive.js`: what is read of an archive of specification 0.2, as plain
+  functions: the lines of the discovery document by their labels, the
+  folder of a line in the storage root (owner-name or hashed layout),
+  members of collections and links to the Explorer.
 - `github.js`: the GitHub API: reading files, and writing a request as one
   commit (blobs, a tree, a commit, the branch moved; made again on top if
   the branch moved meanwhile).
