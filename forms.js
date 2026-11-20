@@ -47,8 +47,8 @@ export const FORMS = {
       { label: "This deposit", type: "select", blank: true, required: true, options: [NEW_PAPER, NEW_VERSION],
         help: "A new paper gets a new label and a permanent name (its sheaf URI), made once; a new version keeps them." },
       { label: "Label", required: true, placeholder: "kpz-uniqueness",
-        help: "The paper's label in the archive, in the address of its page (paper/LABEL/). For a new paper, " +
-              "permanent: at most 32 characters, lower-case letters and digits, words joined by -." },
+        help: "The paper's label in the archive, in the address of its page (paper/LABEL/); for a new paper, " +
+              "at most 32 characters, lower-case letters and digits, words joined by -. Its permanent name is its sheaf: URI; a label is only an address, best never changed." },
       { label: "Title" },
       { label: "Authors", type: "textarea", placeholder: "Doe, Jane|Example University",
         help: "One per line, Family, Given|Affiliation." },
@@ -79,8 +79,8 @@ export const FORMS = {
       { label: "arXiv identifier", required: true, placeholder: "2303.18112",
         help: "The paper's identifier, or the address of its page. With a version (2303.18112v2), only that version." },
       { label: "Label", required: true, placeholder: "kpz-uniqueness",
-        help: "Its label in this archive, in the address of its page, permanent: at most 32 characters, lower-case " +
-              "letters and digits, words joined by -. For a paper already imported from arXiv, its label adds the new versions." },
+        help: "Its label in this archive, in the address of its page: " +
+              "at most 32 characters, lower-case letters and digits, words joined by -. For a paper already imported from arXiv, its label adds the new versions." },
       { label: "Versions", placeholder: "v1, v3", help: "Empty for all the versions on arXiv." },
       { label: "Right to deposit it", type: "select", blank: true, required: true,
         options: ["I am an author of the paper", "The authors gave me permission"] },
@@ -124,7 +124,7 @@ export const FORMS = {
     help: "A reading list, a journal issue, the papers of a group: papers of any OpenSheaf archive, pinned by digest.",
     fields: [
       { label: "Label of the new collection", required: true, placeholder: "reading-list",
-        help: "Its label in the archive, permanent: at most 32 characters, lower-case letters and digits, words joined by -." },
+        help: "Its label in the archive, in the address of its page: at most 32 characters, lower-case letters and digits, words joined by -." },
       { label: "Title of the collection", required: true },
       { label: "Kind", type: "select", options: ["selection", "catalogue"],
         help: "A selection vets particular versions; a catalogue follows its members." },
