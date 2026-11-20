@@ -3,40 +3,35 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src https://opensheaf.org; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; font-src https://opensheaf.org; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
-<title>Unlock OpenSheaf keys</title>
+<title>The unlock page moved</title>
 <link rel="icon" href="opensheaf-symbol.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
-<script type="module" src="unlock.js"></script>
 </head>
 <body>
 <header class="site">
   <a class="brand" href="./"><img class="symbol" src="opensheaf-symbol.svg" alt="" width="20" height="20">OpenSheaf Manager</a>
 </header>
 <main>
-  <h1>Unlock OpenSheaf keys</h1>
-  <div id="request" hidden>
-    <p class="lead"><code>osheaf</code>, on this computer, asks to <span id="what"></span>:</p>
-    <p>owner <code id="owner"></code></p>
-    <p>If you did not just run <code>osheaf key enroll</code> or a command that needs your keys, close
-    this page. The secret goes only to <code>osheaf</code> on this computer (<code>127.0.0.1</code>),
-    encrypted to a one-time key of <code>osheaf</code>, never to a server; the passphrase keeps working.</p>
-    <ol id="steps" class="progress">
-      <li id="step-click">Click Unlock.</li>
-      <li>Waiting for Touch ID…</li>
-      <li>Sending the key to <code>osheaf</code> on this computer…</li>
-    </ol>
-    <p class="controls"><button id="go" class="primary" type="button">Unlock</button>
-    <button id="cancel" type="button">Use the passphrase instead</button></p>
+  <h1>The unlock page moved</h1>
+  <div class="notice warn">
+    <p>Passkey unlock of <code>osheaf</code> key wallets is now at
+    <a href="https://unlock.opensheaf.org/">unlock.opensheaf.org</a>, an origin of its own, and this page does
+    nothing. The <code>osheaf</code> that opened it is older: update it, then run the command again.</p>
   </div>
-  <div id="status" hidden></div>
-  <noscript><p>This page needs JavaScript.</p></noscript>
+  <p>The <code>osheaf</code> waiting in the terminal asks for the passphrase after two minutes, or at once
+  if you press Ctrl-C there. To update <code>osheaf</code>:</p>
+  <pre>pipx upgrade opensheaf     # or: pipx install --force "opensheaf[validate] @ git+https://github.com/opensheaf/opensheaf-py"
+uvx --refresh …            # with uvx</pre>
+  <p>Passkeys made on this page, for <code>opensheaf.org</code>, are not used any more: their keys still open
+  with the passphrase. Run <code>osheaf key enroll --new-passkey</code>, then
+  <code>osheaf key forget --rp opensheaf.org</code>.</p>
 </main>
 <footer class="site">
-  <p>Passkey unlock of <a href="https://github.com/opensheaf/opensheaf-py">osheaf</a> key wallets ·
-  <a href="https://github.com/opensheaf/manager">source code</a> (GPL-3.0-or-later).</p>
+  <p><a href="https://github.com/opensheaf/unlock">The unlock page's source code</a> ·
+  <a href="https://github.com/opensheaf/opensheaf-py">osheaf</a></p>
 </footer>
 </body>
 </html>
