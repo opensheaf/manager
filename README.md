@@ -39,6 +39,24 @@ the setup request with the owner's key log (a zip of the folder of its
 owner object: public keys only). It reads whether the secret is set when
 the sign-in may (never its value), and warns when it is not.
 
+## Passkey unlock for osheaf
+
+A second page, `unlock.html`, not linked from the manager, serves the
+command line: `osheaf key enroll` and `osheaf key unlock`
+([opensheaf-py](https://github.com/opensheaf/opensheaf-py)) let a passkey,
+with Touch ID, open the keys of an owner kept in a key wallet, instead of
+the passphrase. `osheaf` starts a one-time listener on `127.0.0.1` and
+opens <https://opensheaf.org/manager/unlock.html?mode=enroll|unlock&port=…&state=…&owner=…&salt=…[&cred=…]>.
+The page checks every parameter (and that the salt is that of the owner)
+and refuses anything else; says what `osheaf` asks; waits for a click
+(*Create the passkey* or *Unlock*), so that a link cannot make it act
+alone; then creates a passkey for `opensheaf.org` named after the owner,
+or uses one of those named, and derives its secret with the WebAuthn PRF
+extension. It hands the credential and the secret back by submitting a
+form to `http://127.0.0.1:<port>/callback`, the only address its content
+security policy lets it post to (it can reach no other server), or an
+error, with which `osheaf` asks for the passphrase instead.
+
 ## Signing in
 
 The page writes to the repository with the author's GitHub account:
@@ -80,6 +98,9 @@ archive's workflow needs no further check.
   [gh-auth](https://github.com/opensheaf/gh-auth) (`client/gh-auth.js`).
 - `config.js`: the sign-in service, and the GitHub App's name for the link
   to install it.
+- `unlock.html`, `unlock.js`: the page of passkey unlock for `osheaf`
+  (above); `unlock-core.js`, its parts that need no browser: the check of
+  the parameters, the WebAuthn options, the answer posted to `osheaf`.
 
 ## Working on it
 
