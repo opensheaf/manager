@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src https://opensheaf.org; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action http://127.0.0.1:*">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src https://opensheaf.org; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex">
 <title>Unlock OpenSheaf keys</title>
@@ -22,7 +22,12 @@
     <p>owner <code id="owner"></code></p>
     <p>If you did not just run <code>osheaf key enroll</code> or a command that needs your keys, close
     this page. The secret goes only to <code>osheaf</code> on this computer (<code>127.0.0.1</code>),
-    never to a server; the passphrase keeps working.</p>
+    encrypted to a one-time key of <code>osheaf</code>, never to a server; the passphrase keeps working.</p>
+    <ol id="steps" class="progress">
+      <li id="step-click">Click Unlock.</li>
+      <li>Waiting for Touch ID…</li>
+      <li>Sending the key to <code>osheaf</code> on this computer…</li>
+    </ol>
     <p class="controls"><button id="go" class="primary" type="button">Unlock</button>
     <button id="cancel" type="button">Use the passphrase instead</button></p>
   </div>

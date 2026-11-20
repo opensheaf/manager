@@ -46,16 +46,32 @@ command line: `osheaf key enroll` and `osheaf key unlock`
 ([opensheaf-py](https://github.com/opensheaf/opensheaf-py)) let a passkey,
 with Touch ID, open the keys of an owner kept in a key wallet, instead of
 the passphrase. `osheaf` starts a one-time listener on `127.0.0.1` and
-opens <https://opensheaf.org/manager/unlock.html?mode=enroll|unlock&port=…&state=…&owner=…&salt=…[&cred=…]>.
+opens <https://opensheaf.org/manager/unlock.html?mode=enroll|unlock&port=…&state=…&pk=…&owner=…&salt=…[&cred=…]>.
 The page checks every parameter (and that the salt is that of the owner)
 and refuses anything else; says what `osheaf` asks; waits for a click
 (*Create the passkey* or *Unlock*), so that a link cannot make it act
 alone; then creates a passkey for `opensheaf.org` named after the owner,
 or uses one of those named, and derives its secret with the WebAuthn PRF
-extension. It hands the credential and the secret back by submitting a
-form to `http://127.0.0.1:<port>/callback`, the only address its content
-security policy lets it post to (it can reach no other server), or an
-error, with which `osheaf` asks for the passphrase instead.
+extension. It hands the credential and the secret back by going to
+`http://127.0.0.1:<port>/callback?state=…&epk=…&ct=…&cred=…` (with
+`location.replace`), or `?state=…&error=…`, with which `osheaf` asks for
+the passphrase instead; its content security policy lets it reach no
+server (`connect-src 'none'`) and send no form (`form-action 'none'`).
+
+The secret is never in that address, only encrypted to `osheaf`: `pk` is
+a one-time X25519 public key of `osheaf`; the page makes a one-time X25519
+key pair of its own (WebCrypto), whose public key is `epk`, derives the
+shared secret with `pk`, and takes HKDF-SHA256 of it (salt: the state, in
+UTF-8; info: `opensheaf unlock hand-off v1`), 32 bytes, as a one-time pad:
+`ct` is the PRF secret XOR these bytes. Why not a form, which would keep
+the secret out of the browser's history: Safari warns, rightly in
+general, that a form sent from an `https` page to `http://127.0.0.1` is "a
+non-secure form". The address stays in the history, but holds only a
+ciphertext, useless once `osheaf` has ended and forgotten its private key.
+A browser without X25519 in WebCrypto (before Safari 17, Chrome 133,
+Firefox 130) hands nothing over: it sends the error `x25519-unavailable`,
+and `osheaf` asks for the passphrase. The tests check the hand-off against
+a test vector that the tests of `osheaf` check too.
 
 ## Signing in
 
@@ -100,7 +116,7 @@ archive's workflow needs no further check.
   to install it.
 - `unlock.html`, `unlock.js`: the page of passkey unlock for `osheaf`
   (above); `unlock-core.js`, its parts that need no browser: the check of
-  the parameters, the WebAuthn options, the answer posted to `osheaf`.
+  the parameters, the WebAuthn options, the encrypted answer to `osheaf`.
 
 ## Working on it
 

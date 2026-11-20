@@ -1,9 +1,18 @@
 // Passkey unlock for osheaf key enroll / osheaf key unlock: the parts that
 // need no browser, tested with node --test. The page (unlock.html, unlock.js)
-// is opened by osheaf with ?mode=enroll|unlock&port=&state=&owner=&salt=
+// is opened by osheaf with ?mode=enroll|unlock&port=&state=&pk=&owner=&salt=
 // [&cred=id,id...]; it creates a passkey for opensheaf.org or derives the PRF
-// secret of one, and posts {state, cred, secret} (or {state, error}) as a
-// form to http://127.0.0.1:<port>/callback, a one-time listener of osheaf.
+// secret of one, and goes to http://127.0.0.1:<port>/callback, a one-time
+// listener of osheaf, with ?state=&epk=&ct=&cred= (or ?state=&error=).
+//
+// The hand-off: pk is a one-time X25519 public key of osheaf. The page makes
+// a one-time X25519 key pair of its own (epk is its public key), derives the
+// shared secret with pk, and HKDF-SHA256 of it (salt: the state in UTF-8,
+// info: "opensheaf unlock hand-off v1") gives 32 bytes; ct is the PRF secret
+// XOR these bytes. Not a form: Safari warns of "a non-secure form" posted
+// from https to http://127.0.0.1. The address stays in the history, but holds
+// only a ciphertext that the private key of osheaf alone opens, which is
+// forgotten when osheaf ends.
 
 export const RP = { id: "opensheaf.org", name: "OpenSheaf" };
 export const SALT_PREFIX = "opensheaf wallet unlock v1 ";
@@ -11,7 +20,8 @@ export const USER_ID_PREFIX = "opensheaf owner ";
 const OWNER = /^[a-z2-7]{52}$/;
 const STATE = /^[A-Za-z0-9_-]{16,64}$/;
 const B64URL = /^[A-Za-z0-9_-]+$/;
-const PARAMS = new Set(["mode", "port", "state", "owner", "salt", "cred"]);
+const PARAMS = new Set(["mode", "port", "state", "pk", "owner", "salt", "cred"]);
+export const HAND_OFF_INFO = "opensheaf unlock hand-off v1";
 const MAX_CREDS = 16;
 
 export function b64urlEncode(bytes) {
@@ -42,6 +52,9 @@ export function parseParams(search) {
   if (!/^[0-9]{4,5}$/.test(port) || +port < 1024 || +port > 65535) throw new Error("not a port of osheaf: " + port);
   const state = q.get("state") || "";
   if (!STATE.test(state)) throw new Error("not a state of osheaf");
+  let pk;
+  try { pk = b64urlDecode(q.get("pk") || ""); } catch (_) { pk = null; }
+  if (!pk || pk.length !== 32) throw new Error("not a public key of osheaf");
   const owner = q.get("owner") || "";
   if (!OWNER.test(owner)) throw new Error("not an owner name");
   let salt;
@@ -57,7 +70,7 @@ export function parseParams(search) {
     if (!b || b.length < 16 || b.length > 1023) throw new Error("not a credential: " + c.slice(0, 40));
     return b;
   });
-  return { mode, port: +port, state, owner, salt, credIds, creds };
+  return { mode, port: +port, state, pk, owner, salt, credIds, creds };
 }
 
 async function sha256(subtle, text) {
@@ -122,8 +135,52 @@ export function prfSecret(assertion) {
   return bytes;
 }
 
-// The fields of the form posted to osheaf.
-export function answerFields(state, { cred, secret, error }) {
-  if (error !== undefined) return [["state", state], ["error", String(error).slice(0, 200)]];
-  return [["state", state], ["cred", b64urlEncode(cred)], ["secret", b64urlEncode(secret)]];
+// An owner name, shortened for a person: its first 8 and last 4 characters.
+export function shortName(name) {
+  return name.length <= 14 ? name : `${name.slice(0, 8)}…${name.slice(-4)}`;
+}
+
+// Whether this browser has X25519 in WebCrypto (Safari 17+, Chrome 133+,
+// Firefox 130+); without it, the page hands nothing over.
+export async function x25519Available(subtle = globalThis.crypto && globalThis.crypto.subtle) {
+  try {
+    await subtle.generateKey({ name: "X25519" }, false, ["deriveBits"]);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// HKDF-SHA256 of the shared secret: LENGTH bytes.
+async function handOffPad(shared, state, length, subtle) {
+  const ikm = await subtle.importKey("raw", shared, "HKDF", false, ["deriveBits"]);
+  const enc = new TextEncoder();
+  const bits = await subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256", salt: enc.encode(state), info: enc.encode(HAND_OFF_INFO) }, ikm, length * 8);
+  return new Uint8Array(bits);
+}
+
+// {epk, ct}: SECRET encrypted to the X25519 public key PK of osheaf, with
+// the one-time key pair EPHEMERAL (a new one by default).
+export async function seal(secret, pk, state, ephemeral = null, subtle = globalThis.crypto.subtle) {
+  ephemeral = ephemeral || await subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+  const peer = await subtle.importKey("raw", pk, { name: "X25519" }, false, []);
+  const shared = await subtle.deriveBits({ name: "X25519", public: peer }, ephemeral.privateKey, 256);
+  const pad = await handOffPad(shared, state, secret.length, subtle);
+  const ct = Uint8Array.from(secret, (b, i) => b ^ pad[i]);
+  const epk = new Uint8Array(await subtle.exportKey("raw", ephemeral.publicKey));
+  return { epk, ct };
+}
+
+// The address of the answer to osheaf: {cred, epk, ct} or {error}.
+export function answerUrl(port, state, { cred, epk, ct, error }) {
+  const q = new URLSearchParams({ state });
+  if (error !== undefined) {
+    q.set("error", String(error).slice(0, 200));
+  } else {
+    q.set("epk", b64urlEncode(epk));
+    q.set("ct", b64urlEncode(ct));
+    if (cred) q.set("cred", b64urlEncode(cred));
+  }
+  return callbackUrl(port) + "?" + q.toString();
 }

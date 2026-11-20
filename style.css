@@ -155,3 +155,8 @@ form.op h3 { margin-top: 0; }
 ol.steps { padding-left: 1.4em; }
 ol.steps > li { margin: 0.9em 0; }
 ol.steps pre { margin: 0.4em 0; }
+ol.progress { padding-left: 1.4em; color: var(--os-faint); }
+ol.progress > li { margin: 0.3em 0; }
+ol.progress > li.done { color: var(--os-muted); }
+ol.progress > li.done::after { content: " \2713"; color: var(--os-ok); }
+ol.progress > li.now { color: var(--os-ink); font-weight: 600; }
