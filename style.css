@@ -152,3 +152,6 @@ form.op h3 { margin-top: 0; }
 .result summary { cursor: pointer; }
 .signed-in { margin: 0.5em 0; }
 @media (max-width: 40rem) { h1 { font-size: 1.6rem; } td.actions { white-space: normal; } }
+ol.steps { padding-left: 1.4em; }
+ol.steps > li { margin: 0.9em 0; }
+ol.steps pre { margin: 0.4em 0; }

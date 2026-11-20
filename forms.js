@@ -1,21 +1,26 @@
 // The forms of the manager. Their labels are those of the archive's issue
 // forms (.github/ISSUE_TEMPLATE in the archive template), which the
-// archive's script reads in both cases: a request carries the fields by
-// these labels.
+// archive's script (.github/scripts/osheaf_issue.py) reads in both cases: a
+// request carries the fields by these labels. Specification 0.2: papers
+// are named by their labels in the archive, members of collections by their
+// sheaf: URIs (or a label, here or in the archive given).
 
 export const LICENCES = ["CC BY 4.0 (cc-by-4.0)", "CC BY-SA 4.0 (cc-by-sa-4.0)", "CC0 1.0 (cc0-1.0)",
                          "All rights reserved"];
+export const NEW_PAPER = "A new paper";
+export const NEW_VERSION = "A new version of a paper in the archive";
 
 // A field: label, type (text, textarea, select, file, files), and options:
-// required, help, options (for a select; "collections" or "documents" are
-// filled with the archive's), blank (a select of fixed options that starts
-// with no choice, so that one must be made), placeholder, accept (for files).
+// required, help, options (for a select; "collections", "documents" or
+// "members" are filled with the archive's), blank (a select of fixed options
+// that starts with no choice, so that one must be made), placeholder, accept
+// (for files).
 export const FORMS = {
   setup: {
     title: "Set up the archive",
-    help: "The repository was made from the archive template and is not set up yet. " +
-          "This sets it up; for a selection or a catalogue, it also creates that collection " +
-          "and features it on the home page.",
+    help: "The archive's owner is made on your computer by the key ceremony (above), never in the " +
+          "browser. This sets the archive up with that owner, from its key log; for a selection or a " +
+          "catalogue, it also creates that collection and features it on the home page.",
     fields: [
       { label: "Name", required: true, placeholder: "Papers of Jane Doe, or A reading list on ..." },
       { label: "Purpose", type: "select", options: ["papers", "selection", "catalogue"],
@@ -25,17 +30,25 @@ export const FORMS = {
       { label: "Curator", required: true, placeholder: "Doe, Jane", help: "Your name, as Family, Given." },
       { label: "Affiliation" },
       { label: "Contact", help: "A web page or mailto: address." },
-      { label: "Archive identifier", help: "Empty for tag:OWNER.github.io,YEAR:REPOSITORY." },
+      { label: "Key log of the owner", type: "file", accept: ".zip,application/zip",
+        help: "A zip of the folder key-log made by the key ceremony (ocfl/<owner>/<owner>/ of the archive " +
+              "where the owner was made). Not needed if the repository has the folder key-log/ already. " +
+              "It holds only public keys." },
+      { label: "Owner", placeholder: "the owner name printed by osheaf init",
+        help: "Optional: checked against the key log." },
       { label: "Base URL", help: "Empty for the repository's GitHub Pages address; give it if your Pages use your own domain." },
     ],
   },
   deposit: {
     title: "Deposit a paper",
-    help: "A new paper, or a new version of a paper already in the archive (the same identifier; " +
-          "what is left empty stays as before).",
+    help: "A new paper, or a new version of a paper already in the archive (its label; what is left " +
+          "empty stays as before). Every version is signed for the archive's owner by its workflow.",
     fields: [
-      { label: "Identifier", required: true, placeholder: "kpz-uniqueness",
-        help: "Permanent, in the paper's address: at most 32 characters, lower-case letters and digits, words joined by -." },
+      { label: "This deposit", type: "select", blank: true, required: true, options: [NEW_PAPER, NEW_VERSION],
+        help: "A new paper gets a new label and a permanent name (its sheaf URI), made once; a new version keeps them." },
+      { label: "Label", required: true, placeholder: "kpz-uniqueness",
+        help: "The paper's label in the archive, in the address of its page (paper/LABEL/). For a new paper, " +
+              "permanent: at most 32 characters, lower-case letters and digits, words joined by -." },
       { label: "Title" },
       { label: "Authors", type: "textarea", placeholder: "Doe, Jane|Example University",
         help: "One per line, Family, Given|Affiliation." },
@@ -65,9 +78,9 @@ export const FORMS = {
     fields: [
       { label: "arXiv identifier", required: true, placeholder: "2303.18112",
         help: "The paper's identifier, or the address of its page. With a version (2303.18112v2), only that version." },
-      { label: "Identifier", required: true, placeholder: "kpz-uniqueness",
-        help: "Its identifier in this archive, permanent: at most 32 characters, lower-case letters and digits, " +
-              "words joined by -. For a paper already imported from arXiv, its identifier adds the new versions." },
+      { label: "Label", required: true, placeholder: "kpz-uniqueness",
+        help: "Its label in this archive, in the address of its page, permanent: at most 32 characters, lower-case " +
+              "letters and digits, words joined by -. For a paper already imported from arXiv, its label adds the new versions." },
       { label: "Versions", placeholder: "v1, v3", help: "Empty for all the versions on arXiv." },
       { label: "Right to deposit it", type: "select", blank: true, required: true,
         options: ["I am an author of the paper", "The authors gave me permission"] },
@@ -84,7 +97,7 @@ export const FORMS = {
     title: "Add a notice",
     help: "A statement about a version (an erratum), kept with it; the version never changes.",
     fields: [
-      { label: "Identifier", type: "select", options: "documents", required: true },
+      { label: "Label", type: "select", options: "documents", required: true },
       { label: "Document version it is about", required: true, placeholder: "1" },
       { label: "Text of the notice", type: "textarea", required: true },
       { label: "Full statement (optional)", type: "file" },
@@ -94,14 +107,14 @@ export const FORMS = {
     title: "Withdraw a paper",
     help: "The paper's files stay in the archive; the withdrawal is shown with it.",
     fields: [
-      { label: "Identifier", type: "select", options: "documents", required: true },
+      { label: "Label", type: "select", options: "documents", required: true },
       { label: "Reason for the withdrawal", type: "textarea", required: true },
     ],
   },
   relicense: {
     title: "Give a new licence",
     fields: [
-      { label: "Identifier", type: "select", options: "documents", required: true },
+      { label: "Label", type: "select", options: "documents", required: true },
       { label: "New licence", type: "select", options: LICENCES.slice(0, 3), required: true },
       { label: "How the authors agreed", required: true, placeholder: "I am the only author" },
     ],
@@ -110,7 +123,8 @@ export const FORMS = {
     title: "Create a collection",
     help: "A reading list, a journal issue, the papers of a group: papers of any OpenSheaf archive, pinned by digest.",
     fields: [
-      { label: "Identifier of the new collection", required: true, placeholder: "reading-list" },
+      { label: "Label of the new collection", required: true, placeholder: "reading-list",
+        help: "Its label in the archive, permanent: at most 32 characters, lower-case letters and digits, words joined by -." },
       { label: "Title of the collection", required: true },
       { label: "Kind", type: "select", options: ["selection", "catalogue"],
         help: "A selection vets particular versions; a catalogue follows its members." },
@@ -125,9 +139,12 @@ export const FORMS = {
     title: "Add a member to a collection",
     fields: [
       { label: "In collection", type: "select", options: "collections", required: true },
-      { label: "Archive of the new member", required: true, placeholder: "https://mgubi.org/papers/",
-        help: "The address of the archive that keeps it (this one included)." },
-      { label: "Identifier of the new member", required: true },
+      { label: "New member", required: true, placeholder: "kpz-uniqueness, or sheaf:<name>:<owner>",
+        help: "A paper or a collection: its label in this archive, or its sheaf URI (shown on its page), " +
+              "or its label in the archive given below." },
+      { label: "Archive of the new member", placeholder: "https://mgubi.org/papers/",
+        help: "For a member of another archive: the address of an archive that keeps it (the folder of its " +
+              "opensheaf.json); empty for this archive, or when the sheaf URI says it (?at=)." },
       { label: "Versions you vet (selection)", placeholder: "5, 6", help: "Empty for the current version." },
       { label: "Position" },
       { label: "Why (optional)" },
@@ -168,9 +185,9 @@ export function check(formName, values, files = {}) {
   return { fields, missing };
 }
 
-// The object a request is about, for the commit message.
+// What a request is about, for the commit message: a label, a member, a name.
 export function subject(formName, fields) {
-  return fields["Identifier"] || fields["Identifier of the new collection"] ||
-         fields["Identifier of the new member"] || fields["Member"] || fields["Member to remove"] ||
-         fields["Name"] || "";
+  const member = fields["New member"] || fields["Member"] || fields["Member to remove"] || "";
+  const short = member.startsWith("sheaf:") ? `${member.slice(0, 18)}...` : member;
+  return fields["Label"] || fields["Label of the new collection"] || short || fields["Name"] || "";
 }

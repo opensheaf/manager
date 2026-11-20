@@ -80,6 +80,19 @@ export async function readJSON(token, repo, path, fetchImpl) {
   return typeof text === "string" ? JSON.parse(text) : text;
 }
 
+// Whether a repository secret is set (true or false), or null when this
+// token may not know (it needs the permission to read secrets' names; the
+// value of a secret is never readable).
+export async function secretExists(token, repo, name, fetchImpl) {
+  try {
+    await api(token, `/repos/${repo}/actions/secrets/${encodeURIComponent(name)}`, { fetchImpl });
+    return true;
+  } catch (e) {
+    if (e.status === 404) return false;
+    return null;
+  }
+}
+
 export async function listDir(token, repo, path, fetchImpl) {
   try {
     const items = await api(token, `/repos/${repo}/contents/${encodePath(path)}`, { fetchImpl });

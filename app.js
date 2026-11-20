@@ -8,7 +8,8 @@
 import { SERVICE, APP_SLUG, TEMPLATE } from "./config.js";
 import { signIn, refresh } from "./gh-auth.js";
 import * as gh from "./github.js";
-import { FORMS, check, subject } from "./forms.js";
+import { FORMS, NEW_VERSION, check, subject } from "./forms.js";
+import { lines, objectPath, memberUri, memberLink, explorerLink } from "./archive.js";
 import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
 
@@ -20,9 +21,12 @@ const state = {
   user: null,
   repo: null,        // "owner/name"
   settings: null,    // osheaf.json
-  objects: [],       // from opensheaf.json
-  collections: [],   // [{ id, title, type, members: [{ id, archive, archiveUrl, title, revisions }] }]
+  lines: [],         // the lines of opensheaf.json with a label: { id, kind, name, owner, label, status }
+  layout: "",        // the storage layout, from opensheaf.json
+  collections: [],   // [{ label, title, type, members: [members.json 0.2: { kind, name, owner, at, revisions, cite }] }]
   hasWorkflow: false,
+  keyLog: false,     // a repository not set up: whether it has the owner's key log in key-log/
+  secret: null,      // whether the secret OPENSHEAF_SIGNING_KEY is set: true, false, or null (unknown)
   warnings: [],      // about the open repository: no write access, app not installed
   reachable: null,   // with the app: the repositories where it is installed (lower case)
   pending: new Map(),// request id -> { what, since }
@@ -167,18 +171,16 @@ async function showRepositories() {
 
 // --- reading the archive -------------------------------------------------------
 
-async function headFile(t, repo, obj, name) {
-  return (await headFiles(t, repo, obj, [name]))[0];
-}
-
-// Several files of the head version of an object, its inventory read once.
-async function headFiles(t, repo, obj, names) {
-  const inv = await gh.readJSON(t, repo, `ocfl/${obj}/inventory.json`);
+// Several files of the head version of a line (an entry of the discovery
+// document), its inventory read once.
+async function headFiles(t, repo, line, names) {
+  const dir = await objectPath(line, state.layout);
+  const inv = await gh.readJSON(t, repo, `${dir}/inventory.json`);
   if (!inv) return names.map(() => null);
   const st = inv.versions[inv.head].state;
   return Promise.all(names.map((name) => {
     const digest = Object.keys(st).find((d) => st[d].includes(name));
-    return digest ? gh.readJSON(t, repo, `ocfl/${obj}/${inv.manifest[digest][0]}`) : null;
+    return digest ? gh.readJSON(t, repo, `${dir}/${inv.manifest[digest][0]}`) : null;
   }));
 }
 
@@ -202,19 +204,25 @@ async function openArchive(repo) {
     }
     state.hasWorkflow = (await gh.readText(t, repo, ".github/workflows/from-request.yml")) !== null;
     state.settings = await gh.readJSON(t, repo, "osheaf.json");
-    state.objects = [];
+    state.lines = [];
     state.collections = [];
+    state.secret = await gh.secretExists(t, repo, "OPENSHEAF_SIGNING_KEY");
+    state.keyLog = false;
     if (state.settings) {
       const disc = await gh.readJSON(t, repo, "opensheaf.json");
-      state.objects = (disc && disc.objects) || [];
-      const ids = (await gh.listDir(t, repo, "collections"))
+      state.lines = lines(disc);
+      state.layout = (disc && disc.storageLayout) || "";
+      const labels = (await gh.listDir(t, repo, "collections"))
         .filter((f) => f.name.endsWith(".yaml")).map((f) => f.name.replace(/\.yaml$/, ""));
-      state.collections = await Promise.all(ids.map(async (id) => {
-        const [members, dc] = await Promise.all([headFile(t, repo, id, "members.json"),
-                                                 headFile(t, repo, id, "datacite.json")]);
-        return { id, title: dc && dc.titles ? dc.titles[0].title : id,
+      state.collections = (await Promise.all(labels.map(async (label) => {
+        const line = state.lines.find((o) => o.label === label);
+        if (!line) return null;      // a list not synced yet
+        const [members, dc] = await headFiles(t, repo, line, ["members.json", "datacite.json"]);
+        return { label, title: dc && dc.titles ? dc.titles[0].title : label,
                  type: members ? members.type : "", members: (members && members.members) || [] };
-      }));
+      }))).filter(Boolean);
+    } else {
+      state.keyLog = (await gh.readText(t, repo, "key-log/inventory.json")) !== null;
     }
     showArchive();
     loadTitles(t, repo);
@@ -262,17 +270,79 @@ function showEmpty(repo, meta) {
         el("li", {}, "Come back here, open it, and set it up."))));
 }
 
+// The settings page where the repository's secrets are set: the manager
+// never sets a secret, and never sees a key.
+function secretsPage(repo) {
+  return `https://github.com/${repo}/settings/secrets/actions`;
+}
+
+const PIPX = 'pipx install "opensheaf[validate] @ git+https://github.com/opensheaf/opensheaf-py"';
+
+// A repository made from the template and not set up: the key ceremony,
+// step by step. The owner and its rotation keys are made on the author's
+// computer with osheaf, never in the browser; the manager only says what to
+// run, where the secret goes, and then sends the setup with the key log
+// (public keys only).
+function ceremony() {
+  const repo = state.repo;
+  const user = repo.split("/")[0].toLowerCase();
+  const name = repo.split("/")[1];
+  const base = name.toLowerCase() === `${user}.github.io` ? `https://${user}.github.io/` : `https://${user}.github.io/${name}/`;
+  const step = (title, ...body) => el("li", {}, el("strong", {}, title), " ", ...body);
+  const code = (text) => el("pre", {}, text);
+  const done = (ok, yes, no) => el("span", { class: `chip ${ok ? "ok" : "warn"}` }, ok ? yes : no);
+  return [
+    el("h2", {}, `Set up ${repo}`),
+    el("p", {}, "An archive has an owner, who signs every version: a current key on your computer, a current " +
+      "key for the archive's workflows (they keep the archive when you use this page), and three rotation " +
+      "keys, kept offline, two of which sign any change of keys. The owner is made once, on your computer, " +
+      "with the osheaf command; this page never makes or sees a key."),
+    el("ol", { class: "steps" },
+      step("Install the tools", "(once, Python 3.9 or later):", code(PIPX)),
+      step("Make the owner", "in a scratch folder, its rotation keys exported to a USB stick and printed:",
+        code(`osheaf init owner-setup --name "${name}" --base-url ${base} \\\n` +
+             `  --curator "Family, Given" --new-owner --export /Volumes/USB/opensheaf-keys --print\ncd owner-setup`),
+        el("p", { class: "small" }, "It asks for a passphrase, prints the owner name, and asks you to type back the " +
+          "check of each rotation key once it is put away.")),
+      step("Make a key for the workflows", "in a temporary folder, and add it to the owner's key log with two " +
+          "rotation keys (this commits three new ones: keep those, and destroy the first three):",
+        code('ci=$(mktemp -d)\nOPENSHEAF_KEY_STORE=file XDG_CONFIG_HOME="$ci" osheaf key new      # prints did:key:CI\n' +
+             "osheaf owner rotate --add did:key:CI \\\n" +
+             "  --rotation-key /Volumes/USB/opensheaf-keys/rotation-...-1.txt \\\n" +
+             "  --rotation-key /Volumes/USB/opensheaf-keys/rotation-...-2.txt \\\n" +
+             "  --export /Volumes/USB/opensheaf-keys-2 --print")),
+      step("Store it as the repository secret", el("code", {}, "OPENSHEAF_SIGNING_KEY"), ": in ",
+        el("a", { href: secretsPage(repo) }, "the repository's settings"),
+        " (New repository secret), with as value the one line printed by",
+        code('cat "$ci"/opensheaf/keys/*/*.key'),
+        "then delete the folder (", el("code", {}, 'rm -rf "$ci"'), "). The key then lives only in GitHub. ",
+        state.secret === true ? done(true, "the secret is set") :
+          state.secret === false ? done(false, "not set yet") : el("span", { class: "small muted" },
+            "(this sign-in cannot see whether it is set)")),
+      step("Give the key log", "of the owner, public keys only: zip the folder ",
+        el("code", {}, "ocfl/<owner>/<owner>/"), " of the scratch folder, and choose the zip in the form below; or ",
+        "upload that folder to the repository as ", el("code", {}, "key-log/"), " (Add file, Upload files). ",
+        state.keyLog ? done(true, "key-log/ is in the repository") : null,
+        code("cp -R ocfl/<owner>/<owner> key-log && zip -r key-log.zip key-log"))),
+    el("p", { class: "small muted" }, "If the repository is ever compromised, expose the workflows' key at once " +
+      "(osheaf owner expose, with two rotation keys) and store a new one: see the template's README, " +
+      "When something goes wrong."),
+    el("div", { class: "controls" },
+      el("button", { class: "primary", onclick: () => openForm("setup") }, "Set up the archive")),
+  ];
+}
+
 // Titles of the documents, read after the page is shown, and a label for
 // those imported from arXiv (object.json: an external source on arXiv),
 // linking to the arXiv page of the current version.
 async function loadTitles(t, repo) {
-  for (const o of state.objects.filter((x) => x.kind === "document").slice(0, 60)) {
+  for (const o of docs().slice(0, 60)) {
     try {
-      const [dc, obj] = await headFiles(t, repo, o.id, ["datacite.json", "object.json"]);
+      const [dc, obj] = await headFiles(t, repo, o, ["datacite.json", "object.json"]);
       if (state.repo !== repo) return;
-      const cell = document.querySelector(`[data-title="${CSS.escape(o.id)}"]`);
+      const cell = document.querySelector(`[data-title="${CSS.escape(o.label)}"]`);
       if (!cell) continue;
-      if (dc) cell.replaceChildren(el("a", { href: memberLink({ id: o.id }, state.settings.baseUrl) }, dc.titles[0].title));
+      if (dc) cell.replaceChildren(el("a", { href: explorerLink(state.settings.baseUrl, { line: o.label }) }, dc.titles[0].title));
       const ax = ((obj && obj.external) || []).find((e) => e.service === "arXiv" && e.role === "source");
       if (ax) {
         const label = ax.record && /^https:\/\/arxiv\.org\//.test(ax.record)
@@ -285,18 +355,12 @@ async function loadTitles(t, repo) {
   }
 }
 
-// A member of a collection in the Explorer, which shows the objects of any
-// published archive: the paper or collection, or one of its versions
-// (v5); a member of this archive is looked up in this archive.
-function memberLink(m, ownBase, version) {
-  const archive = m.archiveUrl || ownBase;
-  const page = m.kind === "collection" ? "collection" : "object";
-  return `https://opensheaf.org/explorer/?url=${encodeURIComponent(archive)}` +
-         `#/${page}/${encodeURIComponent(m.id)}${version ? `/${encodeURIComponent(version)}` : ""}`;
-}
+// Members of collections link to the Explorer (archive.js): a line of this
+// archive by its label, another by its identifier in the first archive of
+// its `at`, or one of its versions (v5).
 
 function docs() {
-  return state.objects.filter((o) => o.kind === "document");
+  return state.lines.filter((o) => o.kind === "document");
 }
 
 function showArchive() {
@@ -308,53 +372,65 @@ function showArchive() {
     "(.github/workflows/from-request.yml). Bring its .github/ folder up to date from the ",
     el("a", { href: TEMPLATE }, "archive template"), "; until then, requests wait unanswered."));
   if (!s) {
-    parts.push(el("p", {}, `${state.repo} is not set up as an archive yet.`),
-               el("button", { class: "primary", onclick: () => openForm("setup") }, "Set up the archive"));
+    parts.push(...ceremony());
     show("#archive", parts);
     return;
   }
-  const explorer = `https://opensheaf.org/explorer/?url=${encodeURIComponent(s.baseUrl)}`;
+  const explorer = explorerLink(s.baseUrl);
+  if (state.secret === false) parts.push(el("div", { class: "notice warn" },
+    el("strong", {}, "The secret OPENSHEAF_SIGNING_KEY seems not to be set. "),
+    "The archive's workflow signs every change with the owner's key for the workflows, kept in that " +
+    "repository secret: until it is set, requests are answered with a refusal. ",
+    el("a", { href: secretsPage(state.repo) }, "Set it in the repository's settings"),
+    " (see the key ceremony in the template's README)."));
   parts.push(
     el("h2", {}, s.name),
     el("p", { class: "facts" }, /^https:\/\//.test(s.baseUrl || "") ? el("a", { href: s.baseUrl }, s.baseUrl) : s.baseUrl, " · ",
        el("a", { href: explorer }, "open in the Explorer"), " · ",
        el("a", { href: `https://github.com/${state.repo}` }, state.repo)),
+    s.owner ? el("p", { class: "small muted" }, "Owner ",
+      el("a", { href: explorerLink(s.baseUrl, { owner: s.owner }), title: "Its key log, in the Explorer" },
+         el("code", {}, s.owner.slice(0, 16) + "...")),
+      " · signs every version of the archive") : null,
     el("div", { class: "controls" },
       el("button", { class: "primary", onclick: () => openForm("deposit") }, "Deposit a paper"),
       el("button", { onclick: () => openForm("arxiv") }, "Deposit from arXiv"),
       el("button", { onclick: () => openForm("new_collection") }, "Create a collection")),
     el("h3", {}, "Papers"),
     docs().length ? el("table", {},
-      el("tr", {}, el("th", {}, "Identifier"), el("th", {}, "Title"), el("th", {}, "")),
+      el("tr", {}, el("th", {}, "Label"), el("th", {}, "Title"), el("th", {}, "")),
       docs().map((o) => el("tr", {},
-        el("td", {}, el("a", { href: memberLink({ id: o.id }, s.baseUrl) }, el("code", {}, o.id)),
+        el("td", {}, el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: o.id }, el("code", {}, o.label)),
            o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
-        el("td", { "data-title": o.id }, ""),
+        el("td", { "data-title": o.label }, ""),
         el("td", { class: "actions" },
-          el("button", { class: "small", onclick: () => openForm("deposit", { "Identifier": o.id }) }, "New version"),
-          el("button", { class: "small", onclick: () => openForm("notice", { "Identifier": o.id }) }, "Notice"),
-          el("button", { class: "small", onclick: () => openForm("relicense", { "Identifier": o.id }) }, "Licence"),
+          el("button", { class: "small", onclick: () => openForm("deposit", { "Label": o.label, "This deposit": NEW_VERSION }) }, "New version"),
+          el("button", { class: "small", onclick: () => openForm("notice", { "Label": o.label }) }, "Notice"),
+          el("button", { class: "small", onclick: () => openForm("relicense", { "Label": o.label }) }, "Licence"),
           o.status === "withdrawn" ? null :
-            el("button", { class: "small", onclick: () => openForm("withdraw", { "Identifier": o.id }) }, "Withdraw")))))
+            el("button", { class: "small", onclick: () => openForm("withdraw", { "Label": o.label }) }, "Withdraw")))))
       : el("p", { class: "muted" }, "No papers yet."),
     el("h3", {}, "Collections"),
     state.collections.length ? state.collections.map((c) => el("section", { class: "collection" },
       el("h4", {}, c.title, " ", el("span", { class: "chip" }, c.type || "collection"),
-         s.index && s.index.html && s.index.html.featured === c.id ? el("span", { class: "chip ok" }, "featured") : null),
-      el("p", { class: "small muted" }, el("code", {}, c.id)),
+         s.index && s.index.html && s.index.html.featured === c.label ? el("span", { class: "chip ok" }, "featured") : null),
+      el("p", { class: "small muted" }, el("a", { href: explorerLink(s.baseUrl, { line: c.label, kind: "collection" }) },
+         el("code", {}, c.label))),
       c.members.length ? el("ol", { class: "members" }, c.members.map((m) => el("li", {},
-        el("a", { href: memberLink(m, s.baseUrl) }, el("code", {}, m.id), m.cite && m.cite.title ? ` ${m.cite.title}` : ""),
+        el("a", { href: memberLink(m, s.baseUrl, state.lines), title: memberUri(m) },
+           el("code", {}, memberName(m)), m.cite && m.cite.title ? ` ${m.cite.title}` : ""),
+        m.follow ? el("span", { class: "chip" }, "followed") : null,
         m.revisions ? el("span", { class: "muted" }, " (vetted: ",
           m.revisions.map((r, i) => [i ? ", " : "",
-            el("a", { href: memberLink(m, s.baseUrl, r.version), title: `Version ${r.documentVersion}` },
+            el("a", { href: memberLink(m, s.baseUrl, state.lines, r.version), title: `Version ${r.documentVersion}` },
                String(r.documentVersion))]), ")") : null)))
         : el("p", { class: "muted" }, "No members yet."),
       el("div", { class: "controls" },
-        el("button", { class: "small", onclick: () => openForm("add", { "In collection": c.id }) }, "Add a member"),
+        el("button", { class: "small", onclick: () => openForm("add", { "In collection": c.label }) }, "Add a member"),
         c.type === "selection" && c.members.length ?
-          el("button", { class: "small", onclick: () => openForm("vet", { "In collection": c.id }) }, "Vet a new version") : null,
+          el("button", { class: "small", onclick: () => openForm("vet", { "In collection": c.label }) }, "Vet a new version") : null,
         c.members.length ?
-          el("button", { class: "small", onclick: () => openForm("remove", { "In collection": c.id }) }, "Remove a member") : null)))
+          el("button", { class: "small", onclick: () => openForm("remove", { "In collection": c.label }) }, "Remove a member") : null)))
       : el("p", { class: "muted" }, "No collections yet."),
     el("h3", {}, "Requests"),
     el("div", { id: "requests" }));
@@ -364,12 +440,20 @@ function showArchive() {
 
 // --- forms -------------------------------------------------------------------
 
+// A member as the page shows it: its label in this archive, or the start of
+// its name.
+function memberName(m) {
+  const o = state.lines.find((x) => x.name === m.name && x.owner === m.owner);
+  return o ? o.label : `${m.name.slice(0, 12)}...`;
+}
+
 function options(kind, values) {
-  if (kind === "collections") return state.collections.map((c) => [c.id, `${c.title} (${c.id})`]);
-  if (kind === "documents") return docs().map((o) => [o.id, o.id]);
+  if (kind === "collections") return state.collections.map((c) => [c.label, `${c.title} (${c.label})`]);
+  if (kind === "documents") return docs().map((o) => [o.label, o.label]);
   if (kind === "members") {
-    const c = state.collections.find((x) => x.id === values["In collection"]);
-    return c ? c.members.map((m) => [JSON.stringify([m.id, m.archiveUrl || ""]), m.cite && m.cite.title ? `${m.id}: ${m.cite.title}` : m.id]) : [];
+    // a member is sent as its sheaf: URI, which names it in any archive
+    const c = state.collections.find((x) => x.label === values["In collection"]);
+    return c ? c.members.map((m) => [memberUri(m), m.cite && m.cite.title ? `${memberName(m)}: ${m.cite.title}` : memberName(m)]) : [];
   }
   return kind.map((o) => [o, o]);
 }
@@ -435,20 +519,12 @@ async function submit(name, inputs, formNode) {
 async function send(name, inputs) {
   const values = collect(inputs);
   const typed = { ...values };
-  // a member chosen in a list carries its archive, for members of the same name
-  for (const label of ["Member", "Member to remove"])
-    if (values[label] && values[label].startsWith("[")) {
-      const [id, archive] = JSON.parse(values[label]);
-      values[label] = id;
-      if (archive) values["Archive of the member"] = archive;
-    }
   const files = {};
   for (const [label, input] of Object.entries(inputs))
     if (input.type === "file" && input.files.length)
       files[label] = await Promise.all([...input.files].map(async (f) =>
         ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
   const { fields, missing } = check(name, values, files);
-  if (values["Archive of the member"]) fields["Archive of the member"] = values["Archive of the member"];
   if (missing.length) { message("bad", `Fill in: ${missing.join(", ")}.`); return; }
   const id = gh.requestId();
   const what = `${FORMS[name].title}${subject(name, fields) ? `: ${subject(name, fields)}` : ""}`;
