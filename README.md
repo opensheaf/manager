@@ -70,15 +70,22 @@ archive's workflow needs no further check.
 
 - `index.html`, `style.css`: the page, in the design of opensheaf.org; a
   content security policy allows only GitHub's API and the sign-in service.
-- `app.js`: the interface: signing in, choosing the repository, reading the
-  archive (`osheaf.json`, `opensheaf.json`, the collections' heads), the
-  key ceremony of a repository not set up, the forms, sending requests and
-  reading their answers.
+- `app.js`: the interface: signing in, choosing the repository, showing
+  the archive, the key ceremony of a repository not set up, the forms,
+  sending requests and reading their answers.
+- `load.js`: reading the archive (`osheaf.json`, `opensheaf.json`, the
+  collections' heads), where the site of a repository not set up will be
+  served (as the template's setup finds it), and waiting for the answer to
+  a request, after which the archive is read again at the commit that holds
+  the answer (GitHub may serve the branch's files from before a push for a
+  while), so that the change shows at once.
 - `forms.js`: the forms, with the labels of the archive's issue forms.
 - `archive.js`: what is read of an archive of specification 0.2, as plain
   functions: the lines of the discovery document by their labels, the
   folder of a line in the storage root (owner-name or hashed layout),
-  members of collections and links to the Explorer.
+  members of collections, `sheaf:` URIs in canonical form (no owner part
+  for the originator's line, read from its genesis record; the full form
+  for a line whose originator is not known) and links to the Explorer.
 - `github.js`: the GitHub API: reading files, and writing a request as one
   commit (blobs, a tree, a commit, the branch moved; made again on top if
   the branch moved meanwhile).

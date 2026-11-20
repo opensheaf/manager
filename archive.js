@@ -43,6 +43,23 @@ export async function sha256hex(text) {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// The originator of a line, from its genesis record (section 5.3): the
+// owner it names in `originator`; an owner is its own originator.
+export function originatorOf(genesis, line) {
+  if (!genesis) return "";
+  if (genesis.kind === "owner") return line.name;
+  return typeof genesis.originator === "string" ? genesis.originator : "";
+}
+
+// A line's sheaf: URI as it is shown, in canonical form (section 12.1):
+// sheaf:<name> for the originator's line, sheaf:<name>:<owner> otherwise.
+// Without its originator (not read, or a line of another archive, whose
+// genesis record is not fetched for this) the full form, which names the
+// same line.
+export function canonicalUri(o, originator = "") {
+  return originator && originator === o.owner ? `sheaf:${o.name}` : `sheaf:${o.name}:${o.owner}`;
+}
+
 // A member of a collection (members.json of specification 0.2: kind, name,
 // owner, at, version or revisions, cite) as the forms name it: its sheaf: URI.
 export function memberUri(m) {

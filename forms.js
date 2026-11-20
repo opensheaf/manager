@@ -36,7 +36,9 @@ export const FORMS = {
               "It holds only public keys." },
       { label: "Owner", placeholder: "the owner name printed by osheaf init",
         help: "Optional: checked against the key log." },
-      { label: "Base URL", help: "Empty for the repository's GitHub Pages address; give it if your Pages use your own domain." },
+      { label: "Base URL", help: "Where the site is served. Empty: the address of the repository's GitHub Pages " +
+              "site if on, else https://DOMAIN/REPOSITORY/ if your OWNER.github.io site has a domain of its own, " +
+              "else https://OWNER.github.io/REPOSITORY/." },
     ],
   },
   deposit: {

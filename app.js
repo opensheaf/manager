@@ -9,7 +9,8 @@ import { SERVICE, APP_SLUG, TEMPLATE } from "./config.js";
 import { signIn, refresh } from "./gh-auth.js";
 import * as gh from "./github.js";
 import { FORMS, NEW_VERSION, check, subject } from "./forms.js";
-import { lines, objectPath, memberUri, memberLink, explorerLink } from "./archive.js";
+import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf } from "./archive.js";
+import { readArchive, headFiles, awaitRequest } from "./load.js";
 import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
 
@@ -23,7 +24,10 @@ const state = {
   settings: null,    // osheaf.json
   lines: [],         // the lines of opensheaf.json with a label: { id, kind, name, owner, label, status }
   layout: "",        // the storage layout, from opensheaf.json
-  collections: [],   // [{ label, title, type, members: [members.json 0.2: { kind, name, owner, at, revisions, cite }] }]
+  collections: [],   // [{ label, name, owner, originator, title, type, members: [members.json 0.2: { kind, name, owner, at, revisions, cite }] }]
+  originators: new Map(), // "name:owner" -> the originator of the line, from its genesis record, once read
+  base: null,        // a repository not set up: where its site will be served, { url, rule } (load.js)
+  ref: "",           // the commit the archive was last read at, after a request ("": the default branch)
   hasWorkflow: false,
   keyLog: false,     // a repository not set up: whether it has the owner's key log in key-log/
   secret: null,      // whether the secret OPENSHEAF_SIGNING_KEY is set: true, false, or null (unknown)
@@ -171,65 +175,53 @@ async function showRepositories() {
 
 // --- reading the archive -------------------------------------------------------
 
-// Several files of the head version of a line (an entry of the discovery
-// document), its inventory read once.
-async function headFiles(t, repo, line, names) {
-  const dir = await objectPath(line, state.layout);
-  const inv = await gh.readJSON(t, repo, `${dir}/inventory.json`);
-  if (!inv) return names.map(() => null);
-  const st = inv.versions[inv.head].state;
-  return Promise.all(names.map((name) => {
-    const digest = Object.keys(st).find((d) => st[d].includes(name));
-    return digest ? gh.readJSON(t, repo, `${dir}/${inv.manifest[digest][0]}`) : null;
-  }));
+// The archive as read (load.js) becomes the page's state.
+function apply(a) {
+  state.warnings = accessWarnings(state.repo, a.meta);
+  state.hasWorkflow = a.hasWorkflow;
+  state.settings = a.settings;
+  state.lines = a.lines;
+  state.layout = a.layout;
+  state.collections = a.collections;
+  state.originators = a.originators;
+  state.secret = a.secret;
+  state.keyLog = a.keyLog;
+  state.base = a.base;
 }
 
 async function openArchive(repo) {
   if (!gh.isRepo(repo)) { message("bad", `${repo} is not a repository's name (owner/repository).`); return; }
   if (state.repo !== repo) state.pending.clear();
   state.repo = repo;
+  state.ref = "";
   setRepoInAddress(repo);
   show("#form");
   show("#archive", el("p", { class: "loading" }, `Reading ${repo} ...`));
   message("info");
   try {
     const t = await token();
-    // an empty repository (no commit yet) is not an archive, and GitHub cannot
-    // add commits to it through its API: it must be made from the template
-    const meta = await gh.api(t, `/repos/${repo}`);
-    state.warnings = accessWarnings(repo, meta);
-    if (!(await gh.listDir(t, repo, "")).length) {
-      showEmpty(repo, meta);
-      return;
-    }
-    state.hasWorkflow = (await gh.readText(t, repo, ".github/workflows/from-request.yml")) !== null;
-    state.settings = await gh.readJSON(t, repo, "osheaf.json");
-    state.lines = [];
-    state.collections = [];
-    state.secret = await gh.secretExists(t, repo, "OPENSHEAF_SIGNING_KEY");
-    state.keyLog = false;
-    if (state.settings) {
-      const disc = await gh.readJSON(t, repo, "opensheaf.json");
-      state.lines = lines(disc);
-      state.layout = (disc && disc.storageLayout) || "";
-      const labels = (await gh.listDir(t, repo, "collections"))
-        .filter((f) => f.name.endsWith(".yaml")).map((f) => f.name.replace(/\.yaml$/, ""));
-      state.collections = (await Promise.all(labels.map(async (label) => {
-        const line = state.lines.find((o) => o.label === label);
-        if (!line) return null;      // a list not synced yet
-        const [members, dc] = await headFiles(t, repo, line, ["members.json", "datacite.json"]);
-        return { label, title: dc && dc.titles ? dc.titles[0].title : label,
-                 type: members ? members.type : "", members: (members && members.members) || [] };
-      }))).filter(Boolean);
-    } else {
-      state.keyLog = (await gh.readText(t, repo, "key-log/inventory.json")) !== null;
-    }
+    const a = await readArchive(t, repo);
+    if (state.repo !== repo) return;
+    apply(a);
+    if (a.empty) { showEmpty(repo, a.meta); return; }
     showArchive();
     loadTitles(t, repo);
     resumePending(repo);
   } catch (e) {
     show("#archive", el("p", { class: "notice bad" }, `Could not read ${repo}: ${e.message}`));
   }
+}
+
+// After a request is answered: the archive read again (at the commit that
+// carried it out) is shown, keeping the requests waiting and a form being
+// filled in.
+function refreshArchive(repo, a, ref) {
+  if (state.repo !== repo) return;
+  state.ref = ref || "";
+  apply(a);
+  if (a.empty) { showEmpty(repo, a.meta); return; }
+  showArchive();
+  token().then((t) => loadTitles(t, repo)).catch(() => {});
 }
 
 // What would make every request fail, said before one is sent: the account
@@ -287,7 +279,9 @@ function ceremony() {
   const repo = state.repo;
   const user = repo.split("/")[0].toLowerCase();
   const name = repo.split("/")[1];
-  const base = name.toLowerCase() === `${user}.github.io` ? `https://${user}.github.io/` : `https://${user}.github.io/${name}/`;
+  // as the setup finds it (load.js); the scratch archive of the ceremony uses it too
+  const base = state.base ? state.base.url
+    : name.toLowerCase() === `${user}.github.io` ? `https://${user}.github.io/` : `https://${user}.github.io/${name}/`;
   const step = (title, ...body) => el("li", {}, el("strong", {}, title), " ", ...body);
   const code = (text) => el("pre", {}, text);
   const done = (ok, yes, no) => el("span", { class: `chip ${ok ? "ok" : "warn"}` }, ok ? yes : no);
@@ -327,6 +321,13 @@ function ceremony() {
     el("p", { class: "small muted" }, "If the repository is ever compromised, expose the workflows' key at once " +
       "(osheaf owner expose, with two rotation keys) and store a new one: see the template's README, " +
       "When something goes wrong."),
+    el("p", {}, el("strong", {}, "The site. "), "The archive's site will be served at ",
+      el("code", {}, base), state.base ? ` (${state.base.rule})` : "",
+      ", which the setup takes as its base URL when the form's field Base URL is empty; it finds it " +
+      "the same way when it runs. If that is not where the site will be, give the address in that field " +
+      "(it can be changed later: baseUrl in osheaf.json, then osheaf index). The setup cannot turn " +
+      "GitHub Pages on: do it in ", el("a", { href: `https://github.com/${repo}/settings/pages` }, "Settings, Pages"),
+      " (Build and deployment: Deploy from a branch, branch main, folder / (root), Save)."),
     el("div", { class: "controls" },
       el("button", { class: "primary", onclick: () => openForm("setup") }, "Set up the archive")),
   ];
@@ -336,10 +337,17 @@ function ceremony() {
 // those imported from arXiv (object.json: an external source on arXiv),
 // linking to the arXiv page of the current version.
 async function loadTitles(t, repo) {
+  const at = state.ref ? { ref: state.ref } : {};
   for (const o of docs().slice(0, 60)) {
     try {
-      const [dc, obj] = await headFiles(t, repo, o, ["datacite.json", "object.json"]);
+      const [dc, obj, genesis] = await headFiles(t, repo, o, state.layout,
+        ["datacite.json", "object.json", "genesis.json"], at);
       if (state.repo !== repo) return;
+      const originator = originatorOf(genesis, o);
+      if (originator) {
+        state.originators.set(`${o.name}:${o.owner}`, originator);
+        showUri(o);
+      }
       const cell = document.querySelector(`[data-title="${CSS.escape(o.label)}"]`);
       if (!cell) continue;
       if (dc) cell.replaceChildren(el("a", { href: explorerLink(state.settings.baseUrl, { line: o.label }) }, dc.titles[0].title));
@@ -358,6 +366,18 @@ async function loadTitles(t, repo) {
 // Members of collections link to the Explorer (archive.js): a line of this
 // archive by its label, another by its identifier in the first archive of
 // its `at`, or one of its versions (v5).
+
+// A line's sheaf: URI as the page shows it (in the title of its links), in
+// canonical form once its originator is known (archive.js).
+function uri(o) {
+  return canonicalUri(o, state.originators.get(`${o.name}:${o.owner}`));
+}
+
+// The URI of a line shown again, once its originator has been read.
+function showUri(o) {
+  for (const node of document.querySelectorAll(`[data-line="${CSS.escape(`${o.name}:${o.owner}`)}"]`))
+    node.title = uri(o);
+}
 
 function docs() {
   return state.lines.filter((o) => o.kind === "document");
@@ -400,7 +420,8 @@ function showArchive() {
     docs().length ? el("table", {},
       el("tr", {}, el("th", {}, "Label"), el("th", {}, "Title"), el("th", {}, "")),
       docs().map((o) => el("tr", {},
-        el("td", {}, el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: o.id }, el("code", {}, o.label)),
+        el("td", {}, el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: uri(o), "data-line": `${o.name}:${o.owner}` },
+             el("code", {}, o.label)),
            o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
         el("td", { "data-title": o.label }, ""),
         el("td", { class: "actions" },
@@ -414,10 +435,11 @@ function showArchive() {
     state.collections.length ? state.collections.map((c) => el("section", { class: "collection" },
       el("h4", {}, c.title, " ", el("span", { class: "chip" }, c.type || "collection"),
          s.index && s.index.html && s.index.html.featured === c.label ? el("span", { class: "chip ok" }, "featured") : null),
-      el("p", { class: "small muted" }, el("a", { href: explorerLink(s.baseUrl, { line: c.label, kind: "collection" }) },
+      el("p", { class: "small muted" }, el("a", { href: explorerLink(s.baseUrl, { line: c.label, kind: "collection" }),
+                                                  title: uri(c), "data-line": `${c.name}:${c.owner}` },
          el("code", {}, c.label))),
       c.members.length ? el("ol", { class: "members" }, c.members.map((m) => el("li", {},
-        el("a", { href: memberLink(m, s.baseUrl, state.lines), title: memberUri(m) },
+        el("a", { href: memberLink(m, s.baseUrl, state.lines), title: uri(m), "data-line": `${m.name}:${m.owner}` },
            el("code", {}, memberName(m)), m.cite && m.cite.title ? ` ${m.cite.title}` : ""),
         m.follow ? el("span", { class: "chip" }, "followed") : null,
         m.revisions ? el("span", { class: "muted" }, " (vetted: ",
@@ -546,26 +568,23 @@ async function send(name, inputs) {
 
 // --- results -----------------------------------------------------------------
 
+// Waits for the answer to a request; once it is there, the archive is read
+// again at the commit that holds it (load.js), so that the change it reports
+// shows at once, and the answer is shown.
 async function poll(id) {
   const repo = state.repo;
-  const started = Date.now();
-  while (Date.now() - started < 15 * 60_000 && state.repo === repo) {
-    await new Promise((r) => setTimeout(r, 8000));
-    let result = null;
-    try { result = await gh.readJSON(await token(), repo, `requests/results/${id}.json`); }
-    catch (_) { /* try again */ }
-    if (result) {
-      state.pending.delete(id);
-      // the archive is read again first: reading it clears the messages
-      await openArchive(repo);
-      if (state.repo === repo) message(result.ok ? "ok" : "bad", render(result.message), correctButton(id, result));
-      return;
-    }
+  const done = await awaitRequest(token, repo, id, { stop: () => state.repo !== repo });
+  if (state.repo !== repo) return;
+  if (done) {
+    state.pending.delete(id);
+    // the archive could not be read at that commit: read it as on opening
+    if (done.archive) refreshArchive(repo, done.archive, done.ref);
+    else await openArchive(repo);
+    if (state.repo === repo) message(done.result.ok ? "ok" : "bad", render(done.result.message), correctButton(id, done.result));
+    return;
   }
-  if (state.repo === repo) {
-    state.pending.get(id) && (state.pending.get(id).late = true);
-    showResults();
-  }
+  state.pending.get(id) && (state.pending.get(id).late = true);
+  showResults();
 }
 
 // Requests still waiting in the repository (requests/ID/, removed by the
@@ -608,10 +627,11 @@ async function showResults() {
       el("a", { href: `https://github.com/${state.repo}/actions` }, "Actions"), ".") : null));
   try {
     const t = await token();
-    const files = (await gh.listDir(t, state.repo, "requests/results"))
+    const at = state.ref ? { ref: state.ref } : { fresh: true };
+    const files = (await gh.listDir(t, state.repo, "requests/results", at))
       .filter((f) => f.name.endsWith(".json")).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 8);
     for (const f of files) {
-      const r = await gh.readJSON(t, state.repo, f.path);
+      const r = await gh.readJSON(t, state.repo, f.path, at);
       if (!r) continue;
       nodes.push(el("details", { class: `result ${r.ok ? "ok" : "bad"}` },
         el("summary", {}, el("span", { class: `chip ${r.ok ? "ok" : "bad"}` }, r.ok ? "done" : "not done"), " ",

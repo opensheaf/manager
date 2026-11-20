@@ -12,7 +12,7 @@ export class GitHubError extends Error {
   }
 }
 
-export async function api(token, path, { method = "GET", body, accept, fetchImpl = fetch } = {}) {
+export async function api(token, path, { method = "GET", body, accept, fetchImpl = fetch, fresh = false } = {}) {
   const headers = {
     Accept: accept || "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
@@ -21,6 +21,9 @@ export async function api(token, path, { method = "GET", body, accept, fetchImpl
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const response = await fetchImpl(path.startsWith("http") ? path : API + path, {
     method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+    // GitHub's answers may be kept by the browser for a minute: a read that
+    // must see the latest commit bypasses that cache
+    ...(fresh ? { cache: "no-store" } : {}),
   });
   if (response.status === 204) return null;
   // raw file contents come labelled application/vnd.github.raw+json, whatever
@@ -63,19 +66,43 @@ export async function repositories(token, fetchImpl) {
   return { repos, installations: null };
 }
 
-// A file of the repository's default branch: its text, or null if absent.
-export async function readText(token, repo, path, fetchImpl) {
+// The options of the reading functions: a fetch to use instead of the
+// browser's (the tests), or { fetchImpl, ref, fresh }: the files at a commit
+// (ref, a commit's sha) instead of the default branch's head, and read past
+// the browser's cache (fresh).
+function readOptions(o) {
+  return typeof o === "function" ? { fetchImpl: o } : (o || {});
+}
+
+function contentsPath(repo, path, ref) {
+  return `/repos/${repo}/contents/${encodePath(path)}${ref ? `?ref=${encodeURIComponent(ref)}` : ""}`;
+}
+
+// The commit at the head of a branch, read past the browser's cache: reading
+// files at that commit (the option ref) then shows exactly that commit, also
+// right after a push, when the default branch's files may still be served
+// from before it.
+export async function headSha(token, repo, branch, o) {
+  const { fetchImpl } = readOptions(o);
+  const ref = await api(token, `/repos/${repo}/git/ref/heads/${encodePath(branch)}`, { fetchImpl, fresh: true });
+  return ref.object.sha;
+}
+
+// A file of the repository's default branch (or of the commit ref): its
+// text, or null if absent.
+export async function readText(token, repo, path, o) {
+  const { fetchImpl, ref, fresh } = readOptions(o);
   try {
-    return await api(token, `/repos/${repo}/contents/${encodePath(path)}`,
-                     { accept: "application/vnd.github.raw+json", fetchImpl });
+    return await api(token, contentsPath(repo, path, ref),
+                     { accept: "application/vnd.github.raw+json", fetchImpl, fresh });
   } catch (e) {
     if (e.status === 404) return null;
     throw e;
   }
 }
 
-export async function readJSON(token, repo, path, fetchImpl) {
-  const text = await readText(token, repo, path, fetchImpl);
+export async function readJSON(token, repo, path, o) {
+  const text = await readText(token, repo, path, o);
   if (text === null) return null;
   return typeof text === "string" ? JSON.parse(text) : text;
 }
@@ -93,9 +120,10 @@ export async function secretExists(token, repo, name, fetchImpl) {
   }
 }
 
-export async function listDir(token, repo, path, fetchImpl) {
+export async function listDir(token, repo, path, o) {
+  const { fetchImpl, ref, fresh } = readOptions(o);
   try {
-    const items = await api(token, `/repos/${repo}/contents/${encodePath(path)}`, { fetchImpl });
+    const items = await api(token, contentsPath(repo, path, ref), { fetchImpl, fresh });
     return Array.isArray(items) ? items : [];
   } catch (e) {
     if (e.status === 404) return [];
