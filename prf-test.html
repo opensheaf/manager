@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src https://opensheaf.org; img-src 'self' data:; connect-src http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action http://127.0.0.1:*">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<title>Passkey unlock: feasibility test</title>
+<link rel="icon" href="opensheaf-symbol.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="prf-test.js"></script>
+</head>
+<body>
+<main>
+<h1>Passkey unlock: feasibility test</h1>
+<p>A test for unlocking OpenSheaf keys with a passkey (WebAuthn PRF extension), as <code>osheaf key unlock</code> would. It creates a test passkey named <strong>OpenSheaf test</strong> for opensheaf.org, derives a secret from it with Touch ID, and shows only a fingerprint of that secret, never the secret. Nothing is sent anywhere except, when the page was opened by the test listener, the fingerprint to your own computer (127.0.0.1). You can delete the test passkey afterwards in the Passwords app.</p>
+<ol>
+<li><button id="create" type="button">1. Create the test passkey</button></li>
+<li><button id="get" type="button">2. Derive the secret (Touch ID)</button> <button id="again" type="button">3. Derive it again</button></li>
+<li id="handoff" hidden>4. Hand the fingerprint to the listener:
+  <button id="fetch" type="button">by fetch</button>
+  <button id="form" type="button">by form POST</button>
+  <button id="redirect" type="button">by redirect</button></li>
+</ol>
+<pre id="log"></pre>
+<form id="post" method="post" hidden><input type="hidden" name="state"><input type="hidden" name="fp"><input type="hidden" name="via" value="form"></form>
+</main>
+</body>
+</html>
