@@ -38,7 +38,8 @@ function fakeGitHub(repos) {
         const rest = p ? f.slice(p.length + 1) : f, k = rest.indexOf("/");
         names.set(k < 0 ? rest : rest.slice(0, k), k < 0 ? "file" : "dir");
       }
-      return names.size ? json(200, [...names].map(([name, type]) => ({ name, type }))) : json(404, { message: "Not Found" });
+      if (!names.size) return json(404, { message: p || r.files.size ? "Not Found" : "This repository is empty." });
+      return json(200, [...names].map(([name, type]) => ({ name, type })));
     }
     if (method === "PUT") {
       if (!r.push) return json(403, { message: "Resource not accessible by integration" });
@@ -63,6 +64,9 @@ test("the page to create the wallet's repository, filled in", () => {
   assert.equal(url.searchParams.get("visibility"), "private");
 });
 
+// The wallet as GitHub's page for a new repository makes it: empty, no
+// commit (GitHub answers 404, "This repository is empty.", for its contents);
+// the contents API makes its first commit.
 test("a key wallet set up from the page: checked, the key pushed, a passkey created and enrolled, then unlocked", async () => {
   const seed = crypto.getRandomValues(new Uint8Array(32));
   const key = await core.Key.fromSeed(Uint8Array.from(seed));

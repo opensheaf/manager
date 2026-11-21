@@ -264,10 +264,15 @@ export async function prepareNewKey({ state, settings, signers, source, files = 
   if (!signers.number || !signers.next || !signers.next.length) {
     throw new core.OwnerError("the owner's key log takes no new version (it has ended, or commits no rotation key)");
   }
-  await core.checkPassphrase(state.entries, passphrase, settings.owner, state.wallet.name);
+  try {
+    await core.checkPassphrase(state.entries, passphrase, settings.owner, state.wallet.name);
+  } catch (e) {
+    if (e instanceof core.WalletError) throw new core.WalletError(`the wallet's passphrase: ${e.message}`);
+    throw e;
+  }
   const plan = { owner: settings.owner, number: signers.number, next: [...signers.next], nextThreshold: signers.nextThreshold };
   const signing = source === "wallet" ? await core.rotationKeysFromWallet(state.wallet, plan, passphrase)
-    : await core.rotationKeysFromTexts(files, plan, filesPassphrase || passphrase);
+    : await rotationKeysGiven(files, plan, filesPassphrase, passphrase);
   const made = await core.newKeys(plan);
   const pending = { plan, source, signing, current: made.current, passphrase, version: plan.number + 1,
                     next: made.rotation.map((k) => k.digest), rotation: null, files: null, committed: null };
@@ -280,6 +285,23 @@ export async function prepareNewKey({ state, settings, signers, source, files = 
     throw e;
   }
   return pending;
+}
+
+// The rotation-key files read with the passphrase of the files, when one is
+// given, else with the wallet's; a wrong one is named, so that the person
+// knows which passphrase did not open which file.
+async function rotationKeysGiven(files, plan, filesPassphrase, passphrase) {
+  try {
+    return await core.rotationKeysFromTexts(files, plan, filesPassphrase || passphrase);
+  } catch (e) {
+    if (e instanceof core.KeyError && /wrong passphrase|a passphrase is needed|locked with a passphrase/.test(e.message)) {
+      throw new core.KeyError(`${e.message}: ${filesPassphrase
+        ? "the passphrase given for the rotation-key files does not open it"
+        : "the wallet's passphrase does not open this rotation-key file (if the files have another passphrase, " +
+          "tick \"The files have another passphrase\" and give it)"}`);
+    }
+    throw e;
+  }
 }
 
 // The second part: for files, the checks typed (TYPED, in the order of

@@ -85,9 +85,12 @@ one computer only, in `osheaf`'s key store, sets up the wallet under
    rotation keys of the latest version that the person gives:
    - as files (`rotation-OWNER-K.txt`, as `osheaf init --export` or
      `osheaf owner rotate --export` wrote them, locked with the passphrase
-     or in clear, or a typed sheet): the new rotation keys are then given
+     or in clear, or a typed sheet; with another passphrase than the
+     wallet's, said by a tick): the new rotation keys are then given
      back as files of the same names and text, locked with the passphrase,
-     one download each, and as the printable sheets of `--print`; the
+     saved as one zip (`rotation-keys-OWNER16-vN.zip`, the files at its top
+     level, to unpack onto the offline media: a browser downloads one file
+     per click) or one by one, and as the printable sheets of `--print`; the
      version is committed only once the check of each file is typed back,
      as `osheaf owner rotate --export` asks;
    - or from the wallet, when it keeps the owner's rotation keys (the
@@ -209,6 +212,8 @@ wallet: give it the wallet's repository too (Contents: read).
 - `direct.js`: writing directly: the popup of the passkey, the keys of
   the wallet, setting the wallet up, and an operation carried out and
   committed.
+- `zip.js`: a zip of text files, stored, for the rotation-key files saved
+  at once.
 - `pages.js`: after each commit, whether GitHub Pages has published the
   website yet: one file the commit wrote is fetched from the site until it
   is served as committed (the App cannot read Actions, so the site itself

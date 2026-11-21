@@ -18,6 +18,7 @@ import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
 import * as direct from "./direct.js";
 import { watchPages } from "./pages.js";
+import { storedZip, rotationZipName } from "./zip.js";
 
 const $ = (sel) => document.querySelector(sel);
 const KEY = "opensheaf-manager-auth";
@@ -956,9 +957,13 @@ function newKeyForm(st) {
   const need = signers.nextThreshold, of = (signers.next || []).length;
   const files = el("input", { type: "file", id: "setup-rotation-files", multiple: true, accept: ".txt,text/plain",
                               "aria-label": "Rotation-key files" });
-  const filesPass = el("input", { type: "password", id: "setup-rotation-pass", autocomplete: "off",
-                                  "aria-label": "Passphrase of the rotation-key files",
-                                  placeholder: "passphrase of the files, if another" });
+  // hidden unless asked for: browsers fill password fields with a saved
+  // password (whatever autocomplete says), which then failed as the files'
+  const filesPass = el("input", { type: "password", id: "setup-rotation-pass", name: "rotation-files-passphrase",
+                                  autocomplete: "new-password", "aria-label": "Passphrase of the rotation-key files",
+                                  placeholder: "passphrase of the files", hidden: true });
+  const otherPass = el("input", { type: "checkbox", id: "setup-rotation-other",
+                                  onchange: () => { filesPass.hidden = !otherPass.checked; if (!otherPass.checked) filesPass.value = ""; } });
   const pass = el("input", { type: "password", id: "setup-new-pass", autocomplete: st.confirm ? "new-password" : "current-password",
                              "aria-label": "Passphrase", placeholder: "passphrase" });
   const again = st.confirm ? el("input", { type: "password", id: "setup-new-pass-again", autocomplete: "new-password",
@@ -975,7 +980,8 @@ function newKeyForm(st) {
     }
     if (!pass.value) { message("bad", "Type the passphrase that locks the keys in the wallet."); return; }
     if (again && pass.value !== again.value) { message("bad", "The two passphrases differ."); return; }
-    const passphrase = pass.value, filesPassphrase = filesPass.value;
+    const passphrase = pass.value, filesPassphrase = otherPass.checked ? filesPass.value : "";
+    if (otherPass.checked && !filesPassphrase) { message("bad", "Type the passphrase of the rotation-key files."); return; }
     pass.value = ""; filesPass.value = ""; if (again) again.value = "";
     try { files.value = ""; } catch (_) { /* some browsers */ }
     busy(true);
@@ -1014,7 +1020,9 @@ function newKeyForm(st) {
       el("p", { class: "small" }, `${need} of the files `, el("code", {}, `rotation-${s.owner.slice(0, 16)}-K.txt`),
         ` of v${signers.number} of the key log, as osheaf exported them (or typed sheets). The new rotation keys are then given ` +
         "to you the same way, locked with the passphrase, and the version is committed once you have saved them."),
-      el("div", { class: "controls" }, files, filesPass)]
+      el("div", { class: "controls" }, files),
+      el("p", { class: "small controls" }, el("label", {}, otherPass, " The files have another passphrase than the wallet's"),
+        filesPass)]
       : el("p", { class: "small" }, "The rotation keys are opened with the passphrase; the new ones are put in the wallet, " +
         "locked with it, before the version is committed (as osheaf owner rotate --keys)."),
     el("p", { class: "small" }, st.confirm ? "A new passphrase for the wallet, twice (keep it: osheaf asks it too)."
@@ -1024,14 +1032,22 @@ function newKeyForm(st) {
   ];
 }
 
-// A file offered for download, from text in memory.
-function download(name, text) {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+// A file offered for download, from text or bytes in memory. One click
+// downloads one file: several files go as one zip (zip.js).
+function download(name, text, type = "text/plain") {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const a = el("a", { href: url, download: name });
   document.body.append(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// The rotation-key files as one zip, the files at its top level with
+// osheaf's names.
+function saveAllButton(files, owner, version) {
+  return el("button", { type: "button", class: "primary", onclick: () =>
+    download(rotationZipName(owner, version), storedZip(files), "application/zip") }, "Save all the files (a zip)");
 }
 
 // The sheets of the rotation keys printed, as osheaf --print prints them:
@@ -1072,9 +1088,11 @@ function newKeyPending(st) {
       el("ul", { class: "rotation-files" }, p.files.map((f, k) => el("li", {},
         el("a", { href: "#", onclick: (ev) => { ev.preventDefault(); download(f.name, f.text); } }, f.name),
         "  check ", el("code", {}, f.check), "  ", checks[k]))),
-      el("p", { class: "controls" }, el("button", { type: "button", onclick: () => p.files.forEach((f) => download(f.name, f.text)) },
-        "Save all the files"), el("button", { type: "button", onclick: () => printSheets(p.files) }, "Print the sheets")),
-      el("p", { class: "small" }, "Then type the check of each file next to it, to confirm that they are put away; the new version " +
+      el("p", { class: "controls" }, saveAllButton(p.files, state.settings.owner, p.version),
+        el("button", { type: "button", onclick: () => printSheets(p.files) }, "Print the sheets")),
+      el("p", { class: "small" }, "Save all the files gives one zip of the files, under the names osheaf gives them: unpack it " +
+        "onto the offline media (each file apart from the others), then delete the zip from this computer. Or save each file " +
+        "by its link. Then type the check of each file next to it, to confirm that they are put away; the new version " +
         "of the key log is committed only then."),
       el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); finishNewKey(st, checks.map((c) => c.value)); } },
         el("button", { type: "submit", class: "primary" }, "Confirm and commit"), cancel));
