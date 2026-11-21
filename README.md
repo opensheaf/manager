@@ -15,23 +15,66 @@ issues) and add, vet and remove their members. Papers are named by their
 labels in the archive; members of collections by their `sheaf:` URIs (or a
 label, in this archive or in another given by its address).
 
-It does not change the archive itself. Each operation is sent to the
-archive's repository as a **request**, one commit adding
-`requests/ID/request.json` (the operation and the fields of the
-corresponding issue form) and the files attached, next to it. The
-archive's workflow `from request` carries the request out with `osheaf`,
-exactly as the issue forms and the command line do, commits the result,
-and writes its answer to `requests/results/ID.json`, which the page reads.
-So there is only one implementation of every operation, `osheaf`, and the
-archive stays plain files that any tool can keep.
+## Writing directly
+
+Each operation is carried out **in the page**, by
+[opensheaf-js](https://github.com/opensheaf/opensheaf-js) (the JavaScript
+port of `osheaf`), exactly as the archive's workflow carries it out with
+opensheaf-py: the same fields, checks, commands, files and messages (the
+tests of opensheaf-js compare the two). The page reads the archive at the
+head of its branch through GitHub's API, carries the operation out in
+memory, signs the new versions with the owner's current keys, and writes
+the result as **one commit** (blobs, a tree, a commit, the branch moved,
+never forced; if the branch moved meanwhile, the operation is carried out
+again on the new head). No workflow runs for it; GitHub Pages then
+publishes the commit, as for any push. A notice takes about 10 seconds to
+commit and a new paper about 20, then Pages about 25; a request to the
+workflow took about 25 seconds, then Pages.
+
+The archive's site is written by the operation itself (the archive's
+templates, as `osheaf index` writes them), in the same commit: no workflow
+of the archive is needed to present it. The template's `verify` workflow
+still checks every push.
+
+**The keys.** The owner's current keys are those of its key wallet, a
+private GitHub repository where `osheaf key push --wallet
+github:OWNER/REPOSITORY` put them, each locked with the passphrase and the
+owner's passkeys (`osheaf key enroll`). The wallet is named by `keys` in
+the archive's `osheaf.json`, or given in the page (kept in this browser:
+a name, not a secret). The passkeys belong to
+<https://unlock.opensheaf.org/>, which no other page can ask; the page
+opens it in a **popup** ("Unlock with your passkey", or the first change
+sent): the popup asks for the passkey (Touch ID), seals its secret to a
+one-time key of this page, exactly as for `osheaf key unlock`, and sends
+it back by a window message, to this page's origin only; you type here the
+code of six digits the popup shows, and the page opens the seal with it,
+then the keys. The keys are kept in the page's memory only, as WebCrypto
+keys that cannot be exported, until the page is closed or locked ("Lock");
+they are never written to the browser's storage. The GitHub sign-in must
+be able to read the wallet: install the OpenSheaf app on the wallet's
+repository too (the page only reads it).
+
+## Requests to the workflow
+
+The other way, kept for archives whose owners have no wallet or no
+passkey, and for the setup and the imports from arXiv (arXiv cannot be
+read from a page): tick "Send the changes to the archive's workflow
+instead". Each operation is then sent to the archive's repository as a
+**request**, one commit adding `requests/ID/request.json` (the operation
+and the fields of the corresponding issue form) and the files attached,
+next to it. The archive's workflow `from request` carries the request out
+with `osheaf`, exactly as the issue forms and the command line do,
+commits the result, and writes its answer to `requests/results/ID.json`,
+which the page reads.
 
 ## The owner and its keys
 
 Every version of an archive is signed by its owner (section 6 of the
-specification). The manager never makes, holds or sees a key. The owner is
-made on the author's computer with `osheaf`, and the archive's workflows
-sign with a current key of their own, kept in the repository secret
-`OPENSHEAF_SIGNING_KEY`: the *key ceremony* of the template's README. For
+specification). The owner is made on the author's computer with `osheaf`,
+never in the browser; the page holds the owner's current keys only while
+they are unlocked (above). The archive's workflows sign with a current
+key of their own, kept in the repository secret `OPENSHEAF_SIGNING_KEY`:
+the *key ceremony* of the template's README. For
 a repository not set up yet, the page shows the ceremony step by step (the
 commands to run, a link to the repository's settings where the secret is
 set, whether the secret and the folder `key-log/` are there), then sends
@@ -63,13 +106,19 @@ The page writes to the repository with the author's GitHub account:
   service, and works from a copy of the page anywhere.
 
 The token stays in the tab (`sessionStorage`), and goes only to GitHub's
-API. Only those who may write to the repository can send requests, so the
-archive's workflow needs no further check.
+API. Only those who may write to the repository can commit to it or send
+requests, so the archive's workflow needs no further check. A personal
+access token limited to the archive's repository cannot read the key
+wallet: give it the wallet's repository too (Contents: read).
 
 ## Files
 
-- `index.html`, `style.css`: the page, in the design of opensheaf.org; a
-  content security policy allows only GitHub's API and the sign-in service.
+- `index.html`, `style.css`: the page, in the design of opensheaf.org; its
+  content security policy allows scripts of the page only (and
+  WebAssembly, for the digests and key derivations of opensheaf-js), and
+  connections over https only: GitHub's API, the sign-in service, the
+  archive's own site (a faster copy of its files, each checked against
+  its git name), and the other archives whose papers a collection holds.
 - `app.js`: the interface: signing in, choosing the repository, showing
   the archive, the key ceremony of a repository not set up, the forms,
   sending requests and reading their answers.
@@ -80,6 +129,15 @@ archive's workflow needs no further check.
   the answer (GitHub may serve the branch's files from before a push for a
   while), so that the change shows at once.
 - `forms.js`: the forms, with the labels of the archive's issue forms.
+- `direct.js`: writing directly: the popup of the passkey, the keys of
+  the wallet, and an operation carried out and committed.
+- `vendor/opensheaf-manager.js`: opensheaf-js's `web/manager.js`, bundled
+  (`deno task bundle` in opensheaf-js), with the JSON Schemas and the
+  default templates of the website; its first line names the commit of
+  opensheaf-js it was made from.
+- `tools/live-test.mjs`: a test of writing directly against a real
+  repository, from Node, with the page's own code; the key comes from a
+  key file instead of the passkey. For throwaway archives.
 - `archive.js`: what is read of an archive of specification 0.2, as plain
   functions: the lines of the discovery document by their labels, the
   folder of a line in the storage root (owner-name or hashed layout),
@@ -101,11 +159,19 @@ archive's workflow needs no further check.
 
 ## Working on it
 
-No build step: plain JavaScript modules. Tests of the parts that need no
-browser: `node --test tests/` (Node 20 or later). To try the page locally,
-serve the folder (`python3 -m http.server 8000`) and sign in with a
-personal access token (the sign-in service answers only pages at
-`https://opensheaf.org`).
+No build step: plain JavaScript modules, and the bundle of opensheaf-js in
+`vendor/`, copied from opensheaf-js (`deno task bundle`, then `cp
+dist/opensheaf-manager.js` here) when it changes. Tests of the parts that
+need no browser: `node --test tests/` (Node 22 or later); the popup is
+tested against doubles of the windows. To try the page locally, serve the
+folder (`python3 -m http.server 8000`) and sign in with a personal access
+token (the sign-in service answers only pages at `https://opensheaf.org`);
+the passkey's popup answers only pages at `https://opensheaf.org` too, so
+that writing directly is tried on the published page, or with
+`tools/live-test.mjs`:
+
+    GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key KEYFILE \
+      --operation notice --fields '{"Label": "x", "Document version it is about": "1", "Text of the notice": "..."}'
 
 ## Licence
 

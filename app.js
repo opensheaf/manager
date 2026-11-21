@@ -1,9 +1,12 @@
 // The OpenSheaf manager: keep an archive made from the archive template
 // from the browser. It signs in with GitHub (through the sign-in service,
-// or with a personal access token), reads the archive's files, and writes
-// requests (requests/ID/), which the archive's workflow "from request"
-// carries out with osheaf, as it does the issue forms; the result comes
-// back in requests/results/ID.json.
+// or with a personal access token) and reads the archive's files. A change
+// is written directly (direct.js): carried out in this page by opensheaf-js,
+// signed with the owner's keys unlocked by the owner's passkey, and
+// committed to the repository. Or, as a fallback (no keys unlocked, or by
+// choice), it is sent as a request (requests/ID/), which the archive's
+// workflow "from request" carries out with osheaf, as it does the issue
+// forms; the result then comes back in requests/results/ID.json.
 
 import { SERVICE, APP_SLUG, TEMPLATE } from "./config.js";
 import { signIn, refresh } from "./gh-auth.js";
@@ -13,9 +16,23 @@ import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf } from 
 import { readArchive, headFiles, awaitRequest } from "./load.js";
 import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
+import * as direct from "./direct.js";
 
 const $ = (sel) => document.querySelector(sel);
 const KEY = "opensheaf-manager-auth";
+const VIA_WORKFLOW = "opensheaf-manager-via-workflow";
+const WALLET = "opensheaf-manager-wallet:";
+
+// Preferences kept in this browser (never keys, never tokens): whether to
+// send requests to the workflow rather than write directly, and the name of
+// an owner's key wallet.
+function pref(name, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(name) || "";
+    if (value) localStorage.setItem(name, value); else localStorage.removeItem(name);
+  } catch (_) { /* the page works without storage */ }
+  return value || "";
+}
 
 const state = {
   auth: null,        // { access_token, refresh_token?, expires_at?, kind: "app" | "pat" }
@@ -35,7 +52,14 @@ const state = {
   reachable: null,   // with the app: the repositories where it is installed (lower case)
   pending: new Map(),// request id -> { what, since }
   sent: new Map(),   // request id -> { name, values }: the forms sent in this tab, to correct
+  keys: new direct.Keys(), // the owner's current keys, unlocked in this page (memory only)
+  signers: null,     // { owner, dids, threshold }: the keys of the owner's key log that sign now
+  cache: new Map(),  // blobs of the repository read in this session, by their git names
+  unlocking: null,   // a promise while the popup of the passkey is open
 };
+
+const viaWorkflow = () => pref(VIA_WORKFLOW) === "yes";
+
 
 // --- small DOM helpers --------------------------------------------------------
 
@@ -107,6 +131,7 @@ async function afterSignIn() {
 }
 
 function signOut() {
+  state.keys.forget();
   state.auth = state.user = state.repo = null;
   saveAuth();
   setRepoInAddress("");
@@ -191,7 +216,11 @@ function apply(a) {
 
 async function openArchive(repo) {
   if (!gh.isRepo(repo)) { message("bad", `${repo} is not a repository's name (owner/repository).`); return; }
-  if (state.repo !== repo) state.pending.clear();
+  if (state.repo !== repo) {
+    state.pending.clear();
+    state.cache = new Map();
+    state.signers = null;
+  }
   state.repo = repo;
   state.ref = "";
   setRepoInAddress(repo);
@@ -318,6 +347,11 @@ function ceremony() {
         "upload that folder to the repository as ", el("code", {}, "key-log/"), " (Add file, Upload files). ",
         state.keyLog ? done(true, "key-log/ is in the repository") : null,
         code("cp -R ocfl/<owner>/<owner> key-log && zip -r key-log.zip key-log"))),
+    el("p", {}, el("strong", {}, "Writing from this page. "), "Once the archive is set up, this page writes to it " +
+      "directly, signing with a current key of the owner that your passkey unlocks: keep one in a key wallet, a " +
+      "private repository of yours, and enroll your passkey (", el("code", {}, "osheaf key push --wallet " +
+      "github:you/opensheaf-keys"), ", then ", el("code", {}, "osheaf key enroll"), "), and install the OpenSheaf " +
+      "app on that repository too. Until then, the changes go to the archive's workflow."),
     el("p", { class: "small muted" }, "If the repository is ever compromised, expose the workflows' key at once " +
       "(osheaf owner expose, with two rotation keys) and store a new one: see the template's README, " +
       "When something goes wrong."),
@@ -397,7 +431,7 @@ function showArchive() {
     return;
   }
   const explorer = explorerLink(s.baseUrl);
-  if (state.secret === false) parts.push(el("div", { class: "notice warn" },
+  if (state.secret === false && viaWorkflow()) parts.push(el("div", { class: "notice warn" },
     el("strong", {}, "The secret OPENSHEAF_SIGNING_KEY seems not to be set. "),
     "The archive's workflow signs every change with the owner's key for the workflows, kept in that " +
     "repository secret: until it is set, requests are answered with a refusal. ",
@@ -412,6 +446,7 @@ function showArchive() {
       el("a", { href: explorerLink(s.baseUrl, { owner: s.owner }), title: "Its key log, in the Explorer" },
          el("code", {}, s.owner.slice(0, 16) + "...")),
       " · signs every version of the archive") : null,
+    signingPanel(),
     el("div", { class: "controls" },
       el("button", { class: "primary", onclick: () => openForm("deposit") }, "Deposit a paper"),
       el("button", { onclick: () => openForm("arxiv") }, "Deposit from arXiv"),
@@ -458,6 +493,138 @@ function showArchive() {
     el("div", { id: "requests" }));
   show("#archive", parts);
   showResults();
+}
+
+// --- signing in this page ---------------------------------------------------------
+
+const ghCore = () => direct.github(() => token());
+
+// Whether the keys this page holds reach the threshold of the owner's key
+// log (read once per repository).
+function unlocked() {
+  const s = state.signers;
+  if (!s || !s.owner) return false;
+  return state.keys.of(s.owner).filter((k) => s.dids.includes(k.did)).length >= s.threshold;
+}
+
+// How the changes are written, said above the forms: directly, once the
+// owner's keys are unlocked by the passkey; or sent to the workflow.
+function signingPanel() {
+  const s = state.settings;
+  const named = direct.walletName(s);
+  const walletInput = el("input", { id: "wallet", placeholder: "github:you/opensheaf-keys", "aria-label": "Key wallet",
+                                    value: pref(WALLET + s.owner) });
+  const toggle = el("input", { type: "checkbox", id: "via-workflow", checked: viaWorkflow(), onchange: (ev) => {
+    pref(VIA_WORKFLOW, ev.target.checked ? "yes" : "");
+    showArchive();
+  } });
+  const workflowChoice = el("p", { class: "small" }, el("label", {}, toggle,
+    " Send the changes to the archive's workflow instead (it signs with its own key, the repository secret ",
+    el("code", {}, "OPENSHEAF_SIGNING_KEY"), ", and answers in a minute or two)"));
+  if (viaWorkflow()) {
+    return el("div", { class: "notice signing" }, el("p", {}, el("strong", {}, "Changes are sent as requests "),
+      "to the archive's workflow, which carries them out and signs them."), workflowChoice);
+  }
+  if (unlocked()) {
+    const keys = state.keys.of(s.owner);
+    return el("div", { class: "notice ok signing" },
+      el("p", {}, el("strong", {}, "Signing in this page. "), "The owner's ",
+        keys.length === 1 ? "key " : "keys ", keys.map((k, i) => [i ? ", " : "", el("code", { title: k.did }, `${k.did.slice(8, 20)}...`)]),
+        " is unlocked here: each change is carried out in this page, signed, and committed to the repository. ",
+        "The keys stay in this page's memory, and are forgotten when it is closed. ",
+        el("button", { class: "small", onclick: () => { state.keys.forget(); showArchive(); message("info", "The keys are locked."); } },
+           "Lock")),
+      workflowChoice);
+  }
+  return el("div", { class: "notice signing" },
+    el("p", {}, el("strong", {}, "Writing directly. "), "Each change is carried out in this page and committed to the " +
+      "repository, signed with the owner's current key from its key wallet, which your passkey unlocks " +
+      "(in a window of unlock.opensheaf.org; you then type here the code it shows)."),
+    named ? el("p", { class: "small" }, "Key wallet: ", el("code", {}, named), " (osheaf.json)")
+      : el("p", { class: "controls" }, el("label", { for: "wallet" }, "Key wallet"), walletInput),
+    el("p", { class: "controls" }, el("button", { class: "primary", onclick: () => {
+      if (!named) pref(WALLET + s.owner, walletInput.value.trim());
+      unlockKeys().then(() => showArchive(), () => {});
+    } }, "Unlock with your passkey")),
+    el("p", { class: "small muted" }, "The wallet is a private repository of yours where ", el("code", {}, "osheaf key push"),
+      " put the owner's current keys, and ", el("code", {}, "osheaf key enroll"), " your passkey; the OpenSheaf app must " +
+      "be installed on it too (the page only reads it)."),
+    workflowChoice);
+}
+
+// The code that the popup shows, typed here: the page opens the popup's
+// answer only with it.
+function askCode() {
+  return new Promise((resolve, reject) => {
+    const input = el("input", { id: "unlock-code", inputmode: "numeric", autocomplete: "one-time-code",
+                                placeholder: "123 456", "aria-label": "Code" });
+    const form = el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); resolve(input.value); message("info", "Opening the keys ..."); } },
+      input, el("button", { type: "submit", class: "primary" }, "Open the keys"),
+      el("button", { type: "button", onclick: () => { reject(new Error("cancelled")); message("info"); } }, "Cancel"));
+    message("info", el("p", {}, el("strong", {}, "Type the code "), "that the window of unlock.opensheaf.org shows:"), form);
+    input.focus();
+  });
+}
+
+// Unlocks the owner's keys: the popup opens at once (in the click), the
+// signers and the wallet are read meanwhile. One unlocking at a time.
+function unlockKeys() {
+  if (state.unlocking) return state.unlocking;
+  const s = state.settings, repo = state.repo;
+  const wallet = direct.walletName(s, pref(WALLET + s.owner));
+  if (!wallet) {
+    message("bad", "Name the key wallet of the owner (github:OWNER/REPOSITORY), or send the change to the workflow.");
+    return Promise.reject(new Error("no wallet"));
+  }
+  const gh = ghCore();
+  message("info", "Unlocking in the window of unlock.opensheaf.org: use your passkey there ...");
+  state.unlocking = direct.unlock({
+    gh, archiveRepo: repo, settings: s, wallet, askCode,
+    signers: async () => (state.signers ||= await direct.signersOf({ gh, repo, cache: state.cache, settings: s })),
+  }).then((keys) => {
+    state.keys.add(s.owner, keys);
+    if (!unlocked()) throw new Error(`the passkey opened ${keys.length} key(s), and the key log needs ${state.signers.threshold}`);
+    message("ok", "The owner's keys are unlocked in this page, until it is closed.");
+  }).catch((e) => {
+    message("bad", `The keys were not unlocked: ${e.message}.`);
+    throw e;
+  }).finally(() => { state.unlocking = null; });
+  return state.unlocking;
+}
+
+// A change written directly: carried out, signed and committed (direct.js);
+// the archive is then read again at the new commit.
+async function writeDirectly(name, fields, files, typed, what) {
+  const repo = state.repo;
+  const started = performance.now();
+  const say = { reading: "Reading the archive ...", "carrying out": `Carrying out: ${what} ...`,
+                committing: "Signed; committing to the repository ..." };
+  let res;
+  try {
+    res = await direct.write({ gh: ghCore(), repo, operation: name, fields, files, keys: state.keys,
+                               settings: state.settings, cache: state.cache, progress: (p) => message("info", say[p] || p) });
+  } catch (e) {
+    message("bad", `The change could not be written: ${e.message}`, el("p", {},
+      el("button", { onclick: () => sendRequest(name, fields, files, typed, what) }, "Send it to the workflow instead")));
+    return;
+  }
+  if (!res.ok) {
+    const id = `direct-${Date.now()}`;
+    state.sent.set(id, { name, values: typed });
+    message("bad", render(res.message), correctButton(id, res));
+    return;
+  }
+  const seconds = ((performance.now() - started) / 1000).toFixed(1);
+  show("#form");
+  try {
+    const a = await readArchive(await token(), repo, { ref: res.commit.sha });
+    refreshArchive(repo, a, res.commit.sha);
+  } catch (_) {
+    await openArchive(repo);
+  }
+  if (state.repo !== repo) return;
+  message("ok", render(res.message), el("p", { class: "small muted" }, `Written in ${seconds} s, signed in this page: commit `,
+    el("a", { href: res.commit.url || `https://github.com/${repo}/commit/${res.commit.sha}` }, res.commit.sha.slice(0, 7)), "."));
 }
 
 // --- forms -------------------------------------------------------------------
@@ -526,19 +693,39 @@ function collect(inputs) {
 // request is written or refused, so that a second click does not send it
 // twice (a deposit sent twice would make two versions, which stay). Its
 // values are kept, to correct them if the archive refuses the request.
+//
+// A change is written directly unless it is one of the workflow's (setup,
+// arXiv) or the person chose the workflow. If the owner's keys are not
+// unlocked yet, the popup of the passkey is opened in this click, before
+// anything else: browsers open popups only from a click.
 async function submit(name, inputs, formNode) {
   const controls = formNode ? [...formNode.querySelectorAll("input, select, textarea, button")] : [];
   if (controls.some((c) => c.disabled)) return;
+  const values = collect(inputs);
+  const chosen = {};
+  for (const [label, input] of Object.entries(inputs))
+    if (input.type === "file" && input.files.length) chosen[label] = [...input.files];
+  const { missing } = check(name, values, chosen);
+  if (missing.length) { message("bad", `Fill in: ${missing.join(", ")}.`); return; }
+  const directly = state.settings && !direct.WORKFLOW_ONLY.includes(name) && !viaWorkflow();
+  const unlocking = directly && !unlocked() ? unlockKeys() : null;
   controls.forEach((c) => { c.disabled = true; });
   const enable = () => controls.forEach((c) => { c.disabled = false; });
   try {
-    await send(name, inputs);
+    if (unlocking) {
+      try { await unlocking; } catch (_) {
+        message("bad", "The keys were not unlocked, and nothing was written.", el("p", {},
+          el("button", { onclick: () => send(name, inputs, { workflow: true }) }, "Send it to the workflow instead")));
+        return;
+      }
+    }
+    await send(name, inputs, { workflow: !directly });
   } finally {
     if (formNode && formNode.isConnected) enable();
   }
 }
 
-async function send(name, inputs) {
+async function send(name, inputs, { workflow = true } = {}) {
   const values = collect(inputs);
   const typed = { ...values };
   const files = {};
@@ -548,8 +735,14 @@ async function send(name, inputs) {
         ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
   const { fields, missing } = check(name, values, files);
   if (missing.length) { message("bad", `Fill in: ${missing.join(", ")}.`); return; }
-  const id = gh.requestId();
   const what = `${FORMS[name].title}${subject(name, fields) ? `: ${subject(name, fields)}` : ""}`;
+  if (!workflow) return writeDirectly(name, fields, files, typed, what);
+  return sendRequest(name, fields, files, typed, what);
+}
+
+// A change sent as a request to the archive's workflow.
+async function sendRequest(name, fields, files, typed, what) {
+  const id = gh.requestId();
   try {
     message("info", "Sending the request ...");
     await gh.commitFiles(await token(), state.repo, gh.buildRequest(id, name, fields, files),

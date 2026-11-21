@@ -160,3 +160,8 @@ ol.progress > li { margin: 0.3em 0; }
 ol.progress > li.done { color: var(--os-muted); }
 ol.progress > li.done::after { content: " \2713"; color: var(--os-ok); }
 ol.progress > li.now { color: var(--os-ink); font-weight: 600; }
+
+/* how the changes are written: directly, or to the workflow */
+.notice.signing .controls { margin: 0.4em 0; }
+.notice.signing input#wallet { min-width: 18em; }
+input#unlock-code { width: 8em; font-size: 1.2em; letter-spacing: 0.1em; }
