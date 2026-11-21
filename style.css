@@ -281,3 +281,7 @@ body.with-dock footer.site { padding-bottom: 4rem; }
 .theme-control .theme-toggle:focus-visible { outline: 1.5px solid var(--os-ink); outline-offset: 2px; }
 @media screen and (max-width: 60rem) { header.site { padding-right: 3rem; } }
 @media print { .theme-control { display: none !important; } }
+.result.change p { margin: 0.2em 0; }
+.result.change summary { cursor: pointer; }
+.chip.how-page { background: var(--os-ok-bg); color: var(--os-ok); }
+.chip.how-workflow, .chip.how-request { background: var(--os-surface); color: var(--os-muted); }

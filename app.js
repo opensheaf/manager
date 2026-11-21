@@ -18,6 +18,7 @@ import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
 import * as direct from "./direct.js";
 import { watchPages } from "./pages.js";
+import { recentChanges, answerAt } from "./changes.js";
 import { storedZip, rotationZipName } from "./zip.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -161,11 +162,13 @@ function showHistory() {
 
 // The bar says how the website is (being rebuilt, published), how many
 // requests wait, and the last message; it opens, on hover or on a click, a
-// panel with the requests and the history of messages. A click keeps it open
+// panel with the changes (the requests waiting, the archive's recent
+// commits) and the history of messages. A click keeps it open
 // until clicked again (or Escape).
 const dock = { pinned: false, hoverTimer: null };
 
 function setDock(open, pinned = dock.pinned) {
+  if (open && $("#dock-panel").hidden) showResults();   // the changes read afresh when it opens
   dock.pinned = open && pinned;
   $("#dock-panel").hidden = !open;
   $("#dock-bar").setAttribute("aria-expanded", String(open));
@@ -1433,29 +1436,51 @@ function correctButton(id, result) {
     "Correct and send again"));
 }
 
+// The Changes of the Activity panel: the requests waiting first, then the
+// archive's recent commits, read afresh from the head of its branch each
+// time (changes.js), each with how it was made and a link to it; a commit
+// of the workflow that answers a request has its answer folded under it,
+// read when unfolded, at that commit.
+const HOW = { page: "signed in this page", workflow: "by the archive's workflow", request: "a request sent from this page",
+              other: "pushed" };
+
 async function showResults() {
   const box = $("#requests");
-  if (!box) return;
+  if (!box || !state.repo) return;
+  const repo = state.repo;
   const nodes = [...state.pending.entries()].map(([id, p]) => el("div", { class: "result pending" },
     el("p", {}, el("strong", {}, p.what), " ", el("span", { class: "chip warn" }, p.late ? "no answer yet" : "waiting"),
        el("span", { class: "small muted" }, ` request ${id}`)),
     p.late ? el("p", { class: "small" }, "The workflow has not answered: see the repository's ",
-      el("a", { href: `https://github.com/${state.repo}/actions` }, "Actions"), ".") : null));
+      el("a", { href: `https://github.com/${repo}/actions` }, "Actions"), ".") : null));
   try {
     const t = await token();
-    const at = state.ref ? { ref: state.ref } : { fresh: true };
-    const files = (await gh.listDir(t, state.repo, "requests/results", at))
-      .filter((f) => f.name.endsWith(".json")).sort((a, b) => b.name.localeCompare(a.name)).slice(0, 8);
-    for (const f of files) {
-      const r = await gh.readJSON(t, state.repo, f.path, at);
-      if (!r) continue;
-      nodes.push(el("details", { class: `result ${r.ok ? "ok" : "bad"}` },
-        el("summary", {}, el("span", { class: `chip ${r.ok ? "ok" : "bad"}` }, r.ok ? "done" : "not done"), " ",
-           r.title || `request ${r.id}`, el("span", { class: "small muted" }, ` ${r.date || ""}`)),
-        el("div", {}, render(r.message), correctButton(r.id, r))));
+    for (const c of await recentChanges(t, repo)) {
+      const when = c.time ? clock(new Date(c.time)) : "";
+      const day = c.time ? new Date(c.time).toLocaleDateString() : "";
+      const head = [el("span", { class: "small muted", title: day }, when), " ",
+        el("a", { href: c.url, title: c.sha }, c.subject), " ", el("span", { class: `chip how-${c.how}` }, HOW[c.how])];
+      if (!c.answers) { nodes.push(el("div", { class: "result change" }, el("p", {}, head))); continue; }
+      const body = el("div", {}, el("p", { class: "small muted" }, "Reading the answer ..."));
+      const d = el("details", { class: "result change" }, el("summary", {}, head), body);
+      d.addEventListener("toggle", async () => {
+        if (!d.open || d.dataset.read) return;
+        d.dataset.read = "yes";
+        try {
+          const r = await answerAt(await token(), repo, c.answers, c.sha);
+          show(body, r ? [el("p", {}, el("span", { class: `chip ${r.ok ? "ok" : "bad"}` }, r.ok ? "done" : "not done"), " ",
+                                r.title || `request ${c.answers}`), render(r.message), correctButton(c.answers, r)]
+                       : el("p", { class: "small muted" }, "No answer in this commit."));
+        } catch (e) {
+          delete d.dataset.read;
+          show(body, el("p", { class: "small bad" }, `The answer could not be read: ${e.message}`));
+        }
+      });
+      nodes.push(d);
     }
-  } catch (_) { /* results are a convenience */ }
-  show(box, nodes.length ? nodes : [el("p", { class: "muted" }, "No requests yet.")]);
+  } catch (_) { /* the changes are a convenience */ }
+  if (state.repo !== repo) return;
+  show(box, nodes.length ? nodes : [el("p", { class: "muted" }, "No changes yet.")]);
   showDockStatus();
 }
 

@@ -201,7 +201,17 @@ wallet: give it the wallet's repository too (Contents: read).
   sending requests and reading their answers; messages float at the top
   right (a success for a few seconds, a refusal until closed), and the
   Activity bar at the bottom says how the website and the requests are, and
-  opens on the requests and the history of messages.
+  opens on the Changes and the history of messages. The Changes are the
+  requests waiting, then the archive's recent commits (`changes.js`), read
+  afresh from the head of its branch whenever the panel opens and after
+  each change: each with its time, its subject, a link to it on GitHub,
+  and how it was made: signed in this page (its subject names the
+  manager, "(the OpenSheaf manager)"), by the archive's workflow (by
+  `github-actions[bot]`), a request sent from this page, or pushed. A
+  commit of the workflow that answers a request has the answer folded
+  under it (`requests/results/ID.json` at that commit), with "Correct and
+  send again" for a request refused.
+- `changes.js`: the archive's recent commits, and how each was made.
 - `load.js`: reading the archive (`osheaf.json`, `opensheaf.json`, the
   collections' heads), where the site of a repository not set up will be
   served (as the template's setup finds it), and waiting for the answer to
