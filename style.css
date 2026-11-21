@@ -183,6 +183,7 @@ details.block > summary h3 { margin: 0; }
 .compact details.collection { padding: 0.3em 0; }
 .compact details.collection > summary h4 { font-size: 0.95rem; }
 .compact table.papers td { padding-top: 0.25em; padding-bottom: 0.25em; }
+.compact table.papers td:first-child { white-space: nowrap; }
 .compact table.papers td[data-title] { max-width: 0; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .compact table.papers th:last-child, .compact table.papers td.actions { width: 1%; }
 @media (hover: hover) and (pointer: fine) {

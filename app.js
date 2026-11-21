@@ -61,7 +61,8 @@ const state = {
   keys: new direct.Keys(), // the owner's current keys, unlocked in this page (memory only)
   signers: null,     // { owner, dids, threshold }: the keys of the owner's key log that sign now
   cache: new Map(),  // blobs of the repository read in this session, by their git names
-  unlocking: null,   // a promise while the popup of the passkey is open
+  unlocking: null,
+  titles: new Map(), // label -> { title, arxiv }: the papers' titles, read after the archive   // a promise while the popup of the passkey is open
 };
 
 const viaWorkflow = () => pref(VIA_WORKFLOW) === "yes";
@@ -368,6 +369,7 @@ async function openArchive(repo) {
     state.pending.clear();
     stopWatchingSite();
     messageLog.length = 0;
+    state.titles.clear();
     showHistory();
     state.cache = new Map();
     state.signers = null;
@@ -521,6 +523,20 @@ function ceremony() {
 // Titles of the documents, read after the page is shown, and a label for
 // those imported from arXiv (object.json: an external source on arXiv),
 // linking to the arXiv page of the current version.
+// The title of a paper as the table shows it, once read (kept in
+// state.titles, so that the table drawn again keeps it).
+function titleOf(o) {
+  const t = state.titles.get(o.label);
+  if (!t) return [];
+  const out = [];
+  if (t.title) out.push(el("a", { href: explorerLink(state.settings.baseUrl, { line: o.label }), title: t.title }, t.title));
+  const ax = t.arxiv;
+  if (ax) out.push(" ", ax.record && /^https:\/\/arxiv\.org\//.test(ax.record)
+    ? el("a", { class: "chip arxiv", href: ax.record, title: `Imported from arXiv (${ax.label || ""})` }, "arXiv")
+    : el("span", { class: "chip arxiv", title: "Imported from arXiv" }, "arXiv"));
+  return out;
+}
+
 async function loadTitles(t, repo) {
   const at = state.ref ? { ref: state.ref } : {};
   for (const o of docs().slice(0, 60)) {
@@ -533,16 +549,10 @@ async function loadTitles(t, repo) {
         state.originators.set(`${o.name}:${o.owner}`, originator);
         showUri(o);
       }
-      const cell = document.querySelector(`[data-title="${CSS.escape(o.label)}"]`);
-      if (!cell) continue;
-      if (dc) cell.replaceChildren(el("a", { href: explorerLink(state.settings.baseUrl, { line: o.label }) }, dc.titles[0].title));
       const ax = ((obj && obj.external) || []).find((e) => e.service === "arXiv" && e.role === "source");
-      if (ax) {
-        const label = ax.record && /^https:\/\/arxiv\.org\//.test(ax.record)
-          ? el("a", { class: "chip arxiv", href: ax.record, title: `Imported from arXiv (${ax.label || ""})` }, "arXiv")
-          : el("span", { class: "chip arxiv", title: "Imported from arXiv" }, "arXiv");
-        cell.append(" ", label);
-      }
+      state.titles.set(o.label, { title: dc && dc.titles && dc.titles[0] ? dc.titles[0].title : "", arxiv: ax || null });
+      const cell = document.querySelector(`[data-title="${CSS.escape(o.label)}"]`);
+      if (cell) cell.replaceChildren(...titleOf(o));
     } catch (_) { /* a title is a convenience */ }
     if (state.repo !== repo) return;
   }
@@ -638,7 +648,7 @@ function showArchive() {
         el("td", {}, el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: uri(o), "data-line": `${o.name}:${o.owner}` },
              el("code", {}, o.label)),
            o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
-        el("td", { "data-title": o.label }, ""),
+        el("td", { "data-title": o.label }, titleOf(o)),
         el("td", { class: "actions" },
           el("button", { class: "small", onclick: () => openForm("deposit", { "Label": o.label, "This deposit": NEW_VERSION }) }, "New version"),
           el("button", { class: "small", onclick: () => openForm("notice", { "Label": o.label }) }, "Notice"),
