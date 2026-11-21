@@ -702,49 +702,51 @@ function unlocked() {
   return state.keys.of(s.owner).filter((k) => s.dids.includes(k.did)).length >= s.threshold;
 }
 
-// How the changes are written, said above the forms: directly, once the
-// owner's keys are unlocked by the passkey; or sent to the workflow.
+// How the changes are written, chosen above the forms: directly (carried
+// out and signed in this page, with the owner's keys that the passkey
+// unlocks) or by the archive's workflow. Only what the mode chosen needs is
+// shown; how it works is folded away.
 function signingPanel() {
   const s = state.settings;
-  const named = direct.walletName(s);
-  const walletInput = el("input", { id: "wallet", placeholder: "github:you/opensheaf-keys", "aria-label": "Key wallet",
-                                    value: pref(WALLET + s.owner) });
-  const toggle = el("input", { type: "checkbox", id: "via-workflow", checked: viaWorkflow(), onchange: (ev) => {
-    pref(VIA_WORKFLOW, ev.target.checked ? "yes" : "");
-    showArchive();
-  } });
-  const workflowChoice = el("p", { class: "small" }, el("label", {}, toggle,
-    " Send the changes to the archive's workflow instead (it signs with its own key, the repository secret ",
-    el("code", {}, "OPENSHEAF_SIGNING_KEY"), ", and answers in a minute or two)"));
-  if (viaWorkflow()) {
-    return el("div", { class: "notice signing" }, el("p", {}, el("strong", {}, "Changes are sent as requests "),
-      "to the archive's workflow, which carries them out and signs them."), workflowChoice);
-  }
-  if (unlocked()) {
+  const viaWf = viaWorkflow();
+  const choose = (workflow) => { pref(VIA_WORKFLOW, workflow ? "yes" : ""); showArchive(); };
+  const mode = (value, text, checked) => el("label", { class: checked ? "on" : "" },
+    el("input", { type: "radio", name: "write-mode", value, checked, onchange: () => choose(value === "workflow") }), text);
+  const modes = el("div", { class: "modes", role: "radiogroup", "aria-label": "How the changes are written" },
+    mode("direct", "Write directly", !viaWf), mode("workflow", "Through the workflow", viaWf));
+  const how = (...content) => el("details", { class: "how small muted" }, el("summary", {}, "How it works"), ...content);
+  let body;
+  if (viaWf) {
+    body = [
+      el("p", {}, "Each change is sent as a request; the archive's workflow carries it out, signs it and commits it, in a minute or two."),
+      how(el("p", {}, "The workflow signs with the owner's key for the workflows, kept in the repository secret ",
+        el("code", {}, "OPENSHEAF_SIGNING_KEY"), ". Its answers appear under Activity, at the bottom of the page."))];
+  } else if (unlocked()) {
     const keys = state.keys.of(s.owner);
-    return el("div", { class: "notice ok signing" },
-      el("p", {}, el("strong", {}, "Signing in this page. "), "The owner's ",
-        keys.length === 1 ? "key " : "keys ", keys.map((k, i) => [i ? ", " : "", el("code", { title: k.did }, `${k.did.slice(8, 20)}...`)]),
-        " is unlocked here: each change is carried out in this page, signed, and committed to the repository. ",
-        "The keys stay in this page's memory, and are forgotten when it is closed. ",
-        el("button", { class: "small", onclick: () => { state.keys.forget(); showArchive(); message("info", "The keys are locked."); } },
-           "Lock")),
-      workflowChoice);
+    body = [
+      el("p", {}, "✓ Unlocked: ", keys.map((k, i) => [i ? ", " : "", el("code", { title: k.did }, `${k.did.slice(8, 20)}...`)]),
+        " ", el("button", { class: "small", onclick: () => { state.keys.forget(); showArchive(); message("info", "The keys are locked."); } }, "Lock")),
+      how(el("p", {}, "Each change is carried out in this page, signed with these keys and committed to the repository. " +
+        "The keys stay in this page's memory, and are forgotten when it is closed or locked."))];
+  } else {
+    const named = direct.walletName(s);
+    const walletInput = el("input", { id: "wallet", placeholder: "github:you/opensheaf-keys", "aria-label": "Key wallet",
+                                      value: pref(WALLET + s.owner) });
+    body = [
+      el("div", { class: "controls" },
+        named ? el("span", { class: "small" }, "Key wallet ", el("code", {}, named)) : [el("label", { for: "wallet" }, "Key wallet"), walletInput],
+        el("button", { class: "primary", onclick: () => {
+          if (!named) pref(WALLET + s.owner, walletInput.value.trim());
+          unlockKeys().then(() => showArchive(), () => {});
+        } }, "Unlock with your passkey")),
+      how(el("p", {}, "Each change is carried out in this page and committed to the repository, signed with the owner's " +
+          "current key from its key wallet. Your passkey unlocks it in a window of unlock.opensheaf.org; you then type " +
+          "here the code that window shows."),
+        el("p", {}, "The wallet is a private repository of yours where ", el("code", {}, "osheaf key push"),
+          " put the owner's current keys, and ", el("code", {}, "osheaf key enroll"), " your passkey; the OpenSheaf app must " +
+          "be installed on it too (the page only reads it)."))];
   }
-  return el("div", { class: "notice signing" },
-    el("p", {}, el("strong", {}, "Writing directly. "), "Each change is carried out in this page and committed to the " +
-      "repository, signed with the owner's current key from its key wallet, which your passkey unlocks " +
-      "(in a window of unlock.opensheaf.org; you then type here the code it shows)."),
-    named ? el("p", { class: "small" }, "Key wallet: ", el("code", {}, named), " (osheaf.json)")
-      : el("p", { class: "controls" }, el("label", { for: "wallet" }, "Key wallet"), walletInput),
-    el("p", { class: "controls" }, el("button", { class: "primary", onclick: () => {
-      if (!named) pref(WALLET + s.owner, walletInput.value.trim());
-      unlockKeys().then(() => showArchive(), () => {});
-    } }, "Unlock with your passkey")),
-    el("p", { class: "small muted" }, "The wallet is a private repository of yours where ", el("code", {}, "osheaf key push"),
-      " put the owner's current keys, and ", el("code", {}, "osheaf key enroll"), " your passkey; the OpenSheaf app must " +
-      "be installed on it too (the page only reads it)."),
-    workflowChoice);
+  return el("div", { class: `notice signing${!viaWf && unlocked() ? " ok" : ""}` }, modes, body);
 }
 
 // The code that the popup shows, typed here: the page opens the popup's

@@ -164,6 +164,17 @@ ol.progress > li.now { color: var(--os-ink); font-weight: 600; }
 /* how the changes are written: directly, or to the workflow */
 .notice.signing .controls { margin: 0.4em 0; }
 .notice.signing input#wallet { min-width: 18em; }
+/* the two ways of writing, as a segmented choice */
+.modes { display: inline-flex; border: 1px solid var(--os-rule); border-radius: 6px; overflow: hidden; margin-bottom: 0.5em;
+  font-size: 0.88rem; }
+.modes label { padding: 0.3em 0.9em; cursor: pointer; color: var(--os-muted); }
+.modes label + label { border-left: 1px solid var(--os-rule); }
+.modes label.on { background: var(--os-ink); color: var(--os-paper); font-weight: 600; }
+.modes input { position: absolute; opacity: 0; pointer-events: none; }
+.modes label:focus-within { outline: 2px solid var(--os-muted); outline-offset: -2px; }
+.notice.signing p { margin: 0.4em 0; }
+details.how { margin-top: 0.3em; }
+details.how summary { cursor: pointer; }
 input#unlock-code { width: 8em; font-size: 1.2em; letter-spacing: 0.1em; }
 
 /* the parts of the archive's page that fold (collections, papers), and the
