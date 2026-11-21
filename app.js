@@ -62,7 +62,7 @@ const state = {
   signers: null,     // { owner, dids, threshold }: the keys of the owner's key log that sign now
   cache: new Map(),  // blobs of the repository read in this session, by their git names
   unlocking: null,
-  titles: new Map(), // label -> { title, arxiv }: the papers' titles, read after the archive   // a promise while the popup of the passkey is open
+  titles: new Map(), // label -> { title, arxiv, versions (the latest document version) }: the papers' titles, read after the archive   // a promise while the popup of the passkey is open
 };
 
 const viaWorkflow = () => pref(VIA_WORKFLOW) === "yes";
@@ -373,6 +373,7 @@ function apply(a) {
 
 async function openArchive(repo) {
   if (!gh.isRepo(repo)) { message("bad", `${repo} is not a repository's name (owner/repository).`); return; }
+  const again = state.repo === repo && $("#archive").childElementCount > 0;
   if (state.repo !== repo) {
     state.pending.clear();
     stopWatchingSite();
@@ -386,7 +387,8 @@ async function openArchive(repo) {
   state.ref = "";
   setRepoInAddress(repo);
   show("#form");
-  show("#archive", el("p", { class: "loading" }, `Reading ${repo} ...`));
+  // read again (after a change): what is shown stays until redrawn in place
+  if (!again) show("#archive", el("p", { class: "loading" }, `Reading ${repo} ...`));
   message("info");
   try {
     const t = await token();
@@ -558,7 +560,8 @@ async function loadTitles(t, repo) {
         showUri(o);
       }
       const ax = ((obj && obj.external) || []).find((e) => e.service === "arXiv" && e.role === "source");
-      state.titles.set(o.label, { title: dc && dc.titles && dc.titles[0] ? dc.titles[0].title : "", arxiv: ax || null });
+      state.titles.set(o.label, { title: dc && dc.titles && dc.titles[0] ? dc.titles[0].title : "", arxiv: ax || null,
+                                  versions: obj && Number.isInteger(obj.documentVersion) ? obj.documentVersion : null });
       const cell = document.querySelector(`[data-title="${CSS.escape(o.label)}"]`);
       if (cell) cell.replaceChildren(...titleOf(o));
     } catch (_) { /* a title is a convenience */ }
@@ -829,6 +832,12 @@ function memberName(m) {
   return o ? o.label : `${m.name.slice(0, 12)}...`;
 }
 
+// The latest document version of a paper, once read (loadTitles).
+function versionsOf(label) {
+  const t = label && state.titles.get(label);
+  return t && t.versions ? t.versions : null;
+}
+
 function options(kind, values) {
   if (kind === "collections") return state.collections.map((c) => [c.label, `${c.title} (${c.label})`]);
   if (kind === "documents") return docs().map((o) => [o.label, o.label]);
@@ -836,6 +845,11 @@ function options(kind, values) {
     // a member is sent as its sheaf: URI, which names it in any archive
     const c = state.collections.find((x) => x.label === values["In collection"]);
     return c ? c.members.map((m) => [memberUri(m), m.cite && m.cite.title ? `${memberName(m)}: ${m.cite.title}` : memberName(m)]) : [];
+  }
+  if (kind === "versions") {
+    // the document versions of the paper chosen, the latest first
+    const n = versionsOf(values["Label"]);
+    return n ? Array.from({ length: n }, (_, i) => String(n - i)).map((v) => [v, n - Number(v) ? v : `${v} (the latest)`]) : [];
   }
   return kind.map((o) => [o, o]);
 }
@@ -853,9 +867,14 @@ function openForm(name, preset = {}) {
       if (f.type === "textarea") input = el("textarea", { id, rows: 3, placeholder: f.placeholder });
       else if (f.type === "file" || f.type === "files")
         input = el("input", { id, type: "file", multiple: f.type === "files", accept: f.accept });
-      else if (f.type === "select") {
-        // a list filled from the archive starts with an empty choice
-        const first = typeof f.options !== "string" && !f.blank ? null
+      else if (f.options === "versions" && !versionsOf(values["Label"])) {
+        // the versions not known (yet): typed
+        input = el("input", { id, inputmode: "numeric", placeholder: "the version's number, e.g. 1" });
+      } else if (f.type === "select") {
+        // a list filled from the archive starts with an empty choice (not
+        // the versions of a paper: the latest is chosen)
+        if (f.options === "versions" && values[f.label] === undefined) values[f.label] = String(versionsOf(values["Label"]));
+        const first = (typeof f.options !== "string" && !f.blank) || f.options === "versions" ? null
           : el("option", { value: "" }, f.required ? "Choose ..." : "(none)");
         input = el("select", { id }, first,
           options(f.options, values).map(([v, text]) => el("option", { value: v }, text)));
@@ -863,6 +882,13 @@ function openForm(name, preset = {}) {
       if (input.type !== "file" && values[f.label] !== undefined) input.value = values[f.label];
       if (f.label === "In collection" && FORMS[name].fields.some((g) => g.options === "members"))
         input.addEventListener("change", () => openForm(name, { ...collect(inputs), "In collection": input.value }));
+      // the versions follow the paper chosen
+      if (f.label === "Label" && FORMS[name].fields.some((g) => g.options === "versions"))
+        input.addEventListener("change", () => {
+          const kept = collect(inputs);
+          delete kept["Document version it is about"];
+          openForm(name, { ...kept, "Label": input.value });
+        });
       inputs[f.label] = input;
       return el("div", { class: "field" },
         el("label", { for: id }, f.label, f.required ? el("span", { class: "required" }, " (required)") : null),

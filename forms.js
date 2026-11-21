@@ -11,8 +11,8 @@ export const NEW_PAPER = "A new paper";
 export const NEW_VERSION = "A new version of a paper in the archive";
 
 // A field: label, type (text, textarea, select, file, files), and options:
-// required, help, options (for a select; "collections", "documents" or
-// "members" are filled with the archive's), blank (a select of fixed options
+// required, help, options (for a select; "collections", "documents",
+// "members" or "versions" (of the paper chosen) are filled with the archive's), blank (a select of fixed options
 // that starts with no choice, so that one must be made), placeholder, accept
 // (for files).
 export const FORMS = {
@@ -100,7 +100,7 @@ export const FORMS = {
     help: "A statement about a version (an erratum), kept with it; the version never changes.",
     fields: [
       { label: "Label", type: "select", options: "documents", required: true },
-      { label: "Document version it is about", required: true, placeholder: "1" },
+      { label: "Document version it is about", type: "select", options: "versions", required: true },
       { label: "Text of the notice", type: "textarea", required: true },
       { label: "Full statement (optional)", type: "file" },
     ],
