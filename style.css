@@ -239,4 +239,6 @@ body.with-dock footer.site { padding-bottom: 4rem; }
   .dock-last { display: none; }
   .toast { top: auto; bottom: 3.2rem; right: 0.5rem; left: 0.5rem; width: auto; }
 }
+.dock-panel .result { margin: 0; padding: 0.3em 0; font-size: 0.85rem; }
+.dock-panel .result p { margin: 0.2em 0; }
 @media print { .toast, .dock { display: none; } }
