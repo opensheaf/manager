@@ -21,6 +21,14 @@
 // passphrase, as osheaf key push does, and adds a passkey's lock to the
 // keys there, as osheaf key enroll does, the passkey created (or used) in
 // the popup of unlock.opensheaf.org; the files are those of osheaf.
+//
+// Or, when the current key is not at hand (prepareNewKey, commitNewKey,
+// putNewKey): a new current key made in the page, added to the owner's key
+// log by a new version signed by the owner's rotation keys (given as the
+// files osheaf exported, or kept in the wallet), as osheaf owner rotate
+// --add does; the version committed to the archive, the key then put in the
+// wallet as osheaf key push puts it. The keys are in this page's memory
+// only, their seeds wiped once used.
 
 import * as core from "./vendor/opensheaf-manager.js";
 
@@ -193,9 +201,11 @@ export async function setupState({ gh, archiveRepo, settings, wallet, signers })
       throw e;
     }
   };
+  const rotation = core.walletRotationKeys(entries, signers.next || []);
   return { wallet: w, entries, there, missing: signers.dids.filter((d) => !there.includes(d)),
            enrolled: locks.filter((l) => l.creds.length).map((l) => l.did), confirm: core.passphraseConfirmed(entries),
-           plans: { enrolled: await plan(false), fresh: await plan(true) } };
+           plans: { enrolled: await plan(false), fresh: await plan(true) },
+           rotationInWallet: signers.nextThreshold > 0 && rotation.length >= signers.nextThreshold };
 }
 
 // The current key given as text (the file OWNER/K.key of osheaf's key store,
@@ -237,6 +247,84 @@ export async function enrollPasskey({ state, settings, passphrase, askCode, win,
   } finally {
     secret.fill(0);
   }
+}
+
+// --- a new current key, made in the page ----------------------------------------
+
+// The first part: the passphrase checked against the keys of the wallet;
+// the rotation keys that sign read (SOURCE "files": FILES [{ name, text }],
+// locked with FILESPASSPHRASE or the passphrase, or in clear; "wallet": the
+// wallet's, opened with the passphrase) and kept unexportable; the new
+// current key and the new rotation keys made. For files, the new rotation
+// keys are written as osheaf owner rotate --export writes them, locked with
+// the same passphrase, and their seeds wiped: the person saves them, and
+// types their checks, before anything is committed. Gives what commitNewKey
+// takes; forgetNewKey wipes it.
+export async function prepareNewKey({ state, settings, signers, source, files = [], passphrase, filesPassphrase = "" }) {
+  if (!signers.number || !signers.next || !signers.next.length) {
+    throw new core.OwnerError("the owner's key log takes no new version (it has ended, or commits no rotation key)");
+  }
+  await core.checkPassphrase(state.entries, passphrase, settings.owner, state.wallet.name);
+  const plan = { owner: settings.owner, number: signers.number, next: [...signers.next], nextThreshold: signers.nextThreshold };
+  const signing = source === "wallet" ? await core.rotationKeysFromWallet(state.wallet, plan, passphrase)
+    : await core.rotationKeysFromTexts(files, plan, filesPassphrase || passphrase);
+  const made = await core.newKeys(plan);
+  const pending = { plan, source, signing, current: made.current, passphrase, version: plan.number + 1,
+                    next: made.rotation.map((k) => k.digest), rotation: null, files: null, committed: null };
+  try {
+    if (source === "wallet") pending.rotation = made.rotation;
+    else pending.files = await core.rotationFiles(made.rotation, settings.owner, pending.version, filesPassphrase || passphrase);
+  } catch (e) {
+    for (const k of made.rotation) k.seed.fill(0);
+    forgetNewKey(pending);
+    throw e;
+  }
+  return pending;
+}
+
+// The second part: for files, the checks typed (TYPED, in the order of
+// pending.files) must be theirs; for the wallet, the new rotation keys are
+// put there first (nothing is committed if that fails). Then the new version
+// of the key log is made on the head of the archive's branch, verified and
+// committed (core.directRotate). Can be called again after a failure: what
+// is done is not done twice. Gives the new version, with the commit.
+export async function commitNewKey({ gh, repo, pending, state, settings, cache, typed = [], progress = () => {},
+                                     fetchImpl = globalThis.fetch && globalThis.fetch.bind(globalThis) }) {
+  if (pending.committed) return pending.committed;
+  if (pending.files && !core.checksConfirmed(pending.files, typed)) {
+    throw new core.KeyError("the checks typed are not those of the files: nothing was written to the key log");
+  }
+  if (pending.rotation) {
+    progress("wallet");
+    await core.keepRotationKeys(state.wallet, settings.owner, pending.rotation, pending.version, pending.passphrase);
+    pending.rotation = null;
+  }
+  schemas ||= await core.schemasOf(core.ASSETS);
+  const env = core.browserEnvironment({ assets: core.ASSETS, fetch: fetchImpl });
+  const mirror = settings && /^https:\/\//.test(settings.baseUrl || "") ? settings.baseUrl : null;
+  pending.committed = await core.directRotate({ repo, github: gh, env, schemas, plan: pending.plan, signers: pending.signing,
+                                                add: pending.current.did, next: pending.next, mirror, cache, origin: ORIGIN,
+                                                progress });
+  pending.signing = null;
+  pending.files = null;
+  return pending.committed;
+}
+
+// The third part: the new current key put in the wallet, locked with the
+// passphrase, as osheaf key push puts it; then everything wiped. If it
+// fails, the key stays in memory, to try again.
+export async function putNewKey({ pending, state, settings }) {
+  if (!pending.committed) throw new Error("the new version of the key log is not committed yet");
+  const put = await core.pushKey(state.wallet, settings.owner, pending.current, pending.committed.number, pending.passphrase);
+  forgetNewKey(pending);
+  return put;
+}
+
+export function forgetNewKey(pending) {
+  if (!pending) return;
+  if (pending.current && pending.current.seed) pending.current.seed.fill(0);
+  for (const k of pending.rotation || []) if (k.seed) k.seed.fill(0);
+  Object.assign(pending, { current: null, rotation: null, signing: null, files: null, passphrase: null });
 }
 
 // The signers of the archive: read from the head of its branch.

@@ -76,6 +76,34 @@ one computer only, in `osheaf`'s key store, sets up the wallet under
    `OWNER/K.key.enc`, the same commit message) and commits it with the
    contents API; the seed is wiped once it is locked. A key already there
    is left as it is.
+
+   Or, when the key is not at hand, *a new key made here* ("Create a new
+   key here"): the page makes a new current key and the next version of
+   the owner's key log, which adds it to the current keys (the others and
+   the threshold kept) and commits new rotation keys, as `osheaf owner
+   rotate --add DID` makes it, the same bytes; it is signed by the
+   rotation keys of the latest version that the person gives:
+   - as files (`rotation-OWNER-K.txt`, as `osheaf init --export` or
+     `osheaf owner rotate --export` wrote them, locked with the passphrase
+     or in clear, or a typed sheet): the new rotation keys are then given
+     back as files of the same names and text, locked with the passphrase,
+     one download each, and as the printable sheets of `--print`; the
+     version is committed only once the check of each file is typed back,
+     as `osheaf owner rotate --export` asks;
+   - or from the wallet, when it keeps the owner's rotation keys (the
+     security level `--keys github:OWNER/REPO`; offered only then): they
+     are opened with the passphrase, and the new ones are put there,
+     locked with it, before the version is committed, as `osheaf owner
+     rotate --keys` does.
+
+   The version is made on the head of the archive's branch, verified and
+   committed as one commit (with `opensheaf.json` and the indexes, as
+   `osheaf owner rotate` writes them); the new key is then put in the
+   wallet as above. If that fails, the key stays in the page's memory, to
+   put again. The keys are in memory only, never in the browser's
+   storage, and their seeds are wiped once used. The rotation keys pass
+   through the page's memory, as through `osheaf`'s on a computer: the
+   maximum security level keeps them offline, used by `osheaf` alone.
 3. *The passkey*: as `osheaf key enroll`, every key of the owner in the
    wallet is opened with the passphrase first; then the popup of
    unlock.opensheaf.org, in the mode `popup-enroll`, creates a passkey for

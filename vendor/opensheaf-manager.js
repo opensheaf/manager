@@ -1,4 +1,4 @@
-// opensheaf-js b6b2ebb2775cb334e7db9a44cdce1374eb7b5089: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 137350ccce805fdcd6d0cacd0cc3819a6208db64: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -14632,7 +14632,7 @@ var Key = class _Key {
       throw new KeyError("the seed of an Ed25519 key has 32 bytes");
     }
     const own2 = Uint8Array.from(seed);
-    const signing = await crypto.subtle.importKey("pkcs8", new Uint8Array([
+    const signing2 = await crypto.subtle.importKey("pkcs8", new Uint8Array([
       ...PKCS8_ED25519,
       ...own2
     ]), {
@@ -14640,15 +14640,15 @@ var Key = class _Key {
     }, true, [
       "sign"
     ]);
-    const jwk = await crypto.subtle.exportKey("jwk", signing);
+    const jwk = await crypto.subtle.exportKey("jwk", signing2);
     const publicKey = unbase64(jwk.x.replaceAll("-", "+").replaceAll("_", "/") + "=");
     const did = didKey(publicKey);
-    return new _Key(own2, signing, publicKey, did, await keyDigest(did));
+    return new _Key(own2, signing2, publicKey, did, await keyDigest(did));
   }
-  constructor(seed, signing, publicKey, did, digest) {
+  constructor(seed, signing2, publicKey, did, digest) {
     Object.assign(this, {
       seed,
-      signing,
+      signing: signing2,
       publicKey,
       did,
       digest,
@@ -14804,6 +14804,14 @@ var KINDS2 = [
   CURRENT,
   ROTATION
 ];
+function rotationFileName(owner, key) {
+  return `rotation-${owner.slice(0, 16)}-${key.id}.txt`;
+}
+async function rotationKeyText(key, owner, version, passphrase = null, cost = {}) {
+  return fileText([
+    ROTATION_FORMAT
+  ], key, owner, version, passphrase, cost);
+}
 async function fileText(head, key, owner, version, passphrase, cost) {
   const [encryption, data2] = await encryptSeed(key.seed, passphrase, cost);
   const lines2 = [
@@ -14819,6 +14827,21 @@ async function fileText(head, key, owner, version, passphrase, cost) {
 var SHEET_TITLE = "OpenSheaf rotation key";
 async function sheetCheck(seed) {
   return base32(await sha256(concat(utf8("opensheaf-rotation-key-check\n"), seed))).slice(0, 4).toUpperCase();
+}
+async function rotationKeySheet(key, owner, version) {
+  const groups = base32(key.seed).toUpperCase().match(/.{1,4}/g).join(" ");
+  return [
+    `${SHEET_TITLE} (${ROTATION_FORMAT})`,
+    "Keep this sheet offline, apart from the owner's devices and its other rotation keys:",
+    "with enough of them, whoever holds it can change the owner's keys.",
+    "",
+    `owner    ${owner}`,
+    `version  v${version}`,
+    `key      ${key.did}`,
+    `digest   ${key.digest}`,
+    `seed     ${groups}`,
+    `check    ${await sheetCheck(key.seed)}`
+  ].join("\n") + "\n";
 }
 var PASSKEY_RP = "unlock.opensheaf.org";
 var PASSKEY_INFO = utf8("opensheaf wallet passkey v1");
@@ -15041,6 +15064,11 @@ async function readKey(text3, passphrase = null, keks = null) {
     version: /^v[0-9]+$/.test(version) ? Number(version.slice(1)) : null
   };
 }
+async function readRotationKey(text3, passphrase = null) {
+  const found2 = await readKey(text3, passphrase);
+  if (found2.kind !== ROTATION) throw new KeyError(`${found2.key.did} is a ${found2.kind} key, not a rotation key`);
+  return found2;
+}
 
 // core/write.js
 function jsonText(value) {
@@ -15119,10 +15147,10 @@ async function genesisRecord(kind, { originator = null, keys = null, threshold =
   }
   return jsonBytes(rec);
 }
-function place(contentPath2) {
-  const k = contentPath2.indexOf("/");
-  const ver = k < 0 ? contentPath2 : contentPath2.slice(0, k);
-  const rest = k < 0 ? "" : contentPath2.slice(k + 1);
+function place(contentPath3) {
+  const k = contentPath3.indexOf("/");
+  const ver = k < 0 ? contentPath3 : contentPath3.slice(0, k);
+  const rest = k < 0 ? "" : contentPath3.slice(k + 1);
   return [
     /^[0-9]+$/.test(ver.slice(1)) ? Number(ver.slice(1)) : 0,
     rest
@@ -15200,6 +15228,45 @@ async function signatureFile(key, objectId2, version, inventory, signer, keyLog)
     keyLog,
     signature: base64(signature)
   });
+}
+async function writeKeyLog(storage, dir, log) {
+  const namaste = joinPath(dir, "0=ocfl_object_1.1");
+  if (await storage.kind(namaste) !== "file") await storage.write(namaste, utf8("ocfl_object_1.1\n"));
+  let held2 = 0;
+  const root = await storage.read(joinPath(dir, "inventory.json"));
+  if (root) held2 = Number(JSON.parse(new TextDecoder().decode(root)).head.slice(1));
+  for (const v of log.versions.slice(0, held2)) {
+    const bytes = await storage.read(joinPath(dir, `v${v.number}`, "inventory.json"));
+    if (!bytes || bytes.length !== v.inventory.length || bytes.some((b, k) => b !== v.inventory[k])) {
+      throw new StorageError(`${dir}: v${v.number} differs from that of the key log of ${log.owner}`);
+    }
+  }
+  for (const v of log.versions.slice(held2)) {
+    const inv = JSON.parse(new TextDecoder().decode(v.inventory));
+    const byDigest = /* @__PURE__ */ new Map();
+    for (const bytes of v.files.values()) byDigest.set(await sha512hex(bytes), bytes);
+    for (const [d, paths] of Object.entries(inv.manifest)) {
+      for (const cp of paths) {
+        if (cp.startsWith(`v${v.number}/`)) await storage.write(joinPath(dir, cp), byDigest.get(d));
+      }
+    }
+    await storage.write(joinPath(dir, `v${v.number}`, "inventory.json"), v.inventory);
+    await storage.write(joinPath(dir, `v${v.number}`, "inventory.json.sha512"), v.sidecar?.length ? v.sidecar : await sidecar(v.inventory));
+  }
+  for (const v of log.versions) {
+    for (const [name2, bytes] of v.witnesses || []) {
+      const path = joinPath(dir, WITNESSES, `v${v.number}`, name2);
+      if (!await storage.kind(path)) await storage.write(path, bytes, {
+        exclusive: true
+      });
+    }
+  }
+  if (log.versions.length > held2) {
+    const head = log.versions[log.versions.length - 1];
+    await storage.write(joinPath(dir, "inventory.json.tmp"), head.inventory);
+    await storage.rename(joinPath(dir, "inventory.json.tmp"), joinPath(dir, "inventory.json"));
+    await storage.write(joinPath(dir, "inventory.json.sha512"), head.sidecar?.length ? head.sidecar : await sidecar(head.inventory));
+  }
 }
 
 // core/folder.js
@@ -16331,14 +16398,14 @@ var GitHubStorage = class _GitHubStorage {
     };
   }
 };
-async function oneCommit(repo, github, run, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null, attempts = 3, prepare = null } = {}) {
+async function oneCommit(repo, github, run, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null, attempts = 3, prepare: prepare2 = null } = {}) {
   for (let k = 1; ; k++) {
     const storage = await GitHubStorage.open(repo, github, {
       branch,
       cache,
       mirror
     });
-    if (prepare) await prepare(storage);
+    if (prepare2) await prepare2(storage);
     const { message: message2, ...rest } = await run(storage);
     if (message2 === null || message2 === void 0) return {
       ...rest,
@@ -20559,7 +20626,7 @@ var Verification = class {
         }
       }
     }
-    let checked = 0;
+    let checked2 = 0;
     this.progress({
       phase: "digests",
       done: 0,
@@ -20591,7 +20658,7 @@ var Verification = class {
       }
       this.progress({
         phase: "digests",
-        done: ++checked,
+        done: ++checked2,
         total: files.length,
         current: cp
       });
@@ -21726,6 +21793,228 @@ async function verified(r, schemas2, digests) {
   throw new Problem("osheaf stopped with this message:\n\n```\n" + out.slice(-15).join("\n") + "\n```");
 }
 
+// core/keylogs.js
+var OwnerError = class extends Error {
+};
+var OBJ3 = "object.json";
+var KEYS2 = "keys.json";
+var KEYS_FORMAT2 = "opensheaf-keys/0.2";
+function keysFile({ keys = null, threshold = null, next = null, nextThreshold = null, extensions = null, exposed = null, ended = false, successor = null } = {}) {
+  const d = {
+    format: KEYS_FORMAT2
+  };
+  if (ended) {
+    if ([
+      keys,
+      threshold,
+      next,
+      nextThreshold
+    ].some((v) => v !== null && v !== void 0)) {
+      throw new OwnerError("an ending version has no keys, threshold, next or nextThreshold (section 6.3)");
+    }
+    d.ended = true;
+    if (successor !== null && successor !== void 0) d.successor = successor;
+  } else {
+    if (successor !== null && successor !== void 0) throw new OwnerError("only an ending version names a successor (section 6.3)");
+    Object.assign(d, {
+      keys: [
+        ...keys
+      ],
+      threshold,
+      next: [
+        ...next
+      ],
+      nextThreshold
+    });
+  }
+  if (extensions && Object.keys(extensions).length) d.extensions = extensions;
+  if (exposed && exposed.length) d.exposed = [
+    ...exposed
+  ];
+  return jsonBytes(d);
+}
+async function extendInventory(prev, id, number, files, created, message2 = null, user = null) {
+  const v = `v${number}`;
+  if (prev.head !== `v${number - 1}` || prev.id !== id) throw new OwnerError(`${v} must follow v${number - 1} of ${id}`);
+  const inv = JSON.parse(JSON.stringify(prev));
+  const content = inv.contentDirectory || "content";
+  inv.head = v;
+  const state = {};
+  for (const path of [
+    ...files.keys()
+  ].sort()) {
+    const d = await sha512hex(files.get(path));
+    if (!(d in inv.manifest)) inv.manifest[d] = [
+      `${v}/${content}/${path}`
+    ];
+    (state[d] ||= []).push(path);
+  }
+  const entry = {
+    created,
+    state
+  };
+  if (message2 !== null) entry.message = message2;
+  if (user !== null) entry.user = user;
+  inv.versions[v] = entry;
+  return orderedInventory(inv);
+}
+function keyOf(k) {
+  return typeof k === "string" ? k : k.did;
+}
+async function digestOf(k) {
+  if (typeof k !== "string") return k.digest;
+  if (k.startsWith("did:key:")) {
+    didKeyPublic(k);
+    return keyDigest(k);
+  }
+  if (!OWNER_NAME.test(k)) throw new OwnerError(`not a key, a did:key URI or the digest of a key: '${k}'`);
+  return k;
+}
+async function checked(log) {
+  log.checked = null;
+  return log.check();
+}
+async function prepare(log, signers2) {
+  const { errors } = await checked(log);
+  if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
+  if (log.ended) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
+  const side = log.side();
+  const prev = side[side.length - 1];
+  const rotation = new Set(prev.keys.next);
+  for (const key of signers2) {
+    if (!rotation.has(key.digest)) throw new OwnerError(`${key.did} is not a rotation key of v${prev.number} (section 6.1)`);
+  }
+  const need = prev.keys.nextThreshold, have = new Set(signers2.map((k) => k.did)).size;
+  if (have < need) throw new OwnerError(`v${prev.number} needs ${need} rotation keys to sign the next version, ${have} given`);
+  return prev;
+}
+async function append(log, version) {
+  log.versions.push(version);
+  const { errors } = await checked(log);
+  if (errors.length) {
+    log.versions.pop();
+    await checked(log);
+    throw new OwnerError("the new version would not be a version of the key log: " + errors.join("; "));
+  }
+  return version;
+}
+async function addVersion(log, keysBytes, signers2, { message: message2, user, created = null, files = null }) {
+  const prev = await prepare(log, signers2);
+  const problems = await keyRules(jsonOrNull(keysBytes, {
+    integers: true
+  }), log.side().map((v) => v.keys), log.owner);
+  if (problems.length) throw new OwnerError(problems.join("; "));
+  for (const path of (files || /* @__PURE__ */ new Map()).keys()) {
+    if (RESERVED.includes(path.split("/")[0])) throw new OwnerError(`${path}: a name reserved by section 4.1`);
+  }
+  const n = prev.number + 1;
+  const content = new Map([
+    [
+      GENESIS,
+      log.genesis
+    ],
+    [
+      OBJ3,
+      jcsBytes(ownerObject(log.owner, prev.digest))
+    ],
+    [
+      KEYS2,
+      keysBytes
+    ],
+    ...files || /* @__PURE__ */ new Map()
+  ]);
+  const inv = await extendInventory(JSON.parse(new TextDecoder().decode(prev.inventory)), log.id, n, content, created || utcNow(), message2, user);
+  const invBytes = inventoryFile(inv);
+  const digest = await sha512hex(invBytes);
+  const pin = log.pin(prev.number);
+  const witnesses = /* @__PURE__ */ new Map();
+  for (const key of signers2) {
+    witnesses.set(await fileName(key.did), await signatureFile(key, log.id, `v${n}`, digest, log.owner, pin));
+  }
+  return append(log, await Version.make(n, content, invBytes, await sidecar(invBytes), witnesses));
+}
+async function rotate(log, signers2, { nextKeys, nextThreshold, add: add2 = [], retire = [], exposed = [], threshold = null, extensions = void 0, message: message2 = "Keys changed", user, created = null }) {
+  await checked(log);
+  const prev = log.latest();
+  if (!prev) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
+  const current = prev.keys.keys;
+  for (const did of retire) if (!current.includes(did)) throw new OwnerError(`${did} is not a current key of ${log.owner}`);
+  const keys = current.filter((k) => !retire.includes(k) && !exposed.includes(k));
+  for (const k of add2) if (!keys.includes(keyOf(k))) keys.push(keyOf(k));
+  if (extensions === void 0) extensions = log.extensions();
+  const next = [];
+  for (const k of nextKeys) next.push(await digestOf(k));
+  const data2 = keysFile({
+    keys,
+    threshold: threshold || prev.keys.threshold,
+    next,
+    nextThreshold,
+    extensions,
+    exposed: exposed.length ? exposed : null
+  });
+  return addVersion(log, data2, signers2, {
+    message: message2,
+    user,
+    created
+  });
+}
+function contentPath2(cp, inv, n) {
+  const cd = isObject(inv) && typeof inv.contentDirectory === "string" ? inv.contentDirectory : "content";
+  const safe = (p) => typeof p === "string" && p !== "" && !p.startsWith("/") && !p.includes("\\") && p.split("/").every((x) => ![
+    "",
+    ".",
+    ".."
+  ].includes(x));
+  if (!safe(cp) || !safe(cd) || cd.includes("/")) return false;
+  const parts = cp.split("/");
+  return parts.length >= 3 && /^v[1-9][0-9]*$/.test(parts[0]) && parts[1] === cd && Number(parts[0].slice(1)) <= n;
+}
+async function loadKeyLog(storage, dir, where2 = dir) {
+  const problems = [], versions2 = [];
+  const root = await storage.read(joinPath(dir, "inventory.json"));
+  const rootInv = jsonOrNull(root);
+  const head = typeof rootInv?.head === "string" && /^v[0-9]+$/.test(rootInv.head) ? Number(rootInv.head.slice(1)) : NaN;
+  if (!root || !Number.isInteger(head)) throw new OwnerError(`${where2}: not an OCFL object with an inventory`);
+  for (let n = 1; n <= head; n++) {
+    const vdir = joinPath(dir, `v${n}`);
+    const invBytes = await storage.read(joinPath(vdir, "inventory.json"));
+    const entry = jsonOrNull(invBytes);
+    if (!invBytes || !isObject(entry?.manifest) || !isObject(entry?.versions?.[`v${n}`]?.state)) {
+      problems.push(`v${n}: no readable inventory in the version folder (section 4.1)`);
+      break;
+    }
+    const sc = await storage.read(joinPath(vdir, "inventory.json.sha512")) || new Uint8Array();
+    if (sidecarDigest(sc) !== await sha512hex(invBytes)) problems.push(`v${n}: the checksum file does not state the digest of the inventory`);
+    const files = /* @__PURE__ */ new Map();
+    for (const [d, paths] of Object.entries(entry.versions[`v${n}`].state)) {
+      if (!Array.isArray(paths) || !paths.length) continue;
+      let bytes = new Uint8Array();
+      const cp = entry.manifest[d]?.[0];
+      if (!contentPath2(cp, entry, n)) {
+        problems.push(`v${n}: a content path out of the object: '${cp}'`);
+        problems.push(`v${n}: the content of ${paths[0]} is missing`);
+      } else {
+        bytes = await storage.read(joinPath(dir, cp)) ?? (problems.push(`v${n}: the content of ${paths[0]} is missing`), new Uint8Array());
+      }
+      if (await sha512hex(bytes) !== d) problems.push(`v${n}: ${paths[0]} does not have the digest its inventory states`);
+      for (const p of paths) files.set(p, bytes);
+    }
+    const witnesses = /* @__PURE__ */ new Map();
+    const wdir = joinPath(dir, WITNESSES, `v${n}`);
+    for (const { name: name2, kind } of await storage.list(wdir) || []) {
+      if (kind === "file") witnesses.set(name2, await storage.read(joinPath(wdir, name2)));
+    }
+    versions2.push(await Version.make(n, files, invBytes, sc, witnesses));
+  }
+  if (!versions2.length || !versions2[0].files.has(GENESIS)) throw new OwnerError(`${where2}: no genesis record in the first version`);
+  if (versions2[versions2.length - 1].number === head && !sameBytes(root, versions2[versions2.length - 1].inventory)) {
+    problems.push("the root inventory differs from that of the head version");
+  }
+  const log = await KeyLog.of(versions2[0].files.get(GENESIS), versions2, problems);
+  if (rootInv.id !== log.id) problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
+  return log;
+}
+
 // core/passkey.js
 var UNLOCK_PAGE = `https://${PASSKEY_RP}/`;
 var UnlockFailed = class extends Error {
@@ -21938,7 +22227,10 @@ async function signers(storage, env) {
     owner,
     dids: [],
     threshold: 0,
-    versions: {}
+    versions: {},
+    number: null,
+    next: [],
+    nextThreshold: 0
   };
   const versions2 = {};
   for (const did of latest.keys.keys) {
@@ -21950,7 +22242,12 @@ async function signers(storage, env) {
       ...latest.keys.keys
     ],
     threshold: latest.keys.threshold,
-    versions: versions2
+    versions: versions2,
+    number: latest.number,
+    next: [
+      ...latest.keys.next || []
+    ],
+    nextThreshold: latest.keys.nextThreshold ?? 0
   };
 }
 async function walletLocks(wallet, owner, dids) {
@@ -21990,7 +22287,7 @@ var PKCS8_ED255192 = [
   32
 ];
 async function sealedKey(key) {
-  const signing = await crypto.subtle.importKey("pkcs8", new Uint8Array([
+  const signing2 = await crypto.subtle.importKey("pkcs8", new Uint8Array([
     ...PKCS8_ED255192,
     ...key.seed
   ]), {
@@ -21999,7 +22296,7 @@ async function sealedKey(key) {
     "sign"
   ]);
   key.seed.fill(0);
-  return new Key(null, signing, key.publicKey, key.did, key.digest);
+  return new Key(null, signing2, key.publicKey, key.did, key.digest);
 }
 async function openLocks(locks, owner, cred, prf) {
   const kek = await passkeyKek(prf);
@@ -22181,6 +22478,194 @@ async function enrollPasskey(wallet, plan, passphrase, cred, prf, { cost = {}, p
   } finally {
     kek.fill(0);
   }
+}
+function walletRotationKeys(entries, next) {
+  return entries.filter((e) => e.fields.kind === ROTATION && next.includes(e.fields.digest)).map((e) => e.fields.digest);
+}
+async function signing(rk, { owner, number, next }, where2) {
+  if (rk.owner !== null && rk.owner !== owner || rk.kind !== ROTATION || !next.includes(rk.key.digest)) {
+    rk.key.seed?.fill(0);
+    throw new KeyError(rk.owner !== null && rk.owner !== owner ? `${where2} is a rotation key of ${short(rk.owner)}, not of ${short(owner)}` : rk.kind !== ROTATION ? `${where2} is a ${rk.kind} key, not a rotation key` : `${where2}: ${rk.key.did} is not a rotation key that v${number} of the key log commits (used up already, or of another version)`);
+  }
+  return sealedKey(rk.key);
+}
+function enough(keys, { number, nextThreshold }, where2) {
+  if (keys.length < nextThreshold) {
+    throw new KeyError(`${where2} ${plural(keys.length, "rotation key")} of v${number} of the key log, and ${nextThreshold} sign the next version`);
+  }
+  return keys;
+}
+async function rotationKeysFromTexts(files, plan, passphrase = null) {
+  const out = [];
+  for (const { name: name2, text: text3 } of files) {
+    let rk;
+    try {
+      try {
+        rk = await readRotationKey(text3);
+      } catch (error) {
+        if (!(error instanceof PassphraseNeeded)) throw error;
+        if (!passphrase) throw new KeyError("it is locked with a passphrase: give the passphrase");
+        rk = await readRotationKey(text3, passphrase);
+      }
+    } catch (error) {
+      if (error instanceof KeyError) throw new KeyError(`${name2}: ${error.message}`);
+      throw error;
+    }
+    if (out.some((k) => k.did === rk.key.did)) {
+      rk.key.seed?.fill(0);
+      continue;
+    }
+    out.push(await signing(rk, plan, name2));
+  }
+  return enough(out, plan, "given:");
+}
+async function rotationKeysFromWallet(wallet, plan, passphrase) {
+  const out = [];
+  for (const digest of plan.next) {
+    const kid = digest.slice(0, 16);
+    const text3 = await wallet.read(plan.owner, kid, ROTATION);
+    if (!text3) continue;
+    let rk;
+    try {
+      rk = await readKey(text3, passphrase);
+    } catch (error) {
+      if (error instanceof KeyError) throw new WalletError(`${wallet.name} ${plan.owner}/${kid}: ${error.message}`);
+      throw error;
+    }
+    out.push(await signing(rk, plan, `${wallet.name} ${plan.owner}/${kid}`));
+    if (out.length === plan.nextThreshold) break;
+  }
+  return enough(out, plan, `the wallet ${wallet.name} holds`);
+}
+async function newKeys(plan) {
+  const rotation = [];
+  for (let k = 0; k < plan.next.length; k++) rotation.push(await newKey());
+  return {
+    current: await newKey(),
+    rotation
+  };
+}
+async function rotationFiles(keys, owner, version, passphrase, { cost = {} } = {}) {
+  const files = [];
+  for (const key of keys) {
+    const name2 = rotationFileName(owner, key);
+    const text3 = await rotationKeyText(key, owner, version, passphrase, cost);
+    if ((await readRotationKey(text3, passphrase)).key.did !== key.did) throw new KeyError(`${name2} does not read back`);
+    files.push({
+      name: name2,
+      did: key.did,
+      digest: key.digest,
+      text: text3,
+      check: await sheetCheck(key.seed),
+      sheet: await rotationKeySheet(key, owner, version)
+    });
+  }
+  for (const key of keys) key.seed.fill(0);
+  return files;
+}
+function checksConfirmed(files, typed) {
+  return files.every((f, k) => String(typed[k] ?? "").trim().toUpperCase() === f.check);
+}
+async function keepRotationKeys(wallet, owner, keys, version, passphrase, { cost = {} } = {}) {
+  try {
+    for (const key of keys) await putKey(wallet, owner, key, ROTATION, version, passphrase, [], cost);
+  } catch (error) {
+    if (error instanceof WalletError || error instanceof KeyError) {
+      throw new WalletError(`${error.message}: nothing was written to the key log`);
+    }
+    throw error;
+  }
+  for (const key of keys) key.seed.fill(0);
+}
+var NEW_KEY_MESSAGE = "Keys changed";
+async function rotateAdding(storage, env, plan, signers2, { add: add2, next, created = null }) {
+  const f = await ArchiveFolder.open(storage, env);
+  const owner = f.archive.owner;
+  const dir = await f.dirOf(objectId(owner, owner));
+  if (owner !== plan.owner || await storage.kind(`${dir}/inventory.json`) !== "file") {
+    throw new OwnerError(`the key log of ${short(plan.owner)} is not in the storage root`);
+  }
+  const log = await loadKeyLog(storage, dir);
+  const prev = log.latest();
+  if (!prev) throw new OwnerError(`the owner ${short(owner)} has ended (section 6.3): its key log takes no new version`);
+  if (prev.number !== plan.number) {
+    throw new OwnerError(`the key log of ${short(owner)} changed meanwhile (v${prev.number}, not v${plan.number}): nothing was written; start again`);
+  }
+  const v = await rotate(log, signers2, {
+    nextKeys: next,
+    nextThreshold: Math.min(prev.keys.nextThreshold, next.length),
+    add: [
+      add2
+    ],
+    message: NEW_KEY_MESSAGE,
+    user: f.depositor(),
+    created: created || env.now()
+  });
+  await writeKeyLog(storage, dir, log);
+  f.changed();
+  await writeDiscovery(f);
+  return {
+    owner,
+    number: v.number,
+    dids: [
+      ...v.keys.keys
+    ],
+    threshold: v.keys.threshold
+  };
+}
+async function directRotate({ repo, github, env, schemas: schemas2, plan, signers: signers2, add: add2, next, created = null, mirror = null, cache = /* @__PURE__ */ new Map(), origin = "the OpenSheaf manager", progress = () => {
+}, attempts = 3 }) {
+  created ||= env.now();
+  const done = await oneCommit(repo, github, async (storage) => {
+    progress("carrying out");
+    let v;
+    try {
+      v = await rotateAdding(storage, env, plan, signers2, {
+        add: add2,
+        next,
+        created
+      });
+    } catch (error) {
+      if (error instanceof Stop) throw new OwnerError(error.message);
+      throw error;
+    }
+    if (schemas2) {
+      const report = await verifyFolder(storage, {
+        schemas: schemas2,
+        digests: false,
+        fetch: env.fetch,
+        fetchJson: env.fetchJson
+      });
+      if (report.counts().error) {
+        const errors = report.findings.filter((x) => x.level === "error").map((x) => `${x.place}: ${x.message}`);
+        throw new OwnerError(`the archive would not verify: ${errors.slice(0, 5).join("; ")}`);
+      }
+    }
+    progress("committing");
+    const message2 = `Keys changed: v${v.number} of the key log of ${short(v.owner)}, a new current key ${short(add2)} (${origin})
+
+` + v.dids.map((d) => `current key ${d}
+`).join("");
+    return {
+      message: message2,
+      version: v
+    };
+  }, {
+    mirror,
+    cache,
+    attempts,
+    prepare: async (storage) => {
+      progress("reading");
+      await storage.prefetch({
+        skip: (p, size) => !prefetched(p, size),
+        concurrency: 12
+      });
+    }
+  });
+  return {
+    ...done.version,
+    commit: done.commit
+  };
 }
 function prefetched(path, size = null) {
   return size !== null && size < 4096 || path === "osheaf.json" || path === "opensheaf.json" || path.startsWith("collections/") || path.startsWith("templates/") || path.startsWith("ocfl/") && /\.(json|sha512)$/.test(path) || path.startsWith("ocfl/") && !path.includes("/content/");
@@ -22420,6 +22905,7 @@ document.addEventListener('click', function (e) {
 export {
   ASSETS,
   ArchiveFolder,
+  CURRENT,
   CommitConflict,
   GITHUB_API,
   GitHub,
@@ -22428,14 +22914,17 @@ export {
   GitHubWallet,
   Key,
   KeyError,
+  NEW_KEY_MESSAGE,
   NEW_PAPER,
   NEW_VERSION,
   OPERATIONS,
+  OwnerError,
   PASSKEY_RP,
   POPUP,
   POPUP_ENROLL,
   POPUP_MESSAGES,
   Problem,
+  ROTATION,
   Stop,
   UNLOCK_ORIGIN,
   UnlockFailed,
@@ -22445,13 +22934,18 @@ export {
   carryOut,
   checkPassphrase,
   checkWallet,
+  checksConfirmed,
   confirmationCode,
+  directRotate,
   directWrite,
   enrollPasskey,
   enrollPlan,
   gitBlobSha,
+  keepRotationKeys,
   keyFromText,
   keyToPush,
+  newKey,
+  newKeys,
   oneCommit,
   openLocks,
   openPopupAnswer,
@@ -22462,12 +22956,18 @@ export {
   prefetched,
   pushKey,
   readKey,
+  rotateAdding,
+  rotationFiles,
+  rotationKeysFromTexts,
+  rotationKeysFromWallet,
   sameCode,
   schemasOf,
   sealedKey,
+  sheetCheck,
   signers,
   walletEntries,
-  walletLocks
+  walletLocks,
+  walletRotationKeys
 };
 /*!
  * hash-wasm (https://www.npmjs.com/package/hash-wasm)

@@ -759,11 +759,12 @@ function signingPanel() {
 // push), a passkey enrolled (as osheaf key enroll) in the popup of
 // unlock.opensheaf.org. The panel is kept across redrawings of the archive,
 // so that what is typed in it stays; secrets typed are cleared once used.
-const setup = { repo: null, node: null, state: null, busy: false };
+const setup = { repo: null, node: null, state: null, busy: false, keyMode: "file", source: null, pending: null };
 
 function setupPanel() {
   if (setup.repo !== state.repo || !setup.node) {
-    Object.assign(setup, { repo: state.repo, state: null, busy: false });
+    direct.forgetNewKey(setup.pending);
+    Object.assign(setup, { repo: state.repo, state: null, busy: false, keyMode: "file", source: null, pending: null });
     setup.node = el("details", { class: "how setup" });
     setup.node.addEventListener("toggle", () => { if (setup.node.open && !setup.body) renderSetup(); });
     setup.body = null;
@@ -830,10 +831,7 @@ function renderSetup() {
     steps.push(el("p", { class: "small" }, `${st.wallet.name}: holds ${st.there.length} of the ${signers.dids.length} current ` +
       `key(s) of the owner`, st.there.length ? [" (", st.there.map((d, i) => [i ? ", " : "", short(d)]), ")"] : "",
       `; ${st.enrolled.length} open(s) with a passkey.`));
-    steps.push(el("h4", {}, "2. The current key"));
-    if (!st.missing.length) {
-      steps.push(el("p", {}, "✓ The owner's current keys are in the wallet."));
-    } else {
+    const existingKey = () => {
       const file = el("input", { type: "file", id: "setup-key-file", accept: ".key,.txt,text/plain", "aria-label": "Key file" });
       const pasted = el("textarea", { id: "setup-key-text", rows: 2, spellcheck: "false", autocomplete: "off",
                                       placeholder: "or paste the key here", "aria-label": "Key" });
@@ -868,7 +866,7 @@ function renderSetup() {
           renderSetup();
         }
       };
-      steps.push(
+      return [
         el("p", {}, "The key as ", el("code", {}, "osheaf"), " keeps it on your computer: the file ",
           el("code", {}, `~/.config/opensheaf/keys/${s.owner.slice(0, 8)}.../K.key`), " (one line), or, if it is in your " +
           "system's credential store, the text of ", el("code", {}, "osheaf key export --stdout"), ". It must be one of the " +
@@ -877,7 +875,29 @@ function renderSetup() {
         el("p", { class: "small" }, st.confirm ? "A new passphrase for the wallet, twice (keep it: osheaf asks it too)."
           : "The passphrase of the keys already in the wallet (checked against them)."),
         el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); put(); } },
-          pass, again, el("button", { type: "submit", class: "primary" }, "Put the key in the wallet")));
+          pass, again, el("button", { type: "submit", class: "primary" }, "Put the key in the wallet"))];
+    };
+    steps.push(el("h4", {}, "2. The current key"));
+    const enough = st.there.length >= signers.threshold;
+    if (setup.pending) {
+      steps.push(newKeyPending(st));
+    } else if (!st.missing.length) {
+      steps.push(el("p", {}, "✓ The owner's current keys are in the wallet."));
+    } else {
+      const choose = (m) => { setup.keyMode = m; renderSetup(); };
+      const option = (value, text) => el("label", { class: setup.keyMode === value ? "on" : "" },
+        el("input", { type: "radio", name: "setup-key-mode", value, checked: setup.keyMode === value, onchange: () => choose(value) }), text);
+      const body = [
+        el("div", { class: "modes", role: "radiogroup", "aria-label": "The current key" },
+          option("file", "Use an existing key file"), option("new", "Create a new key here")),
+        setup.keyMode === "new" ? newKeyForm(st) : existingKey()];
+      if (enough) {
+        steps.push(el("p", {}, `✓ The wallet holds ${st.there.length} of the owner's current keys, enough to sign (the key log ` +
+          `needs ${signers.threshold}).`), el("details", { class: "how small", open: setup.addOpen || undefined,
+          ontoggle: (ev) => { setup.addOpen = ev.target.open; } }, el("summary", {}, "Add another current key"), body));
+      } else {
+        steps.push(...body);
+      }
     }
     steps.push(el("h4", {}, "3. Your passkey"));
     const plan = st.plans.enrolled;
@@ -920,6 +940,193 @@ function renderSetup() {
   setup.body = el("div", { class: "setup-body" }, steps);
   setup.node.replaceChildren(setup.node.firstChild, setup.body);
   if (setup.busy) busy(true);
+}
+
+// Step 2, the other way: a new current key made in this page, added to the
+// owner's key log by a new version signed by the owner's rotation keys (the
+// files osheaf exported, or the wallet's), as osheaf owner rotate --add
+// does; committed to the archive, then put in the wallet (direct.js). With
+// files, the new rotation keys are offered as files and sheets first, and
+// nothing is committed until their checks are typed back. Secrets typed are
+// cleared once read; the keys are in this page's memory only.
+function newKeyForm(st) {
+  const s = state.settings, signers = state.signers;
+  const fromWallet = st.rotationInWallet;
+  const source = fromWallet ? (setup.source || "wallet") : "files";
+  const need = signers.nextThreshold, of = (signers.next || []).length;
+  const files = el("input", { type: "file", id: "setup-rotation-files", multiple: true, accept: ".txt,text/plain",
+                              "aria-label": "Rotation-key files" });
+  const filesPass = el("input", { type: "password", id: "setup-rotation-pass", autocomplete: "off",
+                                  "aria-label": "Passphrase of the rotation-key files",
+                                  placeholder: "passphrase of the files, if another" });
+  const pass = el("input", { type: "password", id: "setup-new-pass", autocomplete: st.confirm ? "new-password" : "current-password",
+                             "aria-label": "Passphrase", placeholder: "passphrase" });
+  const again = st.confirm ? el("input", { type: "password", id: "setup-new-pass-again", autocomplete: "new-password",
+                                          "aria-label": "Passphrase again", placeholder: "passphrase again" }) : null;
+  const pick = (v) => { setup.source = v; renderSetup(); };
+  const sourceOption = (value, text) => el("label", {}, el("input", { type: "radio", name: "setup-rotation-source", value,
+    checked: source === value, onchange: () => pick(value) }), " ", text);
+  const busy = (b) => { setup.busy = b; setup.node.querySelectorAll("button").forEach((x) => { x.disabled = b; }); };
+  const make = async () => {
+    const given = [];
+    if (source === "files") {
+      for (const f of (files.files ? [...files.files] : [])) given.push({ name: f.name, text: await f.text() });
+      if (given.length < need) { message("bad", `Choose ${need} of the rotation-key files of v${signers.number} of the key log.`); return; }
+    }
+    if (!pass.value) { message("bad", "Type the passphrase that locks the keys in the wallet."); return; }
+    if (again && pass.value !== again.value) { message("bad", "The two passphrases differ."); return; }
+    const passphrase = pass.value, filesPassphrase = filesPass.value;
+    pass.value = ""; filesPass.value = ""; if (again) again.value = "";
+    try { files.value = ""; } catch (_) { /* some browsers */ }
+    busy(true);
+    message("info", source === "wallet" ? "Opening the rotation keys of the wallet and making the new keys ..."
+      : "Reading the rotation keys and making the new keys ...");
+    try {
+      setup.pending = await direct.prepareNewKey({ state: st, settings: s, signers, source, files: given, passphrase,
+                                                   filesPassphrase });
+      given.length = 0;
+      if (source === "wallet") {
+        await finishNewKey(st, []);
+        return;
+      }
+      message("info", "Save the new rotation keys, then type their checks to commit the new version of the key log.");
+    } catch (e) {
+      direct.forgetNewKey(setup.pending);
+      setup.pending = null;
+      message("bad", `No key was made: ${e.message}.`);
+    } finally {
+      given.length = 0;
+      busy(false);
+      renderSetup();
+    }
+  };
+  return [
+    el("p", {}, "The page makes a new current key, adds it to the owner's key log by a new version (v" + (signers.number + 1) +
+      "), as ", el("code", {}, "osheaf owner rotate --add"), " does, commits that version to the archive and puts the key in the " +
+      "wallet. The owner's other current keys stay. The new version is signed by " + need + " of the " + of + " rotation keys of v" +
+      signers.number + ", and commits " + of + " new ones."),
+    el("p", { class: "small muted" }, "The rotation keys pass through this page's memory, as they would pass through osheaf's on " +
+      "your computer. The maximum security level keeps them offline, used by osheaf alone: prefer the key file, or osheaf key new " +
+      "and osheaf owner rotate --add on your computer, when you can."),
+    fromWallet ? el("p", { class: "controls" }, sourceOption("wallet", `The rotation keys kept in ${st.wallet.name}`),
+      sourceOption("files", "Rotation-key files")) : null,
+    source === "files" ? [
+      el("p", { class: "small" }, `${need} of the files `, el("code", {}, `rotation-${s.owner.slice(0, 16)}-K.txt`),
+        ` of v${signers.number} of the key log, as osheaf exported them (or typed sheets). The new rotation keys are then given ` +
+        "to you the same way, locked with the passphrase, and the version is committed once you have saved them."),
+      el("div", { class: "controls" }, files, filesPass)]
+      : el("p", { class: "small" }, "The rotation keys are opened with the passphrase; the new ones are put in the wallet, " +
+        "locked with it, before the version is committed (as osheaf owner rotate --keys)."),
+    el("p", { class: "small" }, st.confirm ? "A new passphrase for the wallet, twice (keep it: osheaf asks it too)."
+      : "The passphrase of the keys already in the wallet (checked against them)."),
+    el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); make(); } },
+      pass, again, el("button", { type: "submit", class: "primary" }, "Make the new key")),
+  ];
+}
+
+// A file offered for download, from text in memory.
+function download(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  const a = el("a", { href: url, download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// The sheets of the rotation keys printed, as osheaf --print prints them:
+// only they are shown while printing.
+function printSheets(files) {
+  const box = el("div", { class: "print-sheets" }, files.map((f) => el("pre", {}, f.sheet)));
+  document.body.append(box);
+  document.body.classList.add("printing-sheets");
+  const done = () => { box.remove(); document.body.classList.remove("printing-sheets"); window.removeEventListener("afterprint", done); };
+  window.addEventListener("afterprint", done);
+  window.print();
+  setTimeout(done, 1000);
+}
+
+// A new key made: its rotation keys to save and confirm, or, once
+// committed, the key to put in the wallet again if that failed.
+function newKeyPending(st) {
+  const p = setup.pending, signers = state.signers;
+  const cancel = el("button", { type: "button", onclick: () => {
+    direct.forgetNewKey(p);
+    setup.pending = null;
+    message("info", "Cancelled: nothing was written to the key log, and the new keys are forgotten (delete any file saved).");
+    renderSetup();
+  } }, "Cancel");
+  if (p.committed) {
+    return el("div", {}, el("p", { class: "bad" }, `v${p.committed.number} of the key log is committed, with the new current key `,
+        short(p.current ? p.current.did : ""), `, but it is not in the wallet yet. Keep this page open, and try again:`),
+      el("div", { class: "controls" }, el("button", { class: "primary", onclick: () => finishNewKey(st, []) }, "Put the key in the wallet")));
+  }
+  if (p.files) {
+    const checks = p.files.map((f) => el("input", { class: "check", size: 6, autocomplete: "off", spellcheck: "false",
+                                                    "aria-label": `Check of ${f.name}`, placeholder: "check" }));
+    return el("div", {},
+      el("p", {}, el("strong", {}, `Save the ${p.files.length} new rotation keys`), ` of v${p.version} of the key log, before ` +
+        "anything is committed: each file apart from your computer and from the others (or print the sheets), as " +
+        "osheaf owner rotate --export asks. They are locked with the passphrase. " +
+        `${signers.nextThreshold} of them sign the next version of the key log.`),
+      el("ul", { class: "rotation-files" }, p.files.map((f, k) => el("li", {},
+        el("a", { href: "#", onclick: (ev) => { ev.preventDefault(); download(f.name, f.text); } }, f.name),
+        "  check ", el("code", {}, f.check), "  ", checks[k]))),
+      el("p", { class: "controls" }, el("button", { type: "button", onclick: () => p.files.forEach((f) => download(f.name, f.text)) },
+        "Save all the files"), el("button", { type: "button", onclick: () => printSheets(p.files) }, "Print the sheets")),
+      el("p", { class: "small" }, "Then type the check of each file next to it, to confirm that they are put away; the new version " +
+        "of the key log is committed only then."),
+      el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); finishNewKey(st, checks.map((c) => c.value)); } },
+        el("button", { type: "submit", class: "primary" }, "Confirm and commit"), cancel));
+  }
+  return el("div", {}, el("p", { class: "bad" }, `v${p.version} of the key log is not committed yet` +
+      (p.source === "wallet" ? " (the new rotation keys are in the wallet already)" : "") + ". Try again, or cancel:"),
+    el("div", { class: "controls" }, el("button", { class: "primary", onclick: () => finishNewKey(st, []) }, "Commit the new version"),
+      cancel));
+}
+
+// The version committed, then the key put in the wallet; the archive and
+// the setup read again.
+async function finishNewKey(st, typed) {
+  const p = setup.pending, s = state.settings, repo = state.repo;
+  const say = { wallet: "Putting the new rotation keys in the wallet ...", reading: "Reading the archive ...",
+                "carrying out": "Making the new version of the key log ...", committing: "Signed; committing to the repository ..." };
+  setup.busy = true;
+  setup.node.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+  try {
+    if (!p.committed) {
+      try {
+        await direct.commitNewKey({ gh: ghCore(), repo, pending: p, state: st, settings: s, cache: state.cache, typed,
+                                    progress: (x) => message("info", say[x] || x) });
+      } catch (e) {
+        message("bad", `Nothing was committed: ${e.message}.`);
+        return;
+      }
+      watchSite(repo, p.committed.commit.sha);
+    }
+    const number = p.committed.number, did = p.current.did;
+    message("info", "Committed; putting the new current key in the wallet ...");
+    try {
+      await direct.putNewKey({ pending: p, state: st, settings: s });
+    } catch (e) {
+      message("bad", `v${number} of the key log is committed, but the new current key could not be put in the wallet: ` +
+        `${e.message}. It is kept in this page: keep it open, and click "Put the key in the wallet" to try again.`);
+      return;
+    }
+    setup.pending = null;
+    message("ok", `v${number} of the key log adds the new current key ${did.slice(8, 20)}..., committed to the archive; the key ` +
+      `is in ${st.wallet.name}, locked with the passphrase. Now enroll your passkey (step 3).`);
+    try {
+      state.signers = await direct.signersOf({ gh: ghCore(), repo, cache: state.cache, settings: s });
+      setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: repo, settings: s, wallet: st.wallet.name,
+                                              signers: state.signers });
+      const a = await readArchive(await token(), repo, { ref: p.committed.commit.sha });
+      refreshArchive(repo, a, p.committed.commit.sha);
+    } catch (_) { /* read again when the page is */ }
+  } finally {
+    setup.busy = false;
+    if (setup.pending === p || !setup.pending) renderSetup();
+  }
 }
 
 // The code that the popup shows, typed here: the page opens the popup's
