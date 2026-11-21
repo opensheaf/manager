@@ -204,7 +204,7 @@ details.block > summary h3 { margin: 0; }
 }
 
 /* messages: a pane floating at the top right */
-.toast { position: fixed; top: 1rem; right: 1rem; z-index: 30; width: min(26rem, calc(100vw - 2rem));
+.toast { position: fixed; top: 3.2rem; right: 1rem; z-index: 30; width: min(26rem, calc(100vw - 2rem));
   max-height: 60vh; overflow: auto; }
 .toast .notice { margin: 0; padding-right: 2.4em; position: relative; border: 1px solid var(--os-rule);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); animation: toast-in 0.18s ease-out; }
@@ -253,3 +253,16 @@ body.with-dock footer.site { padding-bottom: 4rem; }
 .dock-panel .result { margin: 0; padding: 0.3em 0; font-size: 0.85rem; }
 .dock-panel .result p { margin: 0.2em 0; }
 @media print { .toast, .dock { display: none; } }
+
+/* The theme button of the OpenSheaf site (theme.js): a half-lit circle at
+   the top right of the window, switching between light and dark. */
+.theme-control { position: fixed; top: 0.7rem; right: 0.8rem; z-index: 40; margin: 0; }
+.theme-control .theme-toggle { display: grid; place-items: center; width: 30px; height: 30px; padding: 0;
+    border: 0; border-radius: 50%; background: var(--os-paper); color: var(--os-faint); cursor: pointer; }
+.theme-control .theme-toggle::before { content: ""; width: 13px; height: 13px;
+    border: 1.5px solid currentColor; border-radius: 50%;
+    background: linear-gradient(90deg, currentColor 50%, transparent 50%); }
+.theme-control .theme-toggle:hover { color: var(--os-ink); }
+.theme-control .theme-toggle:focus-visible { outline: 1.5px solid var(--os-ink); outline-offset: 2px; }
+@media screen and (max-width: 60rem) { header.site { padding-right: 3rem; } }
+@media print { .theme-control { display: none !important; } }
