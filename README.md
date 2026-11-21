@@ -139,8 +139,11 @@ which the page reads.
 
 ## The owner and its keys
 
-Every version of an archive is signed by its owner (section 6 of the
-specification): its current keys sign, and its rotation keys, two of
+Every version of a line is signed by the line's owner (section 6 of the
+specification); an archive hosts owners, and the `owner` of its
+`osheaf.json` is the default owner of its tools, which signs the papers
+and collections deposited there unless another is chosen (the page shows
+it as "Default owner"). Its current keys sign, and its rotation keys, two of
 three, sign any change of the current keys. The archive's workflows sign
 with a current key of their own, kept in the repository secret
 `OPENSHEAF_SIGNING_KEY`.
@@ -150,7 +153,9 @@ with a current key of their own, kept in the repository secret
 and not set up yet opens on "Create the owner and set up the archive
 here": the archive's fields (those of the template's setup: name,
 purpose, description, curator, affiliation, contact, base URL, empty for
-the address the setup finds), the owner's keeper (optional: an ORCID iD
+the address the setup finds), a label for the owner in the archive (optional: shown instead
+of its name, written in the discovery document as `osheaf` keeps labels;
+the archive's, not signed by the owner), the owner's keeper (optional: an ORCID iD
 or `https://DOMAIN/`), the key wallet (a private repository, checked as
 above), the security level of the rotation keys, whether the archive's
 workflow signs too (ticked by default), and a passphrase, twice. The page
@@ -302,7 +307,13 @@ wallet: give it the wallet's repository too (Contents: read).
   folder of a line in the storage root (owner-name or hashed layout),
   members of collections, `sheaf:` URIs in canonical form (no owner part
   for the originator's line, read from its genesis record; the full form
-  for a line whose originator is not known) and links to the Explorer.
+  for a line whose originator is not known) and links to the Explorer;
+  the short forms the page shows (section 12.2): an owner by its label in
+  the archive if it has one, names and owner names by their shortest
+  prefix unique among the lines the archive lists (objects and
+  tombstones), never fewer than 8 characters, computed at each reading;
+  a line of another archive by the first 16 characters of its name. Full
+  forms stay in the titles of links, in links, and in what is written.
 - `github.js`: the GitHub API: reading files, and writing a request as one
   commit (blobs, a tree, a commit, the branch moved; made again on top if
   the branch moved meanwhile).

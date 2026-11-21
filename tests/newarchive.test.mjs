@@ -59,7 +59,10 @@ test("a new archive set up from the page: the owner made here, rotation keys off
   await assert.rejects(prepareOwner({ gh, archiveRepo: REPO, wallet: WALLET, passphrase: PASS, keeper: "example.org" }),
                        /a keeper is an ORCID iD/);
 
-  const p = await prepareOwner({ gh, archiveRepo: REPO, wallet: WALLET, passphrase: PASS, keeper: "https://example.org/" });
+  await assert.rejects(prepareOwner({ gh, archiveRepo: REPO, wallet: WALLET, passphrase: PASS, ownerLabel: "Jane" }),
+                       /not a valid label/);
+  const p = await prepareOwner({ gh, archiveRepo: REPO, wallet: WALLET, passphrase: PASS, keeper: "https://example.org/",
+                                 ownerLabel: "jane-doe" });
   const owner = p.owner;
   const v1 = p.log.latest();
   assert.deepEqual([v1.number, v1.keys.keys, v1.keys.threshold, v1.keys.next.length, v1.keys.nextThreshold],
@@ -96,6 +99,8 @@ test("a new archive set up from the page: the owner made here, rotation keys off
   assert.deepEqual([settings.owner, settings.baseUrl, settings.index.html.featured], [owner, "https://jane.github.io/papers/",
                                                                                       "a-catalogue-of-sheaves"]);
   assert.ok(files.has(`ocfl/${owner}/${owner}/v1/content/genesis.json`));
+  const listed = JSON.parse(text(files.get("opensheaf.json"))).objects.find((o) => o.id === `sheaf:${owner}:${owner}`);
+  assert.equal(listed.label, "jane-doe");
   const storage = await core.GitHubStorage.open(REPO, gh, {});
   const report = await core.verifyFolder(storage, { schemas: await core.schemasOf(core.ASSETS), fetch: noNetwork });
   assert.equal(report.counts().error + report.counts().warning, 0, JSON.stringify(report.findings));

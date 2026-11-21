@@ -12,7 +12,7 @@ import { SERVICE, APP_SLUG, TEMPLATE } from "./config.js";
 import { signIn, refresh } from "./gh-auth.js";
 import * as gh from "./github.js";
 import { FORMS, NEW_VERSION, check, subject } from "./forms.js";
-import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf } from "./archive.js";
+import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf, shortForms, ownerShown, foreignName } from "./archive.js";
 import { readArchive, headFiles, awaitRequest, baseUrl } from "./load.js";
 import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
@@ -374,6 +374,7 @@ function apply(a) {
   state.secret = a.secret;
   state.keyLog = a.keyLog;
   state.base = a.base;
+  state.short = a.short || shortForms({});
 }
 
 async function openArchive(repo) {
@@ -560,9 +561,10 @@ function newArchive() {
     el("h2", {}, `Set up ${repo}`),
     el("p", {}, `${repo} is not set up yet. (A new archive starts as a `,
       el("a", { href: fromTemplate }, "repository made from the archive template"), ", public, with the OpenSheaf app " +
-      "installed on it.) An archive has an owner, who signs every version: a current key that signs in this page, " +
-      "kept in your key wallet; a current key for the archive's workflows, kept as a secret of the repository; and " +
-      "three rotation keys, two of which sign any change of keys."),
+      "installed on it.) The papers and collections deposited here are signed by an owner, the archive's default " +
+      "owner, made here: a current key that signs in this page, kept in your key wallet; a current key for the " +
+      "archive's workflows, kept as a secret of the repository; and three rotation keys, two of which sign any change " +
+      "of keys."),
     creating.node,
     el("details", { class: "how ceremony" }, el("summary", {}, "Or make the owner on your computer (the key ceremony)"),
       ceremony()),
@@ -625,6 +627,11 @@ function createForm() {
     if ((v["Base URL"] || "").trim() && !/^https?:\/\/\S+$/.test(v["Base URL"].trim())) {
       message("bad", "The base URL is an https address, such as https://jane.github.io/papers/."); return;
     }
+    const ownerLabel = (v.ownerLabel || "").trim();
+    if (ownerLabel && (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(ownerLabel) || ownerLabel.length > 64 || ownerLabel === "main")) {
+      message("bad", `${ownerLabel} cannot label the owner: at most 64 lower-case letters and digits, words joined by -, ` +
+        "and not main."); return;
+    }
     if (!pass.value) { message("bad", "Type a passphrase: it locks the keys."); return; }
     if (pass.value !== again.value) { message("bad", "The two passphrases differ."); return; }
     const passphrase = pass.value;
@@ -633,7 +640,8 @@ function createForm() {
     message("info", `Checking ${w} and making the keys ...`);
     try {
       c.pending = await direct.prepareOwner({ gh: ghCore(), archiveRepo: state.repo, wallet: w, passphrase,
-                                              workflows: c.workflows, level: c.level, keeper: (v.keeper || "").trim() });
+                                              workflows: c.workflows, level: c.level, keeper: (v.keeper || "").trim(),
+                                              ownerLabel });
       pref(WALLET + "new", w);
       watchUnload(true);
       if (c.pending.confirmed) {
@@ -665,6 +673,9 @@ function createForm() {
     field("Keeper", input("keeper", { placeholder: "https://orcid.org/0000-0002-1825-0097, or https://example.org/" }),
       { help: "Optional: who answers for the owner, an ORCID iD or https://DOMAIN/ (section 6.6). It is part of the " +
         "owner's genesis record, and cannot be changed later." }),
+    field("Label for this owner in the archive", input("ownerLabel", { placeholder: "jane-doe" }),
+      { help: "Optional: a label the archive gives the owner (lower-case letters and digits, words joined by -), shown " +
+        "instead of its name in this archive. It is the archive's, not signed by the owner." }),
     field("Base URL", input("Base URL", { placeholder: base ? base.url : "https://OWNER.github.io/REPOSITORY/" }),
       { help: base ? `Where the site will be served. Empty: ${base.url} (${base.rule}).` : "Where the site will be served." }),
     el("h4", {}, "The keys"),
@@ -696,7 +707,7 @@ function createExport() {
                                                   "aria-label": `Check of ${f.name}`, placeholder: "check" }));
   return el("div", { class: "op setup" },
     el("h3", {}, "Save the rotation keys"),
-    el("p", {}, "The owner ", el("code", { title: p.owner }, `${p.owner.slice(0, 16)}...`), " is made, in this page only. ",
+    el("p", {}, "The owner ", el("code", { title: p.owner }, p.ownerLabel || shortForms({}).owner(p.owner)), " is made, in this page only. ",
       el("strong", {}, `Save its ${p.files.length} rotation keys`), " before anything is committed: each file apart from " +
       "your computer and from the others (a USB stick each, say), or print the sheets, as osheaf init --export asks. " +
       "They are locked with the passphrase; any two of them sign a change of the owner's keys, and nothing else can."),
@@ -925,7 +936,7 @@ function createSteps() {
   const failed = Object.values(c.steps).some((x) => x.status === "bad");
   return el("div", { class: "op setup" },
     el("h3", {}, "Setting the archive up"),
-    el("p", { class: "small muted" }, "Owner ", el("code", { title: p.owner }, `${p.owner.slice(0, 16)}...`),
+    el("p", { class: "small muted" }, "Owner ", el("code", { title: p.owner }, p.ownerLabel || shortForms({}).owner(p.owner)),
       ". Keep this page open until the steps are done: the keys not yet put away are in its memory only."),
     el("ol", { class: "steps" }, items),
     el("div", { class: "controls" }, failed ? el("button", { class: "primary", onclick: () => createRun() }, "Try again") : null,
@@ -1048,10 +1059,10 @@ function showArchive() {
     el("p", { class: "facts" }, /^https:\/\//.test(s.baseUrl || "") ? el("a", { href: s.baseUrl }, s.baseUrl) : s.baseUrl, " · ",
        el("a", { href: explorer }, "open in the Explorer"), " · ",
        el("a", { href: `https://github.com/${state.repo}` }, state.repo)),
-    s.owner ? el("p", { class: "small muted" }, "Owner ",
-      el("a", { href: explorerLink(s.baseUrl, { owner: s.owner }), title: "Its key log, in the Explorer" },
-         el("code", {}, s.owner.slice(0, 16) + "...")),
-      " · signs every version of the archive") : null,
+    s.owner ? el("p", { class: "small muted" }, "Default owner ",
+      el("a", { href: explorerLink(s.baseUrl, { owner: s.owner }), title: `${s.owner}: its key log, in the Explorer` },
+         el("code", {}, ownerShown(s.owner, state.lines, state.short))),
+      " · signs the papers and collections deposited here unless another owner is chosen") : null,
     signingPanel(),
     el("div", { class: "controls" },
       el("button", { class: "primary", onclick: () => openForm("deposit") }, "Deposit a paper"),
@@ -1714,7 +1725,7 @@ async function writeDirectly(name, fields, files, typed, what) {
 // its name.
 function memberName(m) {
   const o = state.lines.find((x) => x.name === m.name && x.owner === m.owner);
-  return o ? o.label : `${m.name.slice(0, 12)}...`;
+  return o ? o.label : foreignName(m.name);
 }
 
 // The latest document version of a paper, once read (loadTitles).

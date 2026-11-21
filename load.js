@@ -5,7 +5,7 @@
 // is read again at the commit that carried it out.
 
 import * as gh from "./github.js";
-import { lines, objectPath, originatorOf } from "./archive.js";
+import { lines, objectPath, originatorOf, shortForms } from "./archive.js";
 
 // Several files of the head version of a line (an entry of the discovery
 // document), its inventory read once. `o` holds the reading options of
@@ -26,7 +26,7 @@ export async function headFiles(t, repo, line, layout, names, o = {}) {
 export async function readArchive(t, repo, o = {}) {
   const out = { meta: null, empty: false, hasWorkflow: false, settings: null, lines: [], layout: "",
                 collections: [], originators: new Map(), secret: null, keyLog: false,
-                base: null };
+                base: null, short: shortForms({}) };
   // an empty repository (no commit yet) is not an archive, and GitHub cannot
   // add commits to it through its API: it must be made from the template
   out.meta = await gh.api(t, `/repos/${repo}`, { fetchImpl: o.fetchImpl, fresh: o.fresh || Boolean(o.ref) });
@@ -40,6 +40,7 @@ export async function readArchive(t, repo, o = {}) {
   if (out.settings) {
     const disc = await gh.readJSON(t, repo, "opensheaf.json", o);
     out.lines = lines(disc);
+    out.short = shortForms(disc);
     out.layout = (disc && disc.storageLayout) || "";
     const labels = (await gh.listDir(t, repo, "collections", o))
       .filter((f) => f.name.endsWith(".yaml")).map((f) => f.name.replace(/\.yaml$/, ""));

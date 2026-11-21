@@ -1,4 +1,4 @@
-// opensheaf-js d22456107ec5e007479a56d9f17c30a7e9d6e825: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js ab4244c06095decb909ad1c2e540de375f4fa6ed: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -23692,8 +23692,13 @@ async function keyLogFolder2(log) {
 async function signingCopy(key) {
   return sealedKey(await Key.fromSeed(Uint8Array.from(key.seed)));
 }
-async function directSetup({ repo, github, fields, keyLog, defaultBase = null, env, schemas: schemas2, mirror = null, cache = /* @__PURE__ */ new Map(), origin = "the OpenSheaf manager", progress = () => {
+async function directSetup({ repo, github, fields, keyLog, defaultBase = null, ownerLabel = "", env, schemas: schemas2, mirror = null, cache = /* @__PURE__ */ new Map(), origin = "the OpenSheaf manager", progress = () => {
 }, attempts = 3 }) {
+  const owner = ownerLabel ? await keyLog.storage.read(`${keyLog.dir ? keyLog.dir + "/" : ""}inventory.json`) : null;
+  const after = ownerLabel ? async (storage) => {
+    const id = JSON.parse(new TextDecoder().decode(owner)).id;
+    await labelOwner(storage, env, id.split(":")[1], ownerLabel);
+  } : null;
   return directWrite({
     repo,
     github,
@@ -23709,8 +23714,32 @@ async function directSetup({ repo, github, fields, keyLog, defaultBase = null, e
     options: {
       keyLog,
       defaultBase
-    }
+    },
+    after
   });
+}
+var LABEL3 = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+function ownerLabelProblem(label) {
+  if (!LABEL3.test(label) || label.length > 64) {
+    return `\`${label}\` is not a valid label: at most 64 characters, lower-case letters and digits, words joined by \`-\``;
+  }
+  return null;
+}
+async function labelOwner(storage, env, owner, label) {
+  const problem = ownerLabelProblem(label);
+  if (problem) throw new OwnerError(problem);
+  const f = await ArchiveFolder.open(storage, env);
+  const id = objectId(owner, owner);
+  const taken = f.labels.get(label);
+  if (taken && taken !== id || label === f.archive.mainCollection) {
+    throw new OwnerError(`\`${label}\` is already taken in this archive`);
+  }
+  for (const [l, i] of [
+    ...f.labels
+  ]) if (i === id) f.labels.delete(l);
+  f.labels.set(label, id);
+  await writeDiscovery(f);
+  if (hasWebsite(f)) await readableIndex(f);
 }
 function seedLine(key) {
   return base64(key.seed);
@@ -23765,7 +23794,7 @@ function prefetched(path, size = null) {
   return size !== null && size < 4096 || path === "osheaf.json" || path === "opensheaf.json" || path.startsWith("collections/") || path.startsWith("templates/") || path.startsWith("ocfl/") && /\.(json|sha512)$/.test(path) || path.startsWith("ocfl/") && !path.includes("/content/");
 }
 async function directWrite({ repo, github, operation, fields, files = {}, env, schemas: schemas2, assets = null, mirror = null, cache = /* @__PURE__ */ new Map(), origin = "the OpenSheaf manager", progress = () => {
-}, attempts = 3, options = {} }) {
+}, attempts = 3, options = {}, after = null }) {
   const done = await oneCommit(repo, github, async (storage) => {
     progress("carrying out");
     const answer = await carryOut(storage, env, operation, fields, files, {
@@ -23774,6 +23803,20 @@ async function directWrite({ repo, github, operation, fields, files = {}, env, s
       digests: false,
       ...options
     });
+    if (answer.ok && after) {
+      await after(storage);
+      if (schemas2) {
+        const report = await verifyFolder(storage, {
+          schemas: schemas2,
+          digests: false,
+          fetch: env.fetch,
+          fetchJson: env.fetchJson
+        });
+        if (report.counts().error) {
+          throw new OwnerError(`the archive would not verify: ${report.findings.filter((x) => x.level === "error").slice(0, 5).map((x) => `${x.place}: ${x.message}`).join("; ")}`);
+        }
+      }
+    }
     if (answer.ok) progress("committing");
     return {
       message: answer.ok ? answer.commitMessage : null,
@@ -24043,6 +24086,7 @@ export {
   keyFromText,
   keyLogFolder2 as keyLogFolder,
   keyToPush,
+  labelOwner,
   newKey,
   newKeys,
   newOwnerKeys,
@@ -24052,6 +24096,7 @@ export {
   openSealedBox,
   openWithPassphrase,
   ownerKeyLog,
+  ownerLabelProblem,
   passphraseConfirmed,
   popupRequest,
   popupUrl,

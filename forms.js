@@ -18,8 +18,8 @@ export const NEW_VERSION = "A new version of a paper in the archive";
 export const FORMS = {
   setup: {
     title: "Set up the archive",
-    help: "The archive's owner is made on your computer by the key ceremony (above), never in the " +
-          "browser. This sets the archive up with that owner, from its key log; for a selection or a " +
+    help: "The archive's default owner is made on your computer by the key ceremony (above). This sets the " +
+          "archive up with that owner, from its key log; for a selection or a " +
           "catalogue, it also creates that collection and features it on the home page.",
     fields: [
       { label: "Name", required: true, placeholder: "Papers of Jane Doe, or A reading list on ..." },
@@ -44,7 +44,7 @@ export const FORMS = {
   deposit: {
     title: "Deposit a paper",
     help: "A new paper, or a new version of a paper already in the archive (its label; what is left " +
-          "empty stays as before). Every version is signed for the archive's owner by its workflow.",
+          "empty stays as before). Every version is signed for the archive's default owner by its workflow.",
     fields: [
       { label: "This deposit", type: "select", blank: true, required: true, options: [NEW_PAPER, NEW_VERSION],
         help: "A new paper gets a new label and a permanent name (its sheaf URI), made once; a new version keeps them." },

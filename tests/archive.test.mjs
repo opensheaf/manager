@@ -41,3 +41,25 @@ test("members: their sheaf: URIs, and Explorer links by label here or by identif
     `https://opensheaf.org/explorer/?url=https%3A%2F%2Fexample.org%2Fa%2F#/owner/${OWNER}`);
   assert.equal(explorerLink("https://example.org/a/"), "https://opensheaf.org/explorer/?url=https%3A%2F%2Fexample.org%2Fa%2F");
 });
+
+test("short forms: the shortest unique prefix, never under 8 characters, tombstones counted", async () => {
+  const { shortForms, ownerShown, foreignName } = await import("../archive.js");
+  const a = "a".repeat(52), o = "o".repeat(51) + "a";
+  const disc = { objects: [{ id: `sheaf:${"abcdefgh" + "x".repeat(44)}:${o}`, name: "abcdefgh" + "x".repeat(44), owner: o, kind: "document" },
+                           { id: `sheaf:${o}:${o}`, name: o, owner: o, kind: "owner", label: "jane" }],
+                 tombstones: [{ id: `sheaf:${"abcdefgh" + "y".repeat(44)}:${o}` }] };
+  const s = shortForms(disc);
+  assert.equal(s.name("abcdefgh" + "x".repeat(44)), "abcdefghx");          // the tombstone makes 8 ambiguous
+  assert.equal(s.owner(o), "oooooooo");                                    // one owner: 8, never fewer
+  assert.equal(s.name(a), "aaaaaaaa");
+  assert.equal(s.uri({ name: "abcdefgh" + "x".repeat(44), owner: o }), `sheaf:abcdefghx:oooooooo`);
+  assert.equal(s.uri({ name: "abcdefgh" + "x".repeat(44), owner: o }, o), `sheaf:abcdefghx`);
+  // a new line makes an earlier prefix ambiguous: longer at the next reading
+  const more = shortForms({ objects: [...disc.objects, { name: "abcdefghxz" + "q".repeat(42), owner: o }], tombstones: disc.tombstones });
+  assert.equal(more.name("abcdefgh" + "x".repeat(44)), "abcdefghxx");
+  const lines = disc.objects.filter((x) => x.label);
+  assert.equal(ownerShown(o, lines, s), "jane");
+  assert.equal(ownerShown("p".repeat(51) + "q", lines, s), "pppppppp");
+  assert.equal(foreignName("b".repeat(52)), "b".repeat(16) + "…");
+  assert.equal(s.name("abc"), "abc");
+});

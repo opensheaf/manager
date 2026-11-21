@@ -65,7 +65,7 @@ export function walletName(settings, given = "") {
   return /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(name) ? name : "";
 }
 
-// The current keys of the archive's owner that may sign now, and their locks
+// The current keys of the archive's default owner that may sign now, and their locks
 // in the wallet, with the passkeys that open them.
 export async function locksOf({ gh, archiveRepo, settings, wallet, signers }) {
   if (!wallet) throw new Error("name the key wallet of the owner (github:OWNER/REPOSITORY)");
@@ -409,13 +409,14 @@ export function signersOfLog(log) {
 }
 
 export async function prepareOwner({ gh, archiveRepo, wallet, passphrase, workflows = true, level = LEVELS.offline,
-                                     keeper = "", rotation = core.ROTATION_KEYS, created = null }) {
+                                     keeper = "", ownerLabel = "", rotation = core.ROTATION_KEYS, created = null }) {
   if (!passphrase) throw new core.KeyError("give a passphrase: it locks the keys");
+  if (ownerLabel && core.ownerLabelProblem(ownerLabel)) throw new core.OwnerError(core.ownerLabelProblem(ownerLabel));
   if (!Object.values(LEVELS).includes(level)) throw new Error(`no security level ${level}`);
   const w = walletOf(gh, archiveRepo, wallet);
   await core.checkWallet(w);
   const keys = await core.newOwnerKeys({ workflows, rotation });
-  const pending = { level, wallet: w, passphrase, current: keys.current, workflows: keys.workflows, rotation: null,
+  const pending = { level, wallet: w, passphrase, ownerLabel: ownerLabel || "", current: keys.current, workflows: keys.workflows, rotation: null,
                     files: null, log: null, owner: null, keyLog: null, signing: null, confirmed: level === LEVELS.wallet,
                     walletState: null, done: { rotation: false, archive: null, labels: null, wallet: false, secret: null,
                                                passkey: false, pages: null } };
@@ -458,6 +459,7 @@ export async function setUpArchive({ gh, repo, pending, fields, defaultBase = nu
   schemas ||= await core.schemasOf(core.ASSETS);
   const env = core.browserEnvironment({ assets: core.ASSETS, keys: new Map([[pending.owner, [pending.signing]]]), fetch: fetchImpl });
   const answer = await core.directSetup({ repo, github: gh, fields, keyLog: pending.keyLog, defaultBase, env, schemas, cache,
+                                          ownerLabel: pending.ownerLabel,
                                           origin: ORIGIN, progress });
   if (answer.ok) {
     pending.done.archive = answer;

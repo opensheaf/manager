@@ -91,3 +91,53 @@ export function memberLink(m, ownBase, archiveLines, version = "") {
   const base = label ? ownBase : ((m.at && m.at[0]) || ownBase);
   return explorerLink(base, { line: label || memberUri(m), kind: m.kind, version });
 }
+
+// Short forms (section 12.2): for people, a name or an owner name shown as
+// its shortest prefix that is unique among the lines the archive lists (its
+// discovery document's objects and tombstones), names among names and owner
+// names among owner names, and never fewer than 8 characters. Only for what
+// the page shows of the archive's own lines: files, requests, links and the
+// titles of links keep the complete parts. Made once per reading of the
+// archive: a line added later may make a prefix ambiguous, and the next
+// reading gives a longer one.
+export const SHORT_MIN = 8;
+
+export function shortForms(discovery) {
+  const names = new Set(), owners = new Set();
+  for (const e of [...((discovery && discovery.objects) || []), ...((discovery && discovery.tombstones) || [])]) {
+    const parts = typeof (e && e.id) === "string" ? e.id.split(":") : [];
+    const name = (e && e.name) || parts[1], owner = (e && e.owner) || parts[2];
+    if (name) names.add(name);
+    if (owner) owners.add(owner);
+  }
+  const shortest = (x, among) => {
+    for (let k = SHORT_MIN; k < x.length; k++) {
+      const p = x.slice(0, k);
+      if (![...among].some((y) => y !== x && y.startsWith(p))) return p;
+    }
+    return x;
+  };
+  const name = (n) => shortest(n, names), owner = (o) => shortest(o, owners);
+  return {
+    name, owner,
+    // the short sheaf: URI of a line: without the owner part for the
+    // originator's line (section 12.1)
+    uri: (o, originator = "") => originator && originator === o.owner ? `sheaf:${name(o.name)}`
+      : `sheaf:${name(o.name)}:${owner(o.owner)}`,
+  };
+}
+
+// An owner as the page shows it: its label in this archive (an archive may
+// label any line it lists, owners included, section 3.1), else its short
+// owner name.
+export function ownerShown(owner, archiveLines, short) {
+  const o = (archiveLines || []).find((x) => x.kind === "owner" && x.name === owner && x.owner === owner);
+  return o ? o.label : short.owner(owner);
+}
+
+// A line of another archive, shown by the first 16 characters of its name
+// (a prefix unique here says nothing of other archives; section 12.2 asks
+// at least 16 where a short form cannot be corrected).
+export function foreignName(name) {
+  return name.length > 16 ? `${name.slice(0, 16)}…` : name;
+}
