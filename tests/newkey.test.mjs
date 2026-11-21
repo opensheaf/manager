@@ -11,7 +11,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import * as core from "../vendor/opensheaf-manager.js";
-import { setupState, prepareNewKey, commitNewKey, putNewKey, forgetNewKey, signersOf } from "../direct.js";
+import { setupState, prepareNewKey, commitNewKey, putNewKey, forgetNewKey, signersOf, recordWallet, walletHinted,
+         walletName } from "../direct.js";
 import { fakeGitHub } from "./fake-github.mjs";
 
 const fixture = JSON.parse(await readFile(new URL("./fixtures/archive.json", import.meta.url), "utf-8"));
@@ -112,4 +113,21 @@ test("a new current key made in the page, with rotation-key files, then with the
   forgetNewKey(r);
   assert.ok(seeds.every((s) => s.every((b) => b === 0)));
   assert.equal(g.head(REPO), done3.commit.sha);
+});
+
+// A wallet set up in the page is recorded in the archive's osheaf.json as a
+// hint for the owner, in one commit, and only once (direct.recordWallet).
+test("a key wallet recorded in osheaf.json as a hint for the owner, once", async () => {
+  const { g, gh, settings } = world();
+  const owner = settings.owner;
+  assert.equal(walletHinted(settings), false);
+  const first = await recordWallet({ gh, repo: REPO, owner, wallet: WALLET, fetchImpl: noNetwork });
+  assert.equal(first.recorded, true);
+  assert.ok(first.commit && first.commit.sha);
+  const after = JSON.parse(text(g.files(REPO).get("osheaf.json")));
+  assert.deepEqual(after.keys, { [owner]: { wallets: [WALLET] } });
+  assert.equal(walletHinted(after), true);
+  assert.equal(walletName(after, "github:other/keys"), WALLET);
+  const again = await recordWallet({ gh, repo: REPO, owner, wallet: WALLET, fetchImpl: noNetwork });
+  assert.deepEqual([again.recorded, again.commit], [false, null]);
 });

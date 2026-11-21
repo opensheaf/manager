@@ -55,14 +55,31 @@ export function github(token, fetchImpl = globalThis.fetch && globalThis.fetch.b
   return new core.GitHub({ token, fetch: fetchImpl });
 }
 
-// The wallet of the owner's keys: "keys" of the archive's osheaf.json when it
-// names a GitHub wallet, else the one the person gave (kept in this browser:
-// a name, not a secret). Only GitHub wallets can be read from a page.
-export function walletName(settings, given = "") {
+// The wallet of the owner's keys: the first wallet the archive's osheaf.json
+// hints for the owner ("keys": {"<owner>": {"wallets": [...]}}, then a hint
+// for every owner, the earlier {"wallet": ...}), else the one the person
+// gave (kept in this browser: a name, not a secret). Only GitHub wallets can
+// be read from a page. OWNER: by default the archive's owner.
+export function walletName(settings, given = "", owner = settings && settings.owner) {
   const k = settings && settings.keys;
-  const named = typeof k === "string" ? k : k && typeof k === "object" ? String(k.wallet || "") : "";
+  const named = typeof k === "string" ? k : (core.walletCandidates(settings || {}, owner || null)[0] || "");
   const name = (named.startsWith("github:") ? named : String(given || "")).trim();
   return /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(name) ? name : "";
+}
+
+// Whether the archive's osheaf.json hints a wallet for OWNER (its own, or one
+// for every owner).
+export function walletHinted(settings, owner = settings && settings.owner) {
+  return core.walletHints(settings && settings.keys, owner || null).length > 0;
+}
+
+// The wallet W recorded in the archive's osheaf.json as a hint for OWNER, in
+// one commit, as osheaf key wallet --owner OWNER --add W records it:
+// { recorded, commit } (recorded false: hinted already, nothing committed).
+export async function recordWallet({ gh, repo, owner, wallet, cache = new Map(),
+                                     fetchImpl = globalThis.fetch && globalThis.fetch.bind(globalThis) }) {
+  const env = core.browserEnvironment({ assets: core.ASSETS, fetch: fetchImpl });
+  return core.directRecordWallet({ repo, github: gh, env, owner, wallet, cache, origin: ORIGIN });
 }
 
 // The current keys of the archive's default owner that may sign now, and their locks

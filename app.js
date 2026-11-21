@@ -770,7 +770,8 @@ async function createRun() {
       set("archive", "now");
       let answer;
       try {
-        answer = await direct.setUpArchive({ gh, repo, pending: p, fields: createFields(), cache: state.cache,
+        answer = await direct.setUpArchive({ gh, repo, pending: p, fields: { ...createFields(), "Key wallet": p.wallet.name },
+                                             cache: state.cache,
                                              defaultBase: async () => state.base || await baseUrl(await token(), repo),
                                              progress: (x) => message("info", say[x] || x) });
       } catch (e) {
@@ -1244,6 +1245,28 @@ function setupSummary() {
   }
 }
 
+// A wallet set up here that holds keys of the owner is recorded in the
+// archive's osheaf.json as a hint for the owner, in a commit, when the
+// archive hints none (as osheaf key push --wallet records it), and the
+// person is told; a refusal (no write access) leaves the archive as it is.
+async function recordWalletIfNone(w) {
+  const s = state.settings;
+  if (!s || !s.owner || direct.walletHinted(s) || !setup.state || !setup.state.there.length) return;
+  try {
+    const got = await direct.recordWallet({ gh: ghCore(), repo: state.repo, owner: s.owner, wallet: w, cache: state.cache });
+    if (got.recorded) {
+      const keys = s.keys && typeof s.keys === "object" ? s.keys : {};
+      s.keys = { ...keys, [s.owner]: { wallets: [w] } };
+      message("ok", `${w} is now recorded in the archive's osheaf.json as the owner's key wallet (commit ` +
+        `${(got.commit && got.commit.sha || String(got.commit || "")).slice(0, 7)}), so that osheaf and this page look for ` +
+        "the keys there.");
+    }
+  } catch (e) {
+    message("warn", `${w} was not recorded in the archive's osheaf.json: ${e.message}. Record it with ` +
+      `osheaf key wallet --add ${w}.`);
+  }
+}
+
 // The wallet named, checked once in the background when the archive opens
 // (no message), so that the panel shows how it stands.
 function checkQuietly() {
@@ -1302,6 +1325,7 @@ function renderSetup() {
       setup.state = await direct.setupState({ gh, archiveRepo: state.repo, settings: s, wallet: w, signers: state.signers });
       if (!named && pref(WALLET + s.owner) !== w) { pref(WALLET + s.owner, w); showArchive(); }
       message("ok", `${w} is private, and this sign-in can read and write it.`);
+      await recordWalletIfNone(w);
     } catch (e) {
       setup.state = null;
       message("bad", `The wallet ${w} cannot be used: ${e.message}.`);
@@ -1347,6 +1371,7 @@ function renderSetup() {
                                 : `The current key ${got.did.slice(8, 20)}... was in ${st.wallet.name} already: left as it is.`);
           setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: state.repo, settings: s,
                                                   wallet: st.wallet.name, signers: state.signers });
+          await recordWalletIfNone(st.wallet.name);
         } catch (e) {
           message("bad", `The key was not put in the wallet: ${e.message}.`);
         } finally {

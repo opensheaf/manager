@@ -1,4 +1,4 @@
-// opensheaf-js ab4244c06095decb909ad1c2e540de375f4fa6ed: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 0023d45bd96ad3eaf6c42389de8d63384a45d759: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -8539,6 +8539,13 @@ var init_folder = __esm({
           address: this.archive.depositor.address
         };
       }
+      async writeConfig(cfg) {
+        await this.storage.write(CONFIG_NAME, jsonBytes(cfg));
+        this.archive = Object.fromEntries(Object.entries(cfg).filter(([k]) => k !== "texmacs" && k !== "index"));
+        this.archive.profiles ??= [];
+        this.archive.contact ??= this.archive.baseUrl;
+        this.index = cfg.index || {};
+      }
       async dirOf(id) {
         return joinPath("ocfl", ...await pathOf(id, this.layout));
       }
@@ -10346,7 +10353,7 @@ function isNode(node) {
   }
   return false;
 }
-var ALIAS, DOC, MAP, PAIR, SCALAR, SEQ, NODE_TYPE, isAlias, isDocument, isMap, isPair, isScalar, isSeq, hasAnchor;
+var ALIAS, DOC, MAP, PAIR, SCALAR, SEQ, NODE_TYPE, isAlias, isDocument, isMap2, isPair, isScalar, isSeq, hasAnchor;
 var init_identity = __esm({
   "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/identity.js"() {
     ALIAS = Symbol.for("yaml.alias");
@@ -10358,7 +10365,7 @@ var init_identity = __esm({
     NODE_TYPE = Symbol.for("yaml.node.type");
     isAlias = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === ALIAS;
     isDocument = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === DOC;
-    isMap = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
+    isMap2 = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === MAP;
     isPair = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === PAIR;
     isScalar = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SCALAR;
     isSeq = (node) => !!node && typeof node === "object" && node[NODE_TYPE] === SEQ;
@@ -10465,7 +10472,7 @@ function initVisitor(visitor) {
 }
 function callVisitor(key, node, visitor, path) {
   if (typeof visitor === "function") return visitor(key, node, path);
-  if (isMap(node)) return visitor.Map?.(key, node, path);
+  if (isMap2(node)) return visitor.Map?.(key, node, path);
   if (isSeq(node)) return visitor.Seq?.(key, node, path);
   if (isPair(node)) return visitor.Pair?.(key, node, path);
   if (isScalar(node)) return visitor.Scalar?.(key, node, path);
@@ -11818,7 +11825,7 @@ function addMergeToJSMap(ctx, map2, value) {
 }
 function mergeValue(ctx, map2, value) {
   const source = ctx && isAlias(value) ? value.resolve(ctx.doc) : value;
-  if (!isMap(source)) throw new Error("Merge sources must be maps or map aliases");
+  if (!isMap2(source)) throw new Error("Merge sources must be maps or map aliases");
   const srcMap = source.toJSON(null, ctx, Map);
   for (const [key, value2] of srcMap) {
     if (map2 instanceof Map) {
@@ -12213,7 +12220,7 @@ var init_map = __esm({
       nodeClass: YAMLMap,
       tag: "tag:yaml.org,2002:map",
       resolve(map2, onError) {
-        if (!isMap(map2)) onError("Expected a mapping for this tag");
+        if (!isMap2(map2)) onError("Expected a mapping for this tag");
         return map2;
       },
       createNode: (schema4, obj, ctx) => YAMLMap.from(schema4, obj, ctx)
@@ -12676,7 +12683,7 @@ function resolvePairs(seq2, onError) {
     for (let i = 0; i < seq2.items.length; ++i) {
       let item = seq2.items[i];
       if (isPair(item)) continue;
-      else if (isMap(item)) {
+      else if (isMap2(item)) {
         if (item.items.length > 1) onError("Each pair must have its own sequence indicator");
         const pair = item.items[0] || new Pair(new Scalar(null));
         if (item.commentBefore) pair.key.commentBefore = pair.key.commentBefore ? `${item.commentBefore}
@@ -13025,7 +13032,7 @@ var init_set = __esm({
       tag: "tag:yaml.org,2002:set",
       createNode: (schema4, iterable, ctx) => YAMLSet.from(schema4, iterable, ctx),
       resolve(map2, onError) {
-        if (isMap(map2)) {
+        if (isMap2(map2)) {
           if (map2.hasAllNullValues(true)) return Object.assign(new YAMLSet(), map2);
           else onError("Set items must all have null values");
         } else onError("Expected a mapping for this tag");
@@ -14105,9 +14112,9 @@ var init_resolve_end = __esm({
 
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-collection.js
 function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: composeEmptyNode2 }, ctx, fc, onError, tag) {
-  const isMap2 = fc.start.source === "{";
-  const fcName = isMap2 ? "flow map" : "flow sequence";
-  const NodeClass = tag?.nodeClass ?? (isMap2 ? YAMLMap : YAMLSeq);
+  const isMap3 = fc.start.source === "{";
+  const fcName = isMap3 ? "flow map" : "flow sequence";
+  const NodeClass = tag?.nodeClass ?? (isMap3 ? YAMLMap : YAMLSeq);
   const coll = new NodeClass(ctx.schema);
   coll.flow = true;
   const atRoot = ctx.atRoot;
@@ -14137,7 +14144,7 @@ function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: co
         offset = props.end;
         continue;
       }
-      if (!isMap2 && ctx.options.strict && containsNewline(key)) onError(key, "MULTILINE_IMPLICIT_KEY", "Implicit keys of flow sequence pairs need to be on a single line");
+      if (!isMap3 && ctx.options.strict && containsNewline(key)) onError(key, "MULTILINE_IMPLICIT_KEY", "Implicit keys of flow sequence pairs need to be on a single line");
     }
     if (i === 0) {
       if (props.comma) onError(props.comma, "UNEXPECTED_TOKEN", `Unexpected , in ${fcName}`);
@@ -14166,7 +14173,7 @@ function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: co
         }
       }
     }
-    if (!isMap2 && !sep && !props.found) {
+    if (!isMap3 && !sep && !props.found) {
       const valueNode = value ? composeNode2(ctx, value, props, onError) : composeEmptyNode2(ctx, props.end, sep, null, props, onError);
       coll.items.push(valueNode);
       offset = valueNode.range[2];
@@ -14187,7 +14194,7 @@ function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: co
         startOnNewline: false
       });
       if (valueProps.found) {
-        if (!isMap2 && !props.found && ctx.options.strict) {
+        if (!isMap3 && !props.found && ctx.options.strict) {
           if (sep) for (const st of sep) {
             if (st === valueProps.found) break;
             if (st.type === "newline") {
@@ -14210,7 +14217,7 @@ function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: co
       }
       const pair = new Pair(keyNode, valueNode);
       if (ctx.options.keepSourceTokens) pair.srcToken = collItem;
-      if (isMap2) {
+      if (isMap3) {
         const map2 = coll;
         if (mapIncludes(ctx, map2.items, keyNode)) onError(keyStart, "DUPLICATE_KEY", "Map keys must be unique");
         map2.items.push(pair);
@@ -14229,7 +14236,7 @@ function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: co
       offset = valueNode ? valueNode.range[2] : valueProps.end;
     }
   }
-  const expectedEnd = isMap2 ? "}" : "]";
+  const expectedEnd = isMap3 ? "}" : "]";
   const [ce, ...ee] = fc.end;
   let cePos = offset;
   if (ce && ce.source === expectedEnd) cePos = ce.offset + ce.source.length;
@@ -17329,7 +17336,7 @@ __export(dist_exports, {
   isAlias: () => isAlias,
   isCollection: () => isCollection,
   isDocument: () => isDocument,
-  isMap: () => isMap,
+  isMap: () => isMap2,
   isNode: () => isNode,
   isPair: () => isPair,
   isScalar: () => isScalar,
@@ -17384,7 +17391,7 @@ __export(browser_exports, {
   isAlias: () => isAlias,
   isCollection: () => isCollection,
   isDocument: () => isDocument,
-  isMap: () => isMap,
+  isMap: () => isMap2,
   isNode: () => isNode,
   isPair: () => isPair,
   isScalar: () => isScalar,
@@ -18008,11 +18015,11 @@ async function keeperLink(log, fetchJson = null) {
     if (!(error instanceof KeeperUnreachable)) throw error;
     return link(NOT_CHECKED, `offline: ${error.message}`);
   }
-  const isMap2 = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+  const isMap3 = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
   if (orcid) {
-    const links = isMap2(data2) ? data2["researcher-url"] : null;
+    const links = isMap3(data2) ? data2["researcher-url"] : null;
     for (const item of Array.isArray(links) ? links : []) {
-      const value = isMap2(item) ? (item.url || {}).value : null;
+      const value = isMap3(item) ? (item.url || {}).value : null;
       const found2 = typeof value === "string" ? value.match(OWNER_WORD) || [] : [];
       if (found2.length && found2[0] === owner) {
         const others = found2.slice(1).filter((w) => w !== owner);
@@ -18022,9 +18029,9 @@ async function keeperLink(log, fetchJson = null) {
     return link(CLAIMED, "the ORCID record has no link naming the owner");
   }
   if (data2 === null) return link(CLAIMED, `there is no ${url}`);
-  if (!isMap2(data2) || data2.format !== KEEPER_FORMAT) return link(CLAIMED, `${url} is not of format ${KEEPER_FORMAT}`);
+  if (!isMap3(data2) || data2.format !== KEEPER_FORMAT) return link(CLAIMED, `${url} is not of format ${KEEPER_FORMAT}`);
   if (!(Array.isArray(data2.owners) && data2.owners.includes(owner))) return link(CLAIMED, `${url} does not list the owner`);
-  let succ = isMap2(data2.successors) ? data2.successors[owner] : null;
+  let succ = isMap3(data2.successors) ? data2.successors[owner] : null;
   succ = typeof succ === "string" && OWNER_NAME.test(succ) && succ !== owner ? succ : null;
   return link(CONFIRMED, `${url} lists the owner`, succ);
 }
@@ -18070,28 +18077,99 @@ function parseWallet(spec, env, { config = null, forbidden = [] } = {}) {
   if (spec.startsWith("github:")) {
     const repo = spec.slice("github:".length);
     if (!REPO.test(repo)) throw new WalletError(`a GitHub wallet is github:OWNER/REPO: ${spec}`);
-    return new GitHubWallet(repo, env.wallets.github, forbidden);
+    return new GitHubWallet(repo, env.wallets?.github, forbidden);
   }
   if (spec === "command") return new CommandWallet(config || env.wallets.userConfig(), env.wallets);
   throw new WalletError(`a security level is offline, github:OWNER/REPO or command: ${spec}`);
 }
-function configuredWallet(config, env, { forbidden = [] } = {}) {
-  config = config && typeof config === "object" && !Array.isArray(config) ? config : {};
-  if (config.wallet === "command" || COMMANDS.some((c) => c in config)) {
-    throw new WalletError(`osheaf.json configures a command wallet ("keys"), whose commands would run on this machine: they are read only from your own configuration. Move "keys" to ${env.wallets.userConfigPath()} (or to ${WALLET}), and leave osheaf.json without it`);
+var CONFIG_FILE = "osheaf.json";
+function isMap(x) {
+  return x !== null && typeof x === "object" && !Array.isArray(x);
+}
+function named(e) {
+  if (!isMap(e)) return [];
+  const out = Array.isArray(e.wallets) ? e.wallets.filter((w) => typeof w === "string") : [];
+  return e.wallet ? [
+    ...out,
+    String(e.wallet)
+  ] : out;
+}
+function hints(config, owner = null) {
+  config = isMap(config) ? config : {};
+  const out = [];
+  for (const w of [
+    ...owner ? named(config[owner]) : [],
+    ...named(config)
+  ]) if (!out.includes(w)) out.push(w);
+  return out;
+}
+function userWallets(env) {
+  const data2 = env.wallets.userFile ? env.wallets.userFile() : {
+    keys: env.wallets.userConfig()
+  };
+  const out = isMap(data2) && Array.isArray(data2.wallets) ? data2.wallets.filter((w) => typeof w === "string" && w.trim()).map((w) => w.trim()) : [];
+  const old = isMap(data2) && isMap(data2.keys) ? data2.keys.wallet : null;
+  return old && !out.includes(String(old)) ? [
+    ...out,
+    String(old)
+  ] : out;
+}
+function checkArchiveConfig(config, env) {
+  config = isMap(config) ? config : {};
+  const entries = [
+    config,
+    ...Object.entries(config).filter(([k, v]) => OWNER_NAME.test(k) && isMap(v)).map(([, v]) => v)
+  ];
+  for (const e of entries) {
+    if (named(e).includes("command") || COMMANDS.some((c) => c in e)) {
+      throw new WalletError(`osheaf.json configures a command wallet ("keys"), whose commands would run on this machine: they are read only from your own configuration. Move "keys" to ${env.wallets.userConfigPath()} (or to ${WALLET}), and leave osheaf.json without it`);
+    }
   }
+}
+function candidateWallets(config, env, owner = null) {
+  checkArchiveConfig(config, env);
   const given = (env.wallets.walletEnv() || "").trim();
-  if (given) return parseWallet(given, env, {
-    forbidden
-  });
-  const user = env.wallets.userConfig();
-  if (user.wallet) return parseWallet(String(user.wallet), env, {
-    config: user,
-    forbidden
-  });
-  return parseWallet(config.wallet, env, {
-    forbidden
-  });
+  if (given) return [
+    [
+      given,
+      WALLET
+    ]
+  ];
+  const out = hints(config, owner).map((w) => [
+    w,
+    CONFIG_FILE
+  ]);
+  const seen = new Set(out.map(([w]) => w));
+  for (const w of userWallets(env)) if (!seen.has(w)) out.push([
+    w,
+    env.wallets.userConfigPath()
+  ]);
+  return out;
+}
+async function configuredWallet(config, env, { forbidden = [], owner = null } = {}) {
+  const named2 = candidateWallets(config, env, owner);
+  const wallets = [];
+  for (const [spec] of named2) {
+    let w;
+    try {
+      w = parseWallet(spec, env, {
+        forbidden
+      });
+    } catch (error) {
+      if (named2.length === 1 || !(error instanceof WalletError)) throw error;
+      continue;
+    }
+    if (w) wallets.push(w);
+  }
+  if (wallets.length <= 1 || !owner) return wallets[0] || null;
+  for (const w of wallets) {
+    try {
+      if ((await w.entries(owner)).length) return w;
+    } catch (error) {
+      if (!(error instanceof WalletError)) throw error;
+    }
+  }
+  return wallets[0];
 }
 var GITHUB_REMOTE = /github\.com[:/]+([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?(?:\s|$)/g;
 var PAGES = /^https?:\/\/([A-Za-z0-9-]+)\.github\.io(?:\/([A-Za-z0-9._-]+))?\/?/;
@@ -18344,446 +18422,489 @@ function describeEntry(text3) {
   }
   return fields;
 }
-
-// web/manager.js
-init_crypto();
-
-// core/github.js
-init_keys();
-init_crypto();
-init_storage();
-var GITHUB_API = "https://api.github.com";
-var GitHubError = class extends Error {
-  constructor(message2, status = 0) {
-    super(message2);
-    this.status = status;
-  }
-};
-var CommitConflict = class extends GitHubError {
-};
-var GitHub = class {
-  constructor({ api = GITHUB_API, fetch: fetch2 = globalThis.fetch?.bind(globalThis), token = null } = {}) {
-    this.api = api.replace(/\/$/, "");
-    this.fetch = fetch2;
-    this.token = token;
-  }
-  async request(method, path, body = null, { raw = false, fresh = false } = {}) {
-    const token = typeof this.token === "function" ? await this.token() : this.token;
-    const headers = {
-      Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28"
-    };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (body !== null) headers["Content-Type"] = "application/json";
-    let r;
-    try {
-      r = await this.fetch(`${this.api}/${path}`, {
-        method,
-        headers,
-        body: body === null ? void 0 : JSON.stringify(body),
-        ...fresh ? {
-          cache: "no-store"
-        } : {}
-      });
-    } catch (error) {
-      throw new GitHubError(`GitHub API ${path}: ${error.message}`);
-    }
-    if (r.ok && raw) return new Uint8Array(await r.arrayBuffer());
-    const text3 = await r.text();
-    let data2 = null;
-    try {
-      data2 = text3 ? JSON.parse(text3) : null;
-    } catch {
-      data2 = null;
-    }
-    if (!r.ok) throw new GitHubError(`GitHub API ${path}: ${data2?.message || text3.slice(0, 200) || r.status}`, r.status);
-    return data2;
-  }
-};
-var REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
-function checkRepository(repo) {
-  if (!REPOSITORY.test(repo || "") || /\/\.\.?$/.test(repo)) throw new GitHubError(`not a repository: ${repo}`);
-  return repo;
-}
-function encodePath(path) {
-  return path.split("/").map(encodeURIComponent).join("/");
-}
-async function gitBlobSha(bytes) {
-  const header = utf8(`blob ${bytes.length}\0`);
-  const all = new Uint8Array(header.length + bytes.length);
-  all.set(header);
-  all.set(bytes, header.length);
-  return hex(new Uint8Array(await crypto.subtle.digest("SHA-1", all)));
-}
-async function inTurn(items, work, concurrency = 6) {
-  const queue = [
-    ...items
+function locks(text3) {
+  const line = text3.split(/\r\n|\r|\n/).find((x) => x.startsWith("encryption "));
+  const enc = line ? line.split(/\s+/).filter(Boolean)[1] : void 0;
+  if (enc === void 0 || enc === "none") return [];
+  if (enc !== ENVELOPE) return [
+    "passphrase"
   ];
-  const workers = Array.from({
-    length: Math.min(concurrency, queue.length)
-  }, async () => {
-    while (queue.length) await work(queue.shift());
-  });
-  await Promise.all(workers);
+  const out = [];
+  for (const w of wrapsOf(text3)) {
+    const parts = w.split(/\s+/).filter(Boolean);
+    let method = parts[1] ?? "?";
+    if (method === "passkey") {
+      const rp = parts.find((p) => p.startsWith("rp="));
+      method = `passkey (${rp ? rp.slice(3) : PASSKEY_RP})`;
+    }
+    if (!out.includes(method)) out.push(method);
+  }
+  return out;
 }
-var FILE = "100644";
-var LINK = "120000";
-var GitHubStorage = class _GitHubStorage {
-  static async open(repo, github, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
-    const s = new _GitHubStorage(checkRepository(repo), github, {
-      cache,
-      mirror
-    });
-    s.branch = branch || (await github.request("GET", `repos/${repo}`)).default_branch;
-    await s.readHead();
-    return s;
-  }
-  constructor(repo, github, { cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
-    Object.assign(this, {
-      repo,
-      github,
-      cache,
-      mirror: mirror && (mirror.endsWith("/") ? mirror : mirror + "/")
-    });
-    this.base = /* @__PURE__ */ new Map();
-    this.files = /* @__PURE__ */ new Map();
-    this.dirs = /* @__PURE__ */ new Map([
-      [
-        "",
-        /* @__PURE__ */ new Map()
-      ]
-    ]);
-    this.reads = {
-      cache: 0,
-      mirror: 0,
-      api: 0
+async function ownersHeld(wallet, owner = null) {
+  const by = /* @__PURE__ */ new Map();
+  for (const [o, kid] of await wallet.entries(owner)) {
+    const text3 = await readAny(wallet, o, kid);
+    const held2 = locks(text3);
+    const b = by.get(o) || {
+      n: 0,
+      phrase: false,
+      creds: /* @__PURE__ */ new Set(),
+      bare: 0
     };
+    b.n += 1;
+    b.phrase ||= held2.includes("passphrase");
+    for (const p of passkeysOf(text3)) b.creds.add(p.cred);
+    if (!held2.length) b.bare += 1;
+    by.set(o, b);
   }
-  async readHead() {
-    const r = `repos/${this.repo}/git`;
-    const ref = await this.github.request("GET", `${r}/ref/heads/${encodePath(this.branch)}`, null, {
-      fresh: true
-    });
-    if (ref?.object?.type !== "commit") throw new GitHubError(`${this.repo}: the branch ${this.branch} is not a commit`);
-    this.head = ref.object.sha;
-    this.tree = (await this.github.request("GET", `${r}/commits/${this.head}`)).tree.sha;
-    const entries = [];
-    const walk = async (sha, prefix) => {
-      const t = await this.github.request("GET", `${r}/trees/${sha}${prefix === null ? "?recursive=1" : ""}`);
-      if (prefix === null && !t.truncated) {
-        entries.push(...t.tree);
-        return;
-      }
-      for (const e of t.tree) {
-        const path = prefix ? `${prefix}/${e.path}` : e.path;
-        if (e.type === "tree") await walk(e.sha, path);
-        else entries.push({
-          ...e,
-          path
-        });
-      }
-    };
-    await walk(this.tree, null);
-    this.base = /* @__PURE__ */ new Map();
-    for (const e of entries) {
-      if (e.type === "blob") this.base.set(e.path, {
-        sha: e.sha,
-        mode: e.mode,
-        size: e.size ?? null
-      });
-    }
-    this.files = /* @__PURE__ */ new Map();
-    this.dirs = /* @__PURE__ */ new Map([
-      [
-        "",
-        /* @__PURE__ */ new Map()
-      ]
-    ]);
-    for (const [path, e] of this.base) this.put(path, {
-      ...e
-    });
-  }
-  put(path, entry) {
-    this.files.set(path, entry);
-    let p = path, kind = entry.mode === LINK ? "link" : "file";
-    for (; ; ) {
-      const parent = parentOf(p), name2 = p.slice(parent ? parent.length + 1 : 0);
-      const fresh = !this.dirs.has(parent);
-      if (fresh) this.dirs.set(parent, /* @__PURE__ */ new Map());
-      this.dirs.get(parent).set(name2, kind);
-      if (!fresh || parent === "") return;
-      p = parent;
-      kind = "dir";
-    }
-  }
-  drop(path) {
-    this.files.delete(path);
-    let p = path;
-    while (p) {
-      const parent = parentOf(p), entries = this.dirs.get(parent);
-      entries.delete(p.slice(parent ? parent.length + 1 : 0));
-      if (entries.size || parent === "") return;
-      this.dirs.delete(parent);
-      p = parent;
-    }
-  }
-  async read(path) {
-    checkPath(path);
-    const e = this.files.get(path);
-    if (!e || e.mode === LINK) return null;
-    if (e.bytes) return e.bytes.slice();
-    return (await this.blob(e.sha, path)).slice();
-  }
-  async write(path, bytes, { exclusive = false } = {}) {
-    checkPath(path);
-    const old = this.files.get(path);
-    if (exclusive && old) throw new StorageError(`${path} exists already`);
-    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder`);
-    for (let p = parentOf(path); p; p = parentOf(p)) {
-      if (this.files.has(p)) throw new StorageError(`${p} is a file`);
-    }
-    this.put(path, {
-      bytes: Uint8Array.from(bytes),
-      mode: old && old.mode !== LINK ? old.mode : FILE,
-      sha: null
-    });
-  }
-  async kind(path) {
-    checkPath(path, {
-      folder: true
-    });
-    if (this.dirs.has(path)) return "dir";
-    const e = this.files.get(path);
-    return e ? e.mode === LINK ? "link" : "file" : null;
-  }
-  async list(path) {
-    checkPath(path, {
-      folder: true
-    });
-    const entries = this.dirs.get(path);
-    if (!entries) return null;
+  return [
+    ...by
+  ].map(([o, b]) => {
+    const words2 = [
+      ...b.phrase ? [
+        "passphrase"
+      ] : [],
+      ...b.creds.size ? [
+        `${b.creds.size} passkey${b.creds.size !== 1 ? "s" : ""}`
+      ] : [],
+      ...b.bare ? [
+        `${b.bare} without a lock`
+      ] : []
+    ];
     return [
-      ...entries
-    ].map(([name2, kind]) => ({
-      name: name2,
-      kind
-    })).sort((a, b) => compareText(a.name, b.name));
-  }
-  async rename(from, to) {
-    checkPath(from);
-    checkPath(to);
-    const what = await this.kind(from);
-    if (!what) throw new StorageError(`no ${from} to move`);
-    if (this.dirs.has(to)) throw new StorageError(`${to} exists already`);
-    if (what !== "dir") {
-      const e = this.files.get(from);
-      this.drop(from);
-      if (this.files.has(to)) this.drop(to);
-      this.put(to, e);
-      return;
-    }
-    for (const k of [
-      ...this.files.keys()
-    ]) {
-      if (k.startsWith(from + "/")) {
-        const e = this.files.get(k);
-        this.drop(k);
-        this.put(to + k.slice(from.length), e);
-      }
-    }
-  }
-  async remove(path) {
-    checkPath(path);
-    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder that is not empty`);
-    if (this.files.has(path)) this.drop(path);
-  }
-  async size(path) {
-    const e = this.files.get(checkPath(path));
-    if (!e || e.mode === LINK) return null;
-    return e.bytes ? e.bytes.length : e.size;
-  }
-  async blob(sha, path = null) {
-    const known = this.cache.get(sha);
-    if (known) {
-      this.reads.cache++;
-      return known;
-    }
-    let bytes = null;
-    if (this.mirror && path) {
-      try {
-        const r = await this.github.fetch(this.mirror + encodePath(path));
-        if (r.ok) {
-          const got = new Uint8Array(await r.arrayBuffer());
-          if (await gitBlobSha(got) === sha) bytes = got;
-        }
-      } catch {
-        bytes = null;
-      }
-      if (bytes) this.reads.mirror++;
-    }
-    if (!bytes) {
-      bytes = await this.github.request("GET", `repos/${this.repo}/git/blobs/${sha}`, null, {
-        raw: true
-      });
-      if (await gitBlobSha(bytes) !== sha) throw new GitHubError(`${this.repo}: the blob ${sha} read is not ${sha}`);
-      this.reads.api++;
-    }
-    this.cache.set(sha, bytes);
-    return bytes;
-  }
-  async prefetch({ maxSize = 1 << 20, skip = () => false, concurrency = 6 } = {}) {
-    const todo = /* @__PURE__ */ new Map();
-    for (const [path, e] of this.base) {
-      if (e.mode === LINK || this.cache.has(e.sha) || todo.has(e.sha)) continue;
-      if (e.size !== null && e.size > maxSize) continue;
-      if (!skip(path, e.size)) todo.set(e.sha, path);
-    }
-    await inTurn([
-      ...todo
-    ], async ([sha, path]) => {
-      try {
-        await this.blob(sha, path);
-      } catch {
-      }
-    }, concurrency);
-    return todo.size;
-  }
-  async changes() {
-    const changed = [], removed2 = [];
-    for (const [path, e] of this.files) {
-      if (e.bytes && e.sha === null) e.sha = await gitBlobSha(e.bytes);
-      const b = this.base.get(path);
-      if (!b || b.sha !== e.sha || b.mode !== e.mode) changed.push({
-        path,
-        ...e
-      });
-    }
-    for (const [path, b] of this.base) if (!this.files.has(path)) removed2.push({
-      path,
-      ...b
-    });
-    const order = (a, b) => compareText(a.path, b.path);
-    return {
-      changed: changed.sort(order),
-      removed: removed2.sort(order)
-    };
-  }
-  async commit(message2, { author = null } = {}) {
-    const { changed, removed: removed2 } = await this.changes();
-    if (!changed.length && !removed2.length) return null;
-    const r = `repos/${this.repo}/git`;
-    const held2 = new Set([
-      ...this.base.values()
-    ].map((e) => e.sha));
-    const upload = /* @__PURE__ */ new Map();
-    for (const e of changed) if (e.bytes && !held2.has(e.sha)) upload.set(e.sha, e.bytes);
-    await inTurn([
-      ...upload
-    ], async ([sha, bytes]) => {
-      const made2 = await this.github.request("POST", `${r}/blobs`, {
-        content: base64(bytes),
-        encoding: "base64"
-      });
-      if (made2.sha !== sha) throw new GitHubError(`${this.repo}: GitHub named a blob ${made2.sha}, not ${sha}`);
-    }, 4);
-    const tree = await this.github.request("POST", `${r}/trees`, {
-      base_tree: this.tree,
-      tree: [
-        ...changed.map((e) => ({
-          path: e.path,
-          mode: e.mode,
-          type: "blob",
-          sha: e.sha
-        })),
-        ...removed2.map((e) => ({
-          path: e.path,
-          mode: e.mode,
-          type: "blob",
-          sha: null
-        }))
-      ]
-    });
-    const made = await this.github.request("POST", `${r}/commits`, {
-      message: message2,
-      tree: tree.sha,
-      parents: [
-        this.head
-      ],
-      ...author ? {
-        author
-      } : {}
-    });
-    try {
-      await this.github.request("PATCH", `${r}/refs/heads/${encodePath(this.branch)}`, {
-        sha: made.sha,
-        force: false
-      });
-    } catch (error) {
-      if (error.status === 422 || error.status === 409) {
-        throw new CommitConflict(`${this.repo}: the branch ${this.branch} has moved since ${this.head.slice(0, 7)} was read`, error.status);
-      }
-      throw error;
-    }
-    for (const e of changed) if (e.bytes) this.cache.set(e.sha, e.bytes);
-    this.head = made.sha;
-    this.tree = tree.sha;
-    this.base = new Map([
-      ...this.files
-    ].map(([path, e]) => [
-      path,
-      {
-        sha: e.sha,
-        mode: e.mode,
-        size: e.bytes?.length ?? e.size
-      }
-    ]));
-    for (const e of this.files.values()) {
-      if (e.bytes) {
-        e.size = e.bytes.length;
-        delete e.bytes;
-      }
-    }
-    return {
-      sha: made.sha,
-      url: made.html_url ?? null,
-      changed: changed.length,
-      removed: removed2.length
-    };
-  }
-};
-async function oneCommit(repo, github, run, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null, attempts = 3, prepare: prepare2 = null } = {}) {
-  for (let k = 1; ; k++) {
-    const storage = await GitHubStorage.open(repo, github, {
-      branch,
-      cache,
-      mirror
-    });
-    if (prepare2) await prepare2(storage);
-    const { message: message2, ...rest } = await run(storage);
-    if (message2 === null || message2 === void 0) return {
-      ...rest,
-      commit: null,
-      storage
-    };
-    try {
-      return {
-        ...rest,
-        commit: await storage.commit(message2),
-        storage,
-        attempts: k
-      };
-    } catch (error) {
-      if (!(error instanceof CommitConflict) || k >= attempts) throw error;
-    }
-  }
+      o,
+      b.n,
+      words2.join(", ") || "no lock"
+    ];
+  });
 }
 
-// core/requests.js
+// core/owner.js
+init_names();
+init_crypto();
+init_keys();
+init_signatures();
+init_write();
+init_storage();
 init_folder();
-init_deposit();
+
+// core/keylogs.js
+init_crypto();
+init_names();
+init_owners();
+init_signatures();
+init_write();
+init_storage();
+var OwnerError = class extends Error {
+};
+var OBJ3 = "object.json";
+var KEYS2 = "keys.json";
+var KEYS_FORMAT2 = "opensheaf-keys/0.2";
+function keysFile({ keys = null, threshold = null, next = null, nextThreshold = null, extensions = null, exposed = null, ended = false, successor = null } = {}) {
+  const d = {
+    format: KEYS_FORMAT2
+  };
+  if (ended) {
+    if ([
+      keys,
+      threshold,
+      next,
+      nextThreshold
+    ].some((v) => v !== null && v !== void 0)) {
+      throw new OwnerError("an ending version has no keys, threshold, next or nextThreshold (section 6.3)");
+    }
+    d.ended = true;
+    if (successor !== null && successor !== void 0) d.successor = successor;
+  } else {
+    if (successor !== null && successor !== void 0) throw new OwnerError("only an ending version names a successor (section 6.3)");
+    Object.assign(d, {
+      keys: [
+        ...keys
+      ],
+      threshold,
+      next: [
+        ...next
+      ],
+      nextThreshold
+    });
+  }
+  if (extensions && Object.keys(extensions).length) d.extensions = extensions;
+  if (exposed && exposed.length) d.exposed = [
+    ...exposed
+  ];
+  return jsonBytes(d);
+}
+async function extendInventory(prev, id, number, files, created, message2 = null, user = null) {
+  const v = `v${number}`;
+  if (prev.head !== `v${number - 1}` || prev.id !== id) throw new OwnerError(`${v} must follow v${number - 1} of ${id}`);
+  const inv = JSON.parse(JSON.stringify(prev));
+  const content = inv.contentDirectory || "content";
+  inv.head = v;
+  const state = {};
+  for (const path of [
+    ...files.keys()
+  ].sort()) {
+    const d = await sha512hex(files.get(path));
+    if (!(d in inv.manifest)) inv.manifest[d] = [
+      `${v}/${content}/${path}`
+    ];
+    (state[d] ||= []).push(path);
+  }
+  const entry = {
+    created,
+    state
+  };
+  if (message2 !== null) entry.message = message2;
+  if (user !== null) entry.user = user;
+  inv.versions[v] = entry;
+  return orderedInventory(inv);
+}
+function keyOf(k) {
+  return typeof k === "string" ? k : k.did;
+}
+async function digestOf(k) {
+  if (typeof k !== "string") return k.digest;
+  if (k.startsWith("did:key:")) {
+    didKeyPublic(k);
+    return keyDigest(k);
+  }
+  if (!OWNER_NAME.test(k)) throw new OwnerError(`not a key, a did:key URI or the digest of a key: '${k}'`);
+  return k;
+}
+async function checked(log) {
+  log.checked = null;
+  return log.check();
+}
+async function prepare(log, signers2) {
+  const { errors } = await checked(log);
+  if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
+  if (log.ended) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
+  const side = log.side();
+  const prev = side[side.length - 1];
+  const rotation = new Set(prev.keys.next);
+  for (const key of signers2) {
+    if (!rotation.has(key.digest)) throw new OwnerError(`${key.did} is not a rotation key of v${prev.number} (section 6.1)`);
+  }
+  const need = prev.keys.nextThreshold, have = new Set(signers2.map((k) => k.did)).size;
+  if (have < need) throw new OwnerError(`v${prev.number} needs ${need} rotation keys to sign the next version, ${have} given`);
+  return prev;
+}
+async function append(log, version) {
+  log.versions.push(version);
+  const { errors } = await checked(log);
+  if (errors.length) {
+    log.versions.pop();
+    await checked(log);
+    throw new OwnerError("the new version would not be a version of the key log: " + errors.join("; "));
+  }
+  return version;
+}
+async function addVersion(log, keysBytes, signers2, { message: message2, user, created = null, files = null }) {
+  const prev = await prepare(log, signers2);
+  const problems = await keyRules(jsonOrNull(keysBytes, {
+    integers: true
+  }), log.side().map((v) => v.keys), log.owner);
+  if (problems.length) throw new OwnerError(problems.join("; "));
+  for (const path of (files || /* @__PURE__ */ new Map()).keys()) {
+    if (RESERVED.includes(path.split("/")[0])) throw new OwnerError(`${path}: a name reserved by section 4.1`);
+  }
+  const n = prev.number + 1;
+  const content = new Map([
+    [
+      GENESIS,
+      log.genesis
+    ],
+    [
+      OBJ3,
+      jcsBytes(ownerObject(log.owner, prev.digest))
+    ],
+    [
+      KEYS2,
+      keysBytes
+    ],
+    ...files || /* @__PURE__ */ new Map()
+  ]);
+  const inv = await extendInventory(JSON.parse(new TextDecoder().decode(prev.inventory)), log.id, n, content, created || utcNow(), message2, user);
+  const invBytes = inventoryFile(inv);
+  const digest = await sha512hex(invBytes);
+  const pin = log.pin(prev.number);
+  const witnesses = /* @__PURE__ */ new Map();
+  for (const key of signers2) {
+    witnesses.set(await fileName(key.did), await signatureFile(key, log.id, `v${n}`, digest, log.owner, pin));
+  }
+  return append(log, await Version.make(n, content, invBytes, await sidecar(invBytes), witnesses));
+}
+async function rotate(log, signers2, { nextKeys, nextThreshold, add: add2 = [], retire = [], exposed = [], threshold = null, extensions = void 0, message: message2 = "Keys changed", user, created = null }) {
+  await checked(log);
+  const prev = log.latest();
+  if (!prev) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
+  const current = prev.keys.keys;
+  for (const did of retire) if (!current.includes(did)) throw new OwnerError(`${did} is not a current key of ${log.owner}`);
+  const keys = current.filter((k) => !retire.includes(k) && !exposed.includes(k));
+  for (const k of add2) if (!keys.includes(keyOf(k))) keys.push(keyOf(k));
+  if (extensions === void 0) extensions = log.extensions();
+  const next = [];
+  for (const k of nextKeys) next.push(await digestOf(k));
+  const data2 = keysFile({
+    keys,
+    threshold: threshold || prev.keys.threshold,
+    next,
+    nextThreshold,
+    extensions,
+    exposed: exposed.length ? exposed : null
+  });
+  return addVersion(log, data2, signers2, {
+    message: message2,
+    user,
+    created
+  });
+}
+function contentPath2(cp, inv, n) {
+  const cd = isObject(inv) && typeof inv.contentDirectory === "string" ? inv.contentDirectory : "content";
+  const safe = (p) => typeof p === "string" && p !== "" && !p.startsWith("/") && !p.includes("\\") && p.split("/").every((x) => ![
+    "",
+    ".",
+    ".."
+  ].includes(x));
+  if (!safe(cp) || !safe(cd) || cd.includes("/")) return false;
+  const parts = cp.split("/");
+  return parts.length >= 3 && /^v[1-9][0-9]*$/.test(parts[0]) && parts[1] === cd && Number(parts[0].slice(1)) <= n;
+}
+async function loadKeyLog(storage, dir, where2 = dir) {
+  const problems = [], versions2 = [];
+  const root = await storage.read(joinPath(dir, "inventory.json"));
+  const rootInv = jsonOrNull(root);
+  const head = typeof rootInv?.head === "string" && /^v[0-9]+$/.test(rootInv.head) ? Number(rootInv.head.slice(1)) : NaN;
+  if (!root || !Number.isInteger(head)) throw new OwnerError(`${where2}: not an OCFL object with an inventory`);
+  for (let n = 1; n <= head; n++) {
+    const vdir = joinPath(dir, `v${n}`);
+    const invBytes = await storage.read(joinPath(vdir, "inventory.json"));
+    const entry = jsonOrNull(invBytes);
+    if (!invBytes || !isObject(entry?.manifest) || !isObject(entry?.versions?.[`v${n}`]?.state)) {
+      problems.push(`v${n}: no readable inventory in the version folder (section 4.1)`);
+      break;
+    }
+    const sc = await storage.read(joinPath(vdir, "inventory.json.sha512")) || new Uint8Array();
+    if (sidecarDigest(sc) !== await sha512hex(invBytes)) problems.push(`v${n}: the checksum file does not state the digest of the inventory`);
+    const files = /* @__PURE__ */ new Map();
+    for (const [d, paths] of Object.entries(entry.versions[`v${n}`].state)) {
+      if (!Array.isArray(paths) || !paths.length) continue;
+      let bytes = new Uint8Array();
+      const cp = entry.manifest[d]?.[0];
+      if (!contentPath2(cp, entry, n)) {
+        problems.push(`v${n}: a content path out of the object: '${cp}'`);
+        problems.push(`v${n}: the content of ${paths[0]} is missing`);
+      } else {
+        bytes = await storage.read(joinPath(dir, cp)) ?? (problems.push(`v${n}: the content of ${paths[0]} is missing`), new Uint8Array());
+      }
+      if (await sha512hex(bytes) !== d) problems.push(`v${n}: ${paths[0]} does not have the digest its inventory states`);
+      for (const p of paths) files.set(p, bytes);
+    }
+    const witnesses = /* @__PURE__ */ new Map();
+    const wdir = joinPath(dir, WITNESSES, `v${n}`);
+    for (const { name: name2, kind } of await storage.list(wdir) || []) {
+      if (kind === "file") witnesses.set(name2, await storage.read(joinPath(wdir, name2)));
+    }
+    versions2.push(await Version.make(n, files, invBytes, sc, witnesses));
+  }
+  if (!versions2.length || !versions2[0].files.has(GENESIS)) throw new OwnerError(`${where2}: no genesis record in the first version`);
+  if (versions2[versions2.length - 1].number === head && !sameBytes(root, versions2[versions2.length - 1].inventory)) {
+    problems.push("the root inventory differs from that of the head version");
+  }
+  const log = await KeyLog.of(versions2[0].files.get(GENESIS), versions2, problems);
+  if (rootInv.id !== log.id) problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
+  return log;
+}
+
+// core/passkey.js
+init_crypto();
+init_keys();
+init_names();
+var UNLOCK_PAGE = `https://${PASSKEY_RP}/`;
+var UnlockFailed = class extends Error {
+};
+function b64url(bytes) {
+  return base64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+function fromB64url(text3) {
+  if (typeof text3 !== "string" || !/^[A-Za-z0-9_-]+$/.test(text3) || text3.length % 4 === 1) throw new Error("not base64url");
+  const b = text3.replaceAll("-", "+").replaceAll("_", "/");
+  return unbase64(b + "=".repeat((4 - b.length % 4) % 4));
+}
+function randomState() {
+  return b64url(crypto.getRandomValues(new Uint8Array(16)));
+}
+var CODE_LABEL = utf8("opensheaf unlock code v1");
+async function confirmationCode(state, pk) {
+  const d = await sha256(new Uint8Array([
+    ...CODE_LABEL,
+    ...utf8(state),
+    ...pk
+  ]));
+  const n = (d[0] << 24 >>> 0) + (d[1] << 16) + (d[2] << 8) + d[3];
+  const digits = String(n % 1e6).padStart(6, "0");
+  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+}
+var HAND_OFF_INFO = utf8("opensheaf unlock hand-off v2");
+async function withPublic(privateKey) {
+  const jwk = await crypto.subtle.exportKey("jwk", privateKey);
+  return {
+    privateKey,
+    publicKey: fromB64url(jwk.x)
+  };
+}
+async function newKeyPair() {
+  const pair = await crypto.subtle.generateKey({
+    name: "X25519"
+  }, true, [
+    "deriveBits"
+  ]);
+  return withPublic(pair.privateKey);
+}
+async function handOffKeys(pair, other, state) {
+  const pub = await crypto.subtle.importKey("raw", other, {
+    name: "X25519"
+  }, true, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({
+    name: "X25519",
+    public: pub
+  }, pair.privateKey, 256));
+  const both = await hkdf(shared, utf8(state), HAND_OFF_INFO, 64);
+  return [
+    both.slice(0, 32),
+    both.slice(32)
+  ];
+}
+function associatedData(mode, owner, cred, pk, epk) {
+  return utf8(`${mode}|${owner}|${cred}|${b64url(pk)}|${b64url(epk)}`);
+}
+function sameSecret(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let k = 0; k < a.length; k++) diff |= a[k] ^ b[k];
+  return diff === 0;
+}
+var xor = (a, b) => a.map((x, k) => x ^ b[k]);
+async function unseal2(pair, epk, ct, tag, state, mode, owner, cred) {
+  if (epk.length !== 32 || ct.length !== 32 || tag.length !== 32) throw new Error("not a hand-off of 32 bytes");
+  const [enc, mac] = await handOffKeys(pair, epk, state);
+  const aad = associatedData(mode, owner, cred, pair.publicKey, epk);
+  if (!sameSecret(await hmacSha256(mac, new Uint8Array([
+    ...aad,
+    ...ct
+  ])), tag)) {
+    throw new Error("the answer of the page is not authentic");
+  }
+  return xor(ct, enc);
+}
+var NO_X25519 = "this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase";
+function failure(result) {
+  const error = result.error;
+  return new UnlockFailed(error === "x25519-unavailable" ? NO_X25519 : `the page says: ${error.slice(0, 200)}`);
+}
+function answerOf(result, creds = []) {
+  const secret = result.secret || new Uint8Array(), cred = result.cred ?? null;
+  if (secret.length !== 32) throw new UnlockFailed("the page sent a secret that is not 32 bytes");
+  if (creds.length && cred !== null && !creds.includes(cred)) throw new UnlockFailed("the page used another passkey than those asked for");
+  return [
+    cred,
+    secret
+  ];
+}
+var POPUP = "popup";
+var POPUP_ENROLL = "popup-enroll";
+var UNLOCK_ORIGIN = new URL(UNLOCK_PAGE).origin;
+var POPUP_MESSAGES = {
+  ready: "opensheaf-unlock-ready",
+  request: "opensheaf-unlock-request",
+  answer: "opensheaf-unlock-answer",
+  done: "opensheaf-unlock-done"
+};
+function popupMode(mode) {
+  if (mode !== POPUP && mode !== POPUP_ENROLL) throw new UnlockFailed(`not a mode of the popup: ${mode}`);
+  return mode;
+}
+function popupUrl(origin, mode = POPUP) {
+  return UNLOCK_PAGE + "#" + new URLSearchParams({
+    mode: popupMode(mode),
+    origin
+  }).toString();
+}
+async function popupRequest(owner, creds, pair = null, state = null, mode = POPUP) {
+  if (!OWNER_NAME.test(owner || "")) throw new UnlockFailed(`not an owner name: ${owner}`);
+  if (!creds.length && popupMode(mode) === POPUP) {
+    throw new UnlockFailed("no passkey is enrolled for the keys of this owner (osheaf key enroll)");
+  }
+  pair ||= await newKeyPair();
+  state ||= randomState();
+  return {
+    owner,
+    mode,
+    creds: [
+      ...creds
+    ],
+    state,
+    pair,
+    code: await confirmationCode(state, pair.publicKey),
+    message: {
+      type: POPUP_MESSAGES.request,
+      state,
+      pk: b64url(pair.publicKey),
+      owner,
+      cred: creds.join(",")
+    }
+  };
+}
+function sameCode(typed, code) {
+  const digits = (t) => utf8(String(t ?? "").replace(/[^0-9]/g, ""));
+  return digits(typed).length === 6 && sameSecret(digits(typed), digits(code));
+}
+async function openPopupAnswer(request, data2, typed) {
+  if (!data2 || data2.type !== POPUP_MESSAGES.answer || typeof data2.state !== "string" || !sameSecret(utf8(data2.state), utf8(request.state))) {
+    throw new UnlockFailed("this is not the answer to this request");
+  }
+  if (typeof data2.error === "string") throw failure({
+    error: data2.error
+  });
+  if (!sameCode(typed, request.code)) {
+    throw new UnlockFailed("the code typed is not the code of this request: close the window of the passkey, and unlock again");
+  }
+  let secret;
+  try {
+    const [epk, ct, tag] = [
+      fromB64url(data2.epk),
+      fromB64url(data2.ct),
+      fromB64url(data2.tag)
+    ];
+    fromB64url(data2.cred);
+    secret = await unseal2(request.pair, epk, ct, tag, request.state, request.mode || POPUP, request.owner, data2.cred);
+  } catch {
+    throw new UnlockFailed("the page sent a damaged answer");
+  }
+  if (request.mode === POPUP_ENROLL) {
+    if (request.creds.includes(data2.cred)) throw new UnlockFailed("the page sent no new credential");
+    return answerOf({
+      cred: data2.cred,
+      secret
+    });
+  }
+  return answerOf({
+    cred: data2.cred,
+    secret
+  }, request.creds);
+}
+
+// core/owner.js
+init_discovery();
+
+// core/init.js
+init_names();
+init_keys();
+init_write();
+init_storage();
+init_folder();
 init_collect();
-init_describe();
-init_collections();
 init_discovery();
 
 // core/website.js
@@ -18795,6 +18916,10 @@ init_paths();
 init_write();
 init_storage();
 init_folder();
+init_storage();
+init_names();
+init_discovery();
+init_describe();
 init_deposit();
 function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
@@ -19305,10 +19430,21 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
   for (const [url, last] of urls) sm.push(`  <url><loc>${esc(url)}</loc>` + (last ? `<lastmod>${last}</lastmod>` : "") + "</url>");
   sm.push("</urlset>");
   await f.storage.write("sitemap.xml", new TextEncoder().encode(sm.join("\n") + "\n"));
+  const moved = [];
+  const former = Object.entries(f.archive.formerAddresses || {}).sort((a, b) => compareText(a[0], b[0]));
+  for (const [address, id] of former) {
+    if (written.includes(address) || !pages.has(id) || !LABEL.test(address)) continue;
+    const slug = site.lines.get(id).slug;
+    await f.storage.write(`paper/${address}/index.html`, new TextEncoder().encode(redirectPage(`../${slug}/`, `${base}paper/${slug}/`)));
+    moved.push(address);
+  }
   for (const [folder, keep] of [
     [
       "paper",
-      new Set(written)
+      /* @__PURE__ */ new Set([
+        ...written,
+        ...moved
+      ])
     ],
     [
       "owner",
@@ -19320,6 +19456,22 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
     }
   }
   return written.length;
+}
+var REDIRECT_MARK = "<!-- opensheaf: a former address -->";
+function redirectPage(href, canonical2) {
+  return `<!DOCTYPE html>
+${REDIRECT_MARK}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Moved</title>
+<link rel="canonical" href="${esc(canonical2)}">
+<meta name="robots" content="noindex">
+<meta http-equiv="refresh" content="0; url=${esc(href)}">
+</head>
+<body><p>This page has moved to <a href="${esc(href)}">${esc(canonical2)}</a>.</p></body>
+</html>
+`;
 }
 async function removeAll(storage, path) {
   if (await storage.kind(path) === "dir") {
@@ -19657,6 +19809,917 @@ async function present(f) {
     f.env.err(`warning: the website was not regenerated (${error.message}); run osheaf index`);
   }
 }
+
+// core/init.js
+var SINGLE_ROTATION_RISK = "With a single rotation key, its loss leaves the owner unable ever to change its keys or end, and its theft lets the thief take the owner over (sections 6.2 and 15.1).";
+var ROTATION_KEYS_WARNING = "Keep the rotation keys safe: an owner left with fewer of them than the next version of its key log needs to sign can never change its keys or end (section 6.2).";
+function keyLabel(kind, did) {
+  return `${kind} key`.padEnd(14) + short(did);
+}
+function rotationLine(n, nextThreshold, where2, isNew = false) {
+  const verb = nextThreshold === 1 ? "signs" : "sign";
+  const more = n === 1 ? "" : `; any ${nextThreshold} of them ${verb} the next version of the key log`;
+  return `  rotation keys  ${n}${isNew ? " new" : ""}, kept in ${where2}${more}`;
+}
+async function exportAndConfirm(f, rotation, owner, version, args) {
+  const env = f.env;
+  const secret = args.noPassphrase ? null : await env.passphrase({
+    confirm: true
+  });
+  const ex = env.exportFolder;
+  const inside = await ex.inside(args.export);
+  if (inside) stop(`${args.export} is inside the archive ${inside}: keys are never kept in an archive (section 15.4)`);
+  const paths = [];
+  try {
+    for (const key of rotation) {
+      const path = await ex.write(args.export, rotationFileName(owner, key), await rotationKeyText(key, owner, version, secret, args.cost || env.cost));
+      if ((await readRotationKey(await ex.read(path), secret)).key.did !== key.did) {
+        throw new KeyError(`${path} does not read back`);
+      }
+      paths.push(path);
+    }
+  } catch (error) {
+    if (error instanceof KeyError) stop(error.message);
+    throw error;
+  }
+  const lock = secret !== null ? "locked with your passphrase" : "with no lock (--no-passphrase)";
+  env.out(`Exported ${plural(rotation.length, "rotation key")} of ${short(owner)} to ${args.export}, ${lock}:`);
+  for (const key of rotation) {
+    env.out(`  ${keyLabel("rotation", key.did)}  ${rotationFileName(owner, key)}  check ${await sheetCheck(key.seed)}`);
+  }
+  if (args.print) for (const key of rotation) env.out(await rotationKeySheet(key, owner, version));
+  if (args.yes) return paths;
+  env.out("Put the files (or the printed sheets) away, apart from this computer and from each other.");
+  for (const key of rotation) {
+    const typed = (await env.input(`Type the check of ${rotationFileName(owner, key)} to confirm: `)).trim().toUpperCase();
+    if (typed !== await sheetCheck(key.seed)) {
+      stop("not confirmed: nothing was written to the key log (the exported files may be deleted)");
+    }
+  }
+  return paths;
+}
+async function ownerInit(f, args, { done = true } = {}) {
+  const env = f.env;
+  const single = Boolean(args.singleRotationKey);
+  const nRot = single ? 1 : Number(args.rotation || 3);
+  const nextThreshold = single ? 1 : Number(args.nextThreshold || Math.floor(nRot / 2) + 1);
+  const others = [
+    ...args.key || []
+  ];
+  const threshold = Number(args.threshold || 1);
+  if (!(nextThreshold >= 1 && nextThreshold <= nRot) || !(threshold >= 1 && threshold <= 1 + others.length)) {
+    stop("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)");
+  }
+  if (args.keeper && !keeperValid(args.keeper)) {
+    stop(`a keeper is an ORCID iD (with its check digit) or https://<domain>/: ${args.keeper}`);
+  }
+  const w = await levelWallet(f, args);
+  if (!w && !args.export) {
+    stop("give --export DIR, a folder outside the archive where the rotation keys are written (or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)");
+  }
+  if (w && args.noPassphrase) stop("--no-passphrase: the keys in a wallet are always locked with a passphrase");
+  if (!w && !env.keyStore.keptOnDevice()) {
+    stop("OPENSHEAF_KEY_STORE=none keeps no current key on this computer: keep the keys in a wallet (--keys github:OWNER/REPO|command)");
+  }
+  for (const did of others) {
+    try {
+      didKeyPublic(did);
+    } catch {
+      stop(`not a did:key URI of an Ed25519 key: ${did}`);
+    }
+  }
+  const current = await env.newKey();
+  const rotation = [];
+  for (let k = 0; k < nRot; k++) rotation.push(await env.newKey());
+  let log;
+  for (; ; ) {
+    try {
+      log = await newOwner([
+        current,
+        ...others
+      ], rotation, {
+        threshold,
+        nextThreshold,
+        keeper: args.keeper || null
+      });
+    } catch (error) {
+      stop(error.message);
+    }
+    if (!await f.storage.kind(await f.dirOf(log.id))) break;
+  }
+  if (nextThreshold === 1) env.warn(SINGLE_ROTATION_RISK);
+  if (args.export) await exportAndConfirm(f, rotation, log.owner, 1, args);
+  if (w) await keepInWallet(f, w, log.owner, rotation, 1, args, [
+    [
+      current,
+      1
+    ]
+  ]);
+  let store;
+  try {
+    store = await env.keyStore.keep(log.owner, current);
+  } catch (error) {
+    if (error instanceof KeyError || error.code) stop(error.message);
+    throw error;
+  }
+  await writeKeyLog(f.storage, await f.dirOf(log.id), log);
+  f.changed();
+  const kept = store === "none" ? `${w.name} only (OPENSHEAF_KEY_STORE=none)` : env.keyStore.storeName(store);
+  env.out(`${done ? "Done: the" : "The"} owner ${short(log.owner)} is made, with v1 of its key log:`);
+  env.out(`  owner          ${log.owner}`);
+  env.out(`  current key    ${current.did}, kept in ${kept}`);
+  for (const did of others) env.out(`  current key    ${did}, of another device`);
+  const resolved = args.export ? await env.exportFolder.resolve(args.export) : null;
+  env.out(rotationLine(nRot, nextThreshold, keptWhere(args, w, resolved)));
+  env.warn(ROTATION_KEYS_WARNING);
+  return log;
+}
+var GITATTRIBUTES = `# OpenSheaf archive files: stored and checked out byte for byte,
+# never merged as text (OpenSheaf archives in git, section 4.1). Every
+# attribute is named, so that no attribute of the user's own settings (a
+# user-wide \`*.pdf filter=lfs\`, for instance) applies to them.
+opensheaf.json -text -filter -ident -working-tree-encoding -export-subst -merge
+ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge
+indexes.json   -text -filter -ident -working-tree-encoding -export-subst -merge
+names/**       -text -filter -ident -working-tree-encoding -export-subst -merge
+owners/**      -text -filter -ident -working-tree-encoding -export-subst -merge
+sha512/**      -text -filter -ident -working-tree-encoding -export-subst -merge
+*.pdf binary
+`;
+async function init(storage, env, args, where2) {
+  for (const n of CONFIG_NAMES) if (await storage.kind(n)) exit(`${where2} has a configuration already`);
+  const layout = LAYOUTS[args.layout || "owner-name"];
+  if (!layout) exit(`--layout is one of ${Object.keys(LAYOUTS).join(", ")}`);
+  if (Boolean(args.newOwner) === Boolean(args.owner)) stop("init: give --new-owner, or --owner NAME --key-log DIR");
+  if (args.index && args.index !== "website") {
+    stop(`--index ${args.index}: the TeXmacs index is made by opensheaf-py`);
+  }
+  if (!args.name || !args.baseUrl || !args.curator) stop("init: give --name, --base-url and --curator");
+  const [family, given] = (() => {
+    const k = args.curator.indexOf(",");
+    return k < 0 ? [
+      args.curator.trim(),
+      ""
+    ] : [
+      args.curator.slice(0, k).trim(),
+      args.curator.slice(k + 1).trim()
+    ];
+  })();
+  const cfg = {
+    owner: null,
+    name: args.name,
+    contact: args.contact || args.baseUrl,
+    baseUrl: args.baseUrl.endsWith("/") ? args.baseUrl : args.baseUrl + "/",
+    profiles: [
+      "website"
+    ],
+    storageLayout: layout,
+    mainCollection: "main",
+    curator: {
+      name: given ? `${family}, ${given}` : family,
+      givenName: given,
+      familyName: family,
+      affiliation: args.affiliation || ""
+    },
+    depositor: {
+      name: `${given} ${family}`.trim(),
+      address: args.contact || args.baseUrl
+    },
+    index: {
+      html: {
+        templates: "templates"
+      }
+    }
+  };
+  const f = new ArchiveFolder(storage, env);
+  f.archive = {
+    ...cfg
+  };
+  f.layout = layout;
+  await f.initStorageRoot();
+  let log;
+  if (args.newOwner) {
+    log = await ownerInit(f, args, {
+      done: false
+    });
+  } else {
+    if (!args.keyLog) stop("init --owner NAME needs --key-log DIR, the folder of its owner object");
+    try {
+      const { storage: from, dir, where: shown } = args.keyLogSource;
+      log = await loadKeyLog(from, dir, shown);
+    } catch (error) {
+      if (error instanceof OwnerError) stop(error.message);
+      throw error;
+    }
+    const { errors } = await log.check();
+    if (log.owner !== args.owner || errors.length) {
+      stop(`${args.keyLog} is not a valid key log of ${short(args.owner)}: ` + errors.join("; "));
+    }
+    if (log.ended) stop(`the owner ${short(log.owner)} has ended (section 6.3)`);
+    await writeKeyLog(storage, await f.dirOf(log.id), log);
+    f.changed();
+  }
+  cfg.owner = log.owner;
+  if (args.newOwner && walletConfig(args, log.owner)) cfg.keys = walletConfig(args, log.owner);
+  await writeText(storage, CONFIG_NAME, jsonText(cfg));
+  if (!await storage.kind(".gitattributes")) await writeText(storage, ".gitattributes", GITATTRIBUTES);
+  for (const name2 of TEMPLATES) {
+    if (!await storage.kind(`templates/${name2}`)) await storage.write(`templates/${name2}`, await env.template(name2));
+  }
+  await f.configure();
+  await collect2(f, {
+    curated: args.curated
+  });
+  await writeDiscovery(f);
+  await readableIndex(f);
+  if (cfg.keys) {
+    env.out(`The key wallet ${args.keys} is recorded in ${CONFIG_NAME} for ${short(log.owner)} (osheaf key wallet --remove ${args.keys} removes it).`);
+  }
+  env.out(`Done: the archive is made in ${where2}, owned by ${short(log.owner)}. Edit ${CONFIG_NAME} and templates/, then deposit a paper: osheaf deposit --new LABEL ...`);
+  env.err("Note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in incompatible ways, and archives may have to be rebuilt.");
+  return f;
+}
+
+// core/owner.js
+init_describe();
+function keyOwner(f, args) {
+  const owner = args.owner || f?.archive.owner;
+  if (!owner || !OWNER_NAME.test(owner)) stop("give --owner NAME, or run the command in an archive");
+  return owner;
+}
+function theKeys(n, noun = "key") {
+  return n === 1 ? `the ${noun}` : `the ${n} ${noun}s`;
+}
+function walletStop(error) {
+  if (error instanceof WalletError || error instanceof KeyError || error instanceof OwnerError) stop(error.message);
+  throw error;
+}
+async function forbiddenRepositories(f) {
+  if (!f) return /* @__PURE__ */ new Set();
+  return archiveRepositories(f.env.wallets?.remotes ? await f.env.wallets.remotes() : "", f.archive.baseUrl);
+}
+async function configured(f, env = f.env, owner = null) {
+  try {
+    return await configuredWallet(f?.archive.keys, env, {
+      forbidden: await forbiddenRepositories(f),
+      owner
+    });
+  } catch (error) {
+    return walletStop(error);
+  }
+}
+async function levelWallet(f, args, env = f.env, owner = null) {
+  const spec = args.keys || args.wallet || OFFLINE;
+  if (spec === OFFLINE) return null;
+  try {
+    if (spec === "command") {
+      const w = await configured(f, env, owner);
+      return w instanceof CommandWallet ? w : parseWallet(spec, env);
+    }
+    return parseWallet(spec, env, {
+      forbidden: await forbiddenRepositories(f)
+    });
+  } catch (error) {
+    return walletStop(error);
+  }
+}
+function walletConfig(args, owner) {
+  const spec = args.keys || "";
+  return spec.startsWith("github:") ? {
+    [owner]: {
+      wallets: [
+        spec
+      ]
+    }
+  } : null;
+}
+async function writeConfig(f, cfg) {
+  await f.writeConfig(cfg);
+}
+function hinted(cfg, owner, spec, add2 = true) {
+  const given = cfg.keys && typeof cfg.keys === "object" && !Array.isArray(cfg.keys) ? {
+    ...cfg.keys
+  } : {};
+  let own2 = hints({
+    [owner]: given[owner]
+  }, owner);
+  own2 = add2 ? [
+    ...own2,
+    spec
+  ] : own2.filter((w) => w !== spec);
+  if (own2.length) given[owner] = {
+    wallets: own2
+  };
+  else delete given[owner];
+  const out = {
+    ...cfg
+  };
+  if (Object.keys(given).length) out.keys = given;
+  else delete out.keys;
+  return out;
+}
+function keptWhere(args, w, resolved) {
+  return [
+    ...args.export ? [
+      resolved
+    ] : [],
+    ...w ? [
+      w.name
+    ] : []
+  ].join(" and in ");
+}
+async function keepInWallet(f, w, owner, rotation, version, args, current = []) {
+  const env = f.env;
+  env.warn(risk(w.name, owner));
+  const unlocked = await unlockedPasskeys(env, owner);
+  const secret = unlocked.length ? await walletPassphrase(env, w, owner) : await env.passphrase({
+    where: w.name
+  });
+  try {
+    await w.checkWritable();
+    const todo = rotation.map((key) => [
+      key,
+      ROTATION,
+      version
+    ]);
+    for (const [key, v] of current) if (await w.read(owner, key.id, CURRENT) === null) todo.push([
+      key,
+      CURRENT,
+      v
+    ]);
+    const n = todo.length;
+    env.err(`Saving ${theKeys(n)} of ${short(owner)} to ${w.name}\u2026`);
+    let i = 0;
+    for (const [key, kind, v] of todo) {
+      const plain = kind === CURRENT && args.plainCurrent;
+      await putKey(w, owner, key, kind, v, plain ? null : secret, unlocked, env.cost);
+      env.err(`  ${++i}/${n} ${keyLabel(kind, key.did)}  saved`);
+    }
+  } catch (error) {
+    if (error instanceof WalletError || error instanceof KeyError) stop(`${error.message}: nothing was written to the key log`);
+    throw error;
+  }
+  enrollHint(env, owner, unlocked);
+}
+async function keyWallet(f, args, env) {
+  const owner = keyOwner(f, args), who = short(owner);
+  const add2 = args.add || null, remove = args.remove || null;
+  if (add2 && remove) stop("give --add or --remove, not both");
+  if (!add2 && !remove) {
+    let found2;
+    try {
+      found2 = candidateWallets(f?.archive.keys, env, owner);
+    } catch (error) {
+      walletStop(error);
+    }
+    if (!found2.length) {
+      env.out(`No key wallet is configured for ${who}: osheaf key wallet --add github:OWNER/REPO hints one in ${CONFIG_NAME}, osheaf key wallets --add github:OWNER/REPO adds one to yours.`);
+      return;
+    }
+    env.out(`The keys of ${who} are looked for in, in order:`);
+    const width = Math.max(...found2.map(([w2]) => [
+      ...w2
+    ].length));
+    for (const [w2, where2] of found2) env.out(`  ${w2 + " ".repeat(width - [
+      ...w2
+    ].length)}  ${where2}`);
+    return;
+  }
+  if (!f) stop(`run the command in an archive: the hints are in its ${CONFIG_NAME}`);
+  if (!f.archiveOwners().includes(owner)) stop(`${who} is not an owner of this archive`);
+  const cfg = await readJson(f.storage, CONFIG_NAME);
+  const own2 = cfg.keys && typeof cfg.keys === "object" && !Array.isArray(cfg.keys) ? hints({
+    [owner]: cfg.keys[owner]
+  }, owner) : [];
+  if (remove) {
+    if (!own2.includes(remove)) {
+      if (hints(cfg.keys).includes(remove)) {
+        stop(`${CONFIG_NAME} hints ${remove} for every owner ("keys": {"wallet": ...}): edit ${CONFIG_NAME} to remove it`);
+      }
+      env.out(`${CONFIG_NAME} hints no ${remove} for ${who}.`);
+      return;
+    }
+    await writeConfig(f, hinted(cfg, owner, remove, false));
+    env.out(`Done: ${CONFIG_NAME} no longer hints ${remove} for ${who}.`);
+    return;
+  }
+  if (!add2.startsWith("github:")) {
+    stop(`${CONFIG_NAME} names GitHub wallets only, github:OWNER/REPO: a command wallet is configured in ${env.wallets.userConfigPath()} or in ${WALLET}`);
+  }
+  let w;
+  try {
+    w = parseWallet(add2, env);
+  } catch (error) {
+    walletStop(error);
+  }
+  if ((await forbiddenRepositories(f)).has(w.repo.toLowerCase())) {
+    stop(`${w.repo} is a repository of this archive, which is public: a key wallet is a private repository of its own`);
+  }
+  if (own2.includes(add2)) {
+    env.out(`${CONFIG_NAME} hints ${add2} for ${who} already.`);
+    return;
+  }
+  await writeConfig(f, hinted(cfg, owner, add2));
+  env.out(`Done: ${CONFIG_NAME} hints ${add2} for ${who}.`);
+}
+function askedOf(env) {
+  env.asked ??= {};
+  const a = env.asked;
+  a.passkeys ??= /* @__PURE__ */ new Map();
+  a.seen ??= /* @__PURE__ */ new Set();
+  a.failed ??= /* @__PURE__ */ new Set();
+  a.oldRp ??= /* @__PURE__ */ new Set();
+  return a;
+}
+async function unlockedPasskeys(env, owner) {
+  const salt = await passkeySalt(owner);
+  return [
+    ...askedOf(env).passkeys.values()
+  ].filter((p) => sameBytes(p.salt, salt));
+}
+async function walletEntries(w, owner) {
+  try {
+    const out = [];
+    for (const [o, kid] of await w.entries(owner)) out.push([
+      kid,
+      await readAny(w, o, kid)
+    ]);
+    return out;
+  } catch (error) {
+    return walletStop(error);
+  }
+}
+async function walletPassphrase(env, w, owner) {
+  if (env.passphrase.known?.()) return env.passphrase({
+    where: w.name
+  });
+  let texts = [];
+  try {
+    texts = (await walletEntries(w, owner)).map(([, t]) => t).filter((t) => wrapsOf(t).length);
+  } catch {
+    texts = [];
+  }
+  if (!texts.length) return env.passphrase({
+    where: w.name
+  });
+  const secret = await env.passphrase({
+    confirm: false,
+    where: w.name
+  });
+  try {
+    await readKey(texts[0], secret);
+  } catch (error) {
+    if (error instanceof KeyError) stop(`${error.message}: this is not the passphrase of the keys of ${short(owner)} in ${w.name}`);
+    throw error;
+  }
+  return secret;
+}
+function enrollHint(env, owner, unlocked) {
+  if (!unlocked.length && askedOf(env).seen.has(owner)) {
+    env.err(`The new keys of ${short(owner)} open with your passphrase only: run osheaf key enroll so that your passkey opens them too.`);
+  }
+}
+
+// web/manager.js
+init_crypto();
+
+// core/github.js
+init_keys();
+init_crypto();
+init_storage();
+var GITHUB_API = "https://api.github.com";
+var GitHubError = class extends Error {
+  constructor(message2, status = 0) {
+    super(message2);
+    this.status = status;
+  }
+};
+var CommitConflict = class extends GitHubError {
+};
+var GitHub = class {
+  constructor({ api = GITHUB_API, fetch: fetch2 = globalThis.fetch?.bind(globalThis), token = null } = {}) {
+    this.api = api.replace(/\/$/, "");
+    this.fetch = fetch2;
+    this.token = token;
+  }
+  async request(method, path, body = null, { raw = false, fresh = false } = {}) {
+    const token = typeof this.token === "function" ? await this.token() : this.token;
+    const headers = {
+      Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (body !== null) headers["Content-Type"] = "application/json";
+    let r;
+    try {
+      r = await this.fetch(`${this.api}/${path}`, {
+        method,
+        headers,
+        body: body === null ? void 0 : JSON.stringify(body),
+        ...fresh ? {
+          cache: "no-store"
+        } : {}
+      });
+    } catch (error) {
+      throw new GitHubError(`GitHub API ${path}: ${error.message}`);
+    }
+    if (r.ok && raw) return new Uint8Array(await r.arrayBuffer());
+    const text3 = await r.text();
+    let data2 = null;
+    try {
+      data2 = text3 ? JSON.parse(text3) : null;
+    } catch {
+      data2 = null;
+    }
+    if (!r.ok) throw new GitHubError(`GitHub API ${path}: ${data2?.message || text3.slice(0, 200) || r.status}`, r.status);
+    return data2;
+  }
+};
+var REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
+function checkRepository(repo) {
+  if (!REPOSITORY.test(repo || "") || /\/\.\.?$/.test(repo)) throw new GitHubError(`not a repository: ${repo}`);
+  return repo;
+}
+function encodePath(path) {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+async function gitBlobSha(bytes) {
+  const header = utf8(`blob ${bytes.length}\0`);
+  const all = new Uint8Array(header.length + bytes.length);
+  all.set(header);
+  all.set(bytes, header.length);
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-1", all)));
+}
+async function inTurn(items, work, concurrency = 6) {
+  const queue = [
+    ...items
+  ];
+  const workers = Array.from({
+    length: Math.min(concurrency, queue.length)
+  }, async () => {
+    while (queue.length) await work(queue.shift());
+  });
+  await Promise.all(workers);
+}
+var FILE = "100644";
+var LINK = "120000";
+var GitHubStorage = class _GitHubStorage {
+  static async open(repo, github, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
+    const s = new _GitHubStorage(checkRepository(repo), github, {
+      cache,
+      mirror
+    });
+    s.branch = branch || (await github.request("GET", `repos/${repo}`)).default_branch;
+    await s.readHead();
+    return s;
+  }
+  constructor(repo, github, { cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
+    Object.assign(this, {
+      repo,
+      github,
+      cache,
+      mirror: mirror && (mirror.endsWith("/") ? mirror : mirror + "/")
+    });
+    this.base = /* @__PURE__ */ new Map();
+    this.files = /* @__PURE__ */ new Map();
+    this.dirs = /* @__PURE__ */ new Map([
+      [
+        "",
+        /* @__PURE__ */ new Map()
+      ]
+    ]);
+    this.reads = {
+      cache: 0,
+      mirror: 0,
+      api: 0
+    };
+  }
+  async readHead() {
+    const r = `repos/${this.repo}/git`;
+    const ref = await this.github.request("GET", `${r}/ref/heads/${encodePath(this.branch)}`, null, {
+      fresh: true
+    });
+    if (ref?.object?.type !== "commit") throw new GitHubError(`${this.repo}: the branch ${this.branch} is not a commit`);
+    this.head = ref.object.sha;
+    this.tree = (await this.github.request("GET", `${r}/commits/${this.head}`)).tree.sha;
+    const entries = [];
+    const walk = async (sha, prefix) => {
+      const t = await this.github.request("GET", `${r}/trees/${sha}${prefix === null ? "?recursive=1" : ""}`);
+      if (prefix === null && !t.truncated) {
+        entries.push(...t.tree);
+        return;
+      }
+      for (const e of t.tree) {
+        const path = prefix ? `${prefix}/${e.path}` : e.path;
+        if (e.type === "tree") await walk(e.sha, path);
+        else entries.push({
+          ...e,
+          path
+        });
+      }
+    };
+    await walk(this.tree, null);
+    this.base = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      if (e.type === "blob") this.base.set(e.path, {
+        sha: e.sha,
+        mode: e.mode,
+        size: e.size ?? null
+      });
+    }
+    this.files = /* @__PURE__ */ new Map();
+    this.dirs = /* @__PURE__ */ new Map([
+      [
+        "",
+        /* @__PURE__ */ new Map()
+      ]
+    ]);
+    for (const [path, e] of this.base) this.put(path, {
+      ...e
+    });
+  }
+  put(path, entry) {
+    this.files.set(path, entry);
+    let p = path, kind = entry.mode === LINK ? "link" : "file";
+    for (; ; ) {
+      const parent = parentOf(p), name2 = p.slice(parent ? parent.length + 1 : 0);
+      const fresh = !this.dirs.has(parent);
+      if (fresh) this.dirs.set(parent, /* @__PURE__ */ new Map());
+      this.dirs.get(parent).set(name2, kind);
+      if (!fresh || parent === "") return;
+      p = parent;
+      kind = "dir";
+    }
+  }
+  drop(path) {
+    this.files.delete(path);
+    let p = path;
+    while (p) {
+      const parent = parentOf(p), entries = this.dirs.get(parent);
+      entries.delete(p.slice(parent ? parent.length + 1 : 0));
+      if (entries.size || parent === "") return;
+      this.dirs.delete(parent);
+      p = parent;
+    }
+  }
+  async read(path) {
+    checkPath(path);
+    const e = this.files.get(path);
+    if (!e || e.mode === LINK) return null;
+    if (e.bytes) return e.bytes.slice();
+    return (await this.blob(e.sha, path)).slice();
+  }
+  async write(path, bytes, { exclusive = false } = {}) {
+    checkPath(path);
+    const old = this.files.get(path);
+    if (exclusive && old) throw new StorageError(`${path} exists already`);
+    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder`);
+    for (let p = parentOf(path); p; p = parentOf(p)) {
+      if (this.files.has(p)) throw new StorageError(`${p} is a file`);
+    }
+    this.put(path, {
+      bytes: Uint8Array.from(bytes),
+      mode: old && old.mode !== LINK ? old.mode : FILE,
+      sha: null
+    });
+  }
+  async kind(path) {
+    checkPath(path, {
+      folder: true
+    });
+    if (this.dirs.has(path)) return "dir";
+    const e = this.files.get(path);
+    return e ? e.mode === LINK ? "link" : "file" : null;
+  }
+  async list(path) {
+    checkPath(path, {
+      folder: true
+    });
+    const entries = this.dirs.get(path);
+    if (!entries) return null;
+    return [
+      ...entries
+    ].map(([name2, kind]) => ({
+      name: name2,
+      kind
+    })).sort((a, b) => compareText(a.name, b.name));
+  }
+  async rename(from, to) {
+    checkPath(from);
+    checkPath(to);
+    const what = await this.kind(from);
+    if (!what) throw new StorageError(`no ${from} to move`);
+    if (this.dirs.has(to)) throw new StorageError(`${to} exists already`);
+    if (what !== "dir") {
+      const e = this.files.get(from);
+      this.drop(from);
+      if (this.files.has(to)) this.drop(to);
+      this.put(to, e);
+      return;
+    }
+    for (const k of [
+      ...this.files.keys()
+    ]) {
+      if (k.startsWith(from + "/")) {
+        const e = this.files.get(k);
+        this.drop(k);
+        this.put(to + k.slice(from.length), e);
+      }
+    }
+  }
+  async remove(path) {
+    checkPath(path);
+    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder that is not empty`);
+    if (this.files.has(path)) this.drop(path);
+  }
+  async size(path) {
+    const e = this.files.get(checkPath(path));
+    if (!e || e.mode === LINK) return null;
+    return e.bytes ? e.bytes.length : e.size;
+  }
+  async blob(sha, path = null) {
+    const known = this.cache.get(sha);
+    if (known) {
+      this.reads.cache++;
+      return known;
+    }
+    let bytes = null;
+    if (this.mirror && path) {
+      try {
+        const r = await this.github.fetch(this.mirror + encodePath(path));
+        if (r.ok) {
+          const got = new Uint8Array(await r.arrayBuffer());
+          if (await gitBlobSha(got) === sha) bytes = got;
+        }
+      } catch {
+        bytes = null;
+      }
+      if (bytes) this.reads.mirror++;
+    }
+    if (!bytes) {
+      bytes = await this.github.request("GET", `repos/${this.repo}/git/blobs/${sha}`, null, {
+        raw: true
+      });
+      if (await gitBlobSha(bytes) !== sha) throw new GitHubError(`${this.repo}: the blob ${sha} read is not ${sha}`);
+      this.reads.api++;
+    }
+    this.cache.set(sha, bytes);
+    return bytes;
+  }
+  async prefetch({ maxSize = 1 << 20, skip = () => false, concurrency = 6 } = {}) {
+    const todo = /* @__PURE__ */ new Map();
+    for (const [path, e] of this.base) {
+      if (e.mode === LINK || this.cache.has(e.sha) || todo.has(e.sha)) continue;
+      if (e.size !== null && e.size > maxSize) continue;
+      if (!skip(path, e.size)) todo.set(e.sha, path);
+    }
+    await inTurn([
+      ...todo
+    ], async ([sha, path]) => {
+      try {
+        await this.blob(sha, path);
+      } catch {
+      }
+    }, concurrency);
+    return todo.size;
+  }
+  async changes() {
+    const changed = [], removed2 = [];
+    for (const [path, e] of this.files) {
+      if (e.bytes && e.sha === null) e.sha = await gitBlobSha(e.bytes);
+      const b = this.base.get(path);
+      if (!b || b.sha !== e.sha || b.mode !== e.mode) changed.push({
+        path,
+        ...e
+      });
+    }
+    for (const [path, b] of this.base) if (!this.files.has(path)) removed2.push({
+      path,
+      ...b
+    });
+    const order = (a, b) => compareText(a.path, b.path);
+    return {
+      changed: changed.sort(order),
+      removed: removed2.sort(order)
+    };
+  }
+  async commit(message2, { author = null } = {}) {
+    const { changed, removed: removed2 } = await this.changes();
+    if (!changed.length && !removed2.length) return null;
+    const r = `repos/${this.repo}/git`;
+    const held2 = new Set([
+      ...this.base.values()
+    ].map((e) => e.sha));
+    const upload = /* @__PURE__ */ new Map();
+    for (const e of changed) if (e.bytes && !held2.has(e.sha)) upload.set(e.sha, e.bytes);
+    await inTurn([
+      ...upload
+    ], async ([sha, bytes]) => {
+      const made2 = await this.github.request("POST", `${r}/blobs`, {
+        content: base64(bytes),
+        encoding: "base64"
+      });
+      if (made2.sha !== sha) throw new GitHubError(`${this.repo}: GitHub named a blob ${made2.sha}, not ${sha}`);
+    }, 4);
+    const tree = await this.github.request("POST", `${r}/trees`, {
+      base_tree: this.tree,
+      tree: [
+        ...changed.map((e) => ({
+          path: e.path,
+          mode: e.mode,
+          type: "blob",
+          sha: e.sha
+        })),
+        ...removed2.map((e) => ({
+          path: e.path,
+          mode: e.mode,
+          type: "blob",
+          sha: null
+        }))
+      ]
+    });
+    const made = await this.github.request("POST", `${r}/commits`, {
+      message: message2,
+      tree: tree.sha,
+      parents: [
+        this.head
+      ],
+      ...author ? {
+        author
+      } : {}
+    });
+    try {
+      await this.github.request("PATCH", `${r}/refs/heads/${encodePath(this.branch)}`, {
+        sha: made.sha,
+        force: false
+      });
+    } catch (error) {
+      if (error.status === 422 || error.status === 409) {
+        throw new CommitConflict(`${this.repo}: the branch ${this.branch} has moved since ${this.head.slice(0, 7)} was read`, error.status);
+      }
+      throw error;
+    }
+    for (const e of changed) if (e.bytes) this.cache.set(e.sha, e.bytes);
+    this.head = made.sha;
+    this.tree = tree.sha;
+    this.base = new Map([
+      ...this.files
+    ].map(([path, e]) => [
+      path,
+      {
+        sha: e.sha,
+        mode: e.mode,
+        size: e.bytes?.length ?? e.size
+      }
+    ]));
+    for (const e of this.files.values()) {
+      if (e.bytes) {
+        e.size = e.bytes.length;
+        delete e.bytes;
+      }
+    }
+    return {
+      sha: made.sha,
+      url: made.html_url ?? null,
+      changed: changed.length,
+      removed: removed2.length
+    };
+  }
+};
+async function oneCommit(repo, github, run, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null, attempts = 3, prepare: prepare2 = null } = {}) {
+  for (let k = 1; ; k++) {
+    const storage = await GitHubStorage.open(repo, github, {
+      branch,
+      cache,
+      mirror
+    });
+    if (prepare2) await prepare2(storage);
+    const { message: message2, ...rest } = await run(storage);
+    if (message2 === null || message2 === void 0) return {
+      ...rest,
+      commit: null,
+      storage
+    };
+    try {
+      return {
+        ...rest,
+        commit: await storage.commit(message2),
+        storage,
+        attempts: k
+      };
+    } catch (error) {
+      if (!(error instanceof CommitConflict) || k >= attempts) throw error;
+    }
+  }
+}
+
+// core/requests.js
+init_folder();
+init_deposit();
+init_collect();
+init_describe();
+init_collections();
+init_discovery();
 
 // core/check.js
 init_http();
@@ -21332,804 +22395,6 @@ async function lookForKeys(storage) {
 init_storage();
 init_write();
 init_inputs();
-
-// core/init.js
-init_names();
-init_keys();
-init_write();
-init_storage();
-init_folder();
-init_collect();
-init_discovery();
-
-// core/owner.js
-init_names();
-init_crypto();
-init_keys();
-init_signatures();
-init_write();
-init_storage();
-init_folder();
-
-// core/keylogs.js
-init_crypto();
-init_names();
-init_owners();
-init_signatures();
-init_write();
-init_storage();
-var OwnerError = class extends Error {
-};
-var OBJ3 = "object.json";
-var KEYS2 = "keys.json";
-var KEYS_FORMAT2 = "opensheaf-keys/0.2";
-function keysFile({ keys = null, threshold = null, next = null, nextThreshold = null, extensions = null, exposed = null, ended = false, successor = null } = {}) {
-  const d = {
-    format: KEYS_FORMAT2
-  };
-  if (ended) {
-    if ([
-      keys,
-      threshold,
-      next,
-      nextThreshold
-    ].some((v) => v !== null && v !== void 0)) {
-      throw new OwnerError("an ending version has no keys, threshold, next or nextThreshold (section 6.3)");
-    }
-    d.ended = true;
-    if (successor !== null && successor !== void 0) d.successor = successor;
-  } else {
-    if (successor !== null && successor !== void 0) throw new OwnerError("only an ending version names a successor (section 6.3)");
-    Object.assign(d, {
-      keys: [
-        ...keys
-      ],
-      threshold,
-      next: [
-        ...next
-      ],
-      nextThreshold
-    });
-  }
-  if (extensions && Object.keys(extensions).length) d.extensions = extensions;
-  if (exposed && exposed.length) d.exposed = [
-    ...exposed
-  ];
-  return jsonBytes(d);
-}
-async function extendInventory(prev, id, number, files, created, message2 = null, user = null) {
-  const v = `v${number}`;
-  if (prev.head !== `v${number - 1}` || prev.id !== id) throw new OwnerError(`${v} must follow v${number - 1} of ${id}`);
-  const inv = JSON.parse(JSON.stringify(prev));
-  const content = inv.contentDirectory || "content";
-  inv.head = v;
-  const state = {};
-  for (const path of [
-    ...files.keys()
-  ].sort()) {
-    const d = await sha512hex(files.get(path));
-    if (!(d in inv.manifest)) inv.manifest[d] = [
-      `${v}/${content}/${path}`
-    ];
-    (state[d] ||= []).push(path);
-  }
-  const entry = {
-    created,
-    state
-  };
-  if (message2 !== null) entry.message = message2;
-  if (user !== null) entry.user = user;
-  inv.versions[v] = entry;
-  return orderedInventory(inv);
-}
-function keyOf(k) {
-  return typeof k === "string" ? k : k.did;
-}
-async function digestOf(k) {
-  if (typeof k !== "string") return k.digest;
-  if (k.startsWith("did:key:")) {
-    didKeyPublic(k);
-    return keyDigest(k);
-  }
-  if (!OWNER_NAME.test(k)) throw new OwnerError(`not a key, a did:key URI or the digest of a key: '${k}'`);
-  return k;
-}
-async function checked(log) {
-  log.checked = null;
-  return log.check();
-}
-async function prepare(log, signers2) {
-  const { errors } = await checked(log);
-  if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
-  if (log.ended) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
-  const side = log.side();
-  const prev = side[side.length - 1];
-  const rotation = new Set(prev.keys.next);
-  for (const key of signers2) {
-    if (!rotation.has(key.digest)) throw new OwnerError(`${key.did} is not a rotation key of v${prev.number} (section 6.1)`);
-  }
-  const need = prev.keys.nextThreshold, have = new Set(signers2.map((k) => k.did)).size;
-  if (have < need) throw new OwnerError(`v${prev.number} needs ${need} rotation keys to sign the next version, ${have} given`);
-  return prev;
-}
-async function append(log, version) {
-  log.versions.push(version);
-  const { errors } = await checked(log);
-  if (errors.length) {
-    log.versions.pop();
-    await checked(log);
-    throw new OwnerError("the new version would not be a version of the key log: " + errors.join("; "));
-  }
-  return version;
-}
-async function addVersion(log, keysBytes, signers2, { message: message2, user, created = null, files = null }) {
-  const prev = await prepare(log, signers2);
-  const problems = await keyRules(jsonOrNull(keysBytes, {
-    integers: true
-  }), log.side().map((v) => v.keys), log.owner);
-  if (problems.length) throw new OwnerError(problems.join("; "));
-  for (const path of (files || /* @__PURE__ */ new Map()).keys()) {
-    if (RESERVED.includes(path.split("/")[0])) throw new OwnerError(`${path}: a name reserved by section 4.1`);
-  }
-  const n = prev.number + 1;
-  const content = new Map([
-    [
-      GENESIS,
-      log.genesis
-    ],
-    [
-      OBJ3,
-      jcsBytes(ownerObject(log.owner, prev.digest))
-    ],
-    [
-      KEYS2,
-      keysBytes
-    ],
-    ...files || /* @__PURE__ */ new Map()
-  ]);
-  const inv = await extendInventory(JSON.parse(new TextDecoder().decode(prev.inventory)), log.id, n, content, created || utcNow(), message2, user);
-  const invBytes = inventoryFile(inv);
-  const digest = await sha512hex(invBytes);
-  const pin = log.pin(prev.number);
-  const witnesses = /* @__PURE__ */ new Map();
-  for (const key of signers2) {
-    witnesses.set(await fileName(key.did), await signatureFile(key, log.id, `v${n}`, digest, log.owner, pin));
-  }
-  return append(log, await Version.make(n, content, invBytes, await sidecar(invBytes), witnesses));
-}
-async function rotate(log, signers2, { nextKeys, nextThreshold, add: add2 = [], retire = [], exposed = [], threshold = null, extensions = void 0, message: message2 = "Keys changed", user, created = null }) {
-  await checked(log);
-  const prev = log.latest();
-  if (!prev) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
-  const current = prev.keys.keys;
-  for (const did of retire) if (!current.includes(did)) throw new OwnerError(`${did} is not a current key of ${log.owner}`);
-  const keys = current.filter((k) => !retire.includes(k) && !exposed.includes(k));
-  for (const k of add2) if (!keys.includes(keyOf(k))) keys.push(keyOf(k));
-  if (extensions === void 0) extensions = log.extensions();
-  const next = [];
-  for (const k of nextKeys) next.push(await digestOf(k));
-  const data2 = keysFile({
-    keys,
-    threshold: threshold || prev.keys.threshold,
-    next,
-    nextThreshold,
-    extensions,
-    exposed: exposed.length ? exposed : null
-  });
-  return addVersion(log, data2, signers2, {
-    message: message2,
-    user,
-    created
-  });
-}
-function contentPath2(cp, inv, n) {
-  const cd = isObject(inv) && typeof inv.contentDirectory === "string" ? inv.contentDirectory : "content";
-  const safe = (p) => typeof p === "string" && p !== "" && !p.startsWith("/") && !p.includes("\\") && p.split("/").every((x) => ![
-    "",
-    ".",
-    ".."
-  ].includes(x));
-  if (!safe(cp) || !safe(cd) || cd.includes("/")) return false;
-  const parts = cp.split("/");
-  return parts.length >= 3 && /^v[1-9][0-9]*$/.test(parts[0]) && parts[1] === cd && Number(parts[0].slice(1)) <= n;
-}
-async function loadKeyLog(storage, dir, where2 = dir) {
-  const problems = [], versions2 = [];
-  const root = await storage.read(joinPath(dir, "inventory.json"));
-  const rootInv = jsonOrNull(root);
-  const head = typeof rootInv?.head === "string" && /^v[0-9]+$/.test(rootInv.head) ? Number(rootInv.head.slice(1)) : NaN;
-  if (!root || !Number.isInteger(head)) throw new OwnerError(`${where2}: not an OCFL object with an inventory`);
-  for (let n = 1; n <= head; n++) {
-    const vdir = joinPath(dir, `v${n}`);
-    const invBytes = await storage.read(joinPath(vdir, "inventory.json"));
-    const entry = jsonOrNull(invBytes);
-    if (!invBytes || !isObject(entry?.manifest) || !isObject(entry?.versions?.[`v${n}`]?.state)) {
-      problems.push(`v${n}: no readable inventory in the version folder (section 4.1)`);
-      break;
-    }
-    const sc = await storage.read(joinPath(vdir, "inventory.json.sha512")) || new Uint8Array();
-    if (sidecarDigest(sc) !== await sha512hex(invBytes)) problems.push(`v${n}: the checksum file does not state the digest of the inventory`);
-    const files = /* @__PURE__ */ new Map();
-    for (const [d, paths] of Object.entries(entry.versions[`v${n}`].state)) {
-      if (!Array.isArray(paths) || !paths.length) continue;
-      let bytes = new Uint8Array();
-      const cp = entry.manifest[d]?.[0];
-      if (!contentPath2(cp, entry, n)) {
-        problems.push(`v${n}: a content path out of the object: '${cp}'`);
-        problems.push(`v${n}: the content of ${paths[0]} is missing`);
-      } else {
-        bytes = await storage.read(joinPath(dir, cp)) ?? (problems.push(`v${n}: the content of ${paths[0]} is missing`), new Uint8Array());
-      }
-      if (await sha512hex(bytes) !== d) problems.push(`v${n}: ${paths[0]} does not have the digest its inventory states`);
-      for (const p of paths) files.set(p, bytes);
-    }
-    const witnesses = /* @__PURE__ */ new Map();
-    const wdir = joinPath(dir, WITNESSES, `v${n}`);
-    for (const { name: name2, kind } of await storage.list(wdir) || []) {
-      if (kind === "file") witnesses.set(name2, await storage.read(joinPath(wdir, name2)));
-    }
-    versions2.push(await Version.make(n, files, invBytes, sc, witnesses));
-  }
-  if (!versions2.length || !versions2[0].files.has(GENESIS)) throw new OwnerError(`${where2}: no genesis record in the first version`);
-  if (versions2[versions2.length - 1].number === head && !sameBytes(root, versions2[versions2.length - 1].inventory)) {
-    problems.push("the root inventory differs from that of the head version");
-  }
-  const log = await KeyLog.of(versions2[0].files.get(GENESIS), versions2, problems);
-  if (rootInv.id !== log.id) problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
-  return log;
-}
-
-// core/passkey.js
-init_crypto();
-init_keys();
-init_names();
-var UNLOCK_PAGE = `https://${PASSKEY_RP}/`;
-var UnlockFailed = class extends Error {
-};
-function b64url(bytes) {
-  return base64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-function fromB64url(text3) {
-  if (typeof text3 !== "string" || !/^[A-Za-z0-9_-]+$/.test(text3) || text3.length % 4 === 1) throw new Error("not base64url");
-  const b = text3.replaceAll("-", "+").replaceAll("_", "/");
-  return unbase64(b + "=".repeat((4 - b.length % 4) % 4));
-}
-function randomState() {
-  return b64url(crypto.getRandomValues(new Uint8Array(16)));
-}
-var CODE_LABEL = utf8("opensheaf unlock code v1");
-async function confirmationCode(state, pk) {
-  const d = await sha256(new Uint8Array([
-    ...CODE_LABEL,
-    ...utf8(state),
-    ...pk
-  ]));
-  const n = (d[0] << 24 >>> 0) + (d[1] << 16) + (d[2] << 8) + d[3];
-  const digits = String(n % 1e6).padStart(6, "0");
-  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
-}
-var HAND_OFF_INFO = utf8("opensheaf unlock hand-off v2");
-async function withPublic(privateKey) {
-  const jwk = await crypto.subtle.exportKey("jwk", privateKey);
-  return {
-    privateKey,
-    publicKey: fromB64url(jwk.x)
-  };
-}
-async function newKeyPair() {
-  const pair = await crypto.subtle.generateKey({
-    name: "X25519"
-  }, true, [
-    "deriveBits"
-  ]);
-  return withPublic(pair.privateKey);
-}
-async function handOffKeys(pair, other, state) {
-  const pub = await crypto.subtle.importKey("raw", other, {
-    name: "X25519"
-  }, true, []);
-  const shared = new Uint8Array(await crypto.subtle.deriveBits({
-    name: "X25519",
-    public: pub
-  }, pair.privateKey, 256));
-  const both = await hkdf(shared, utf8(state), HAND_OFF_INFO, 64);
-  return [
-    both.slice(0, 32),
-    both.slice(32)
-  ];
-}
-function associatedData(mode, owner, cred, pk, epk) {
-  return utf8(`${mode}|${owner}|${cred}|${b64url(pk)}|${b64url(epk)}`);
-}
-function sameSecret(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let k = 0; k < a.length; k++) diff |= a[k] ^ b[k];
-  return diff === 0;
-}
-var xor = (a, b) => a.map((x, k) => x ^ b[k]);
-async function unseal2(pair, epk, ct, tag, state, mode, owner, cred) {
-  if (epk.length !== 32 || ct.length !== 32 || tag.length !== 32) throw new Error("not a hand-off of 32 bytes");
-  const [enc, mac] = await handOffKeys(pair, epk, state);
-  const aad = associatedData(mode, owner, cred, pair.publicKey, epk);
-  if (!sameSecret(await hmacSha256(mac, new Uint8Array([
-    ...aad,
-    ...ct
-  ])), tag)) {
-    throw new Error("the answer of the page is not authentic");
-  }
-  return xor(ct, enc);
-}
-var NO_X25519 = "this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase";
-function failure(result) {
-  const error = result.error;
-  return new UnlockFailed(error === "x25519-unavailable" ? NO_X25519 : `the page says: ${error.slice(0, 200)}`);
-}
-function answerOf(result, creds = []) {
-  const secret = result.secret || new Uint8Array(), cred = result.cred ?? null;
-  if (secret.length !== 32) throw new UnlockFailed("the page sent a secret that is not 32 bytes");
-  if (creds.length && cred !== null && !creds.includes(cred)) throw new UnlockFailed("the page used another passkey than those asked for");
-  return [
-    cred,
-    secret
-  ];
-}
-var POPUP = "popup";
-var POPUP_ENROLL = "popup-enroll";
-var UNLOCK_ORIGIN = new URL(UNLOCK_PAGE).origin;
-var POPUP_MESSAGES = {
-  ready: "opensheaf-unlock-ready",
-  request: "opensheaf-unlock-request",
-  answer: "opensheaf-unlock-answer",
-  done: "opensheaf-unlock-done"
-};
-function popupMode(mode) {
-  if (mode !== POPUP && mode !== POPUP_ENROLL) throw new UnlockFailed(`not a mode of the popup: ${mode}`);
-  return mode;
-}
-function popupUrl(origin, mode = POPUP) {
-  return UNLOCK_PAGE + "#" + new URLSearchParams({
-    mode: popupMode(mode),
-    origin
-  }).toString();
-}
-async function popupRequest(owner, creds, pair = null, state = null, mode = POPUP) {
-  if (!OWNER_NAME.test(owner || "")) throw new UnlockFailed(`not an owner name: ${owner}`);
-  if (!creds.length && popupMode(mode) === POPUP) {
-    throw new UnlockFailed("no passkey is enrolled for the keys of this owner (osheaf key enroll)");
-  }
-  pair ||= await newKeyPair();
-  state ||= randomState();
-  return {
-    owner,
-    mode,
-    creds: [
-      ...creds
-    ],
-    state,
-    pair,
-    code: await confirmationCode(state, pair.publicKey),
-    message: {
-      type: POPUP_MESSAGES.request,
-      state,
-      pk: b64url(pair.publicKey),
-      owner,
-      cred: creds.join(",")
-    }
-  };
-}
-function sameCode(typed, code) {
-  const digits = (t) => utf8(String(t ?? "").replace(/[^0-9]/g, ""));
-  return digits(typed).length === 6 && sameSecret(digits(typed), digits(code));
-}
-async function openPopupAnswer(request, data2, typed) {
-  if (!data2 || data2.type !== POPUP_MESSAGES.answer || typeof data2.state !== "string" || !sameSecret(utf8(data2.state), utf8(request.state))) {
-    throw new UnlockFailed("this is not the answer to this request");
-  }
-  if (typeof data2.error === "string") throw failure({
-    error: data2.error
-  });
-  if (!sameCode(typed, request.code)) {
-    throw new UnlockFailed("the code typed is not the code of this request: close the window of the passkey, and unlock again");
-  }
-  let secret;
-  try {
-    const [epk, ct, tag] = [
-      fromB64url(data2.epk),
-      fromB64url(data2.ct),
-      fromB64url(data2.tag)
-    ];
-    fromB64url(data2.cred);
-    secret = await unseal2(request.pair, epk, ct, tag, request.state, request.mode || POPUP, request.owner, data2.cred);
-  } catch {
-    throw new UnlockFailed("the page sent a damaged answer");
-  }
-  if (request.mode === POPUP_ENROLL) {
-    if (request.creds.includes(data2.cred)) throw new UnlockFailed("the page sent no new credential");
-    return answerOf({
-      cred: data2.cred,
-      secret
-    });
-  }
-  return answerOf({
-    cred: data2.cred,
-    secret
-  }, request.creds);
-}
-
-// core/owner.js
-init_discovery();
-init_describe();
-function theKeys(n, noun = "key") {
-  return n === 1 ? `the ${noun}` : `the ${n} ${noun}s`;
-}
-function walletStop(error) {
-  if (error instanceof WalletError || error instanceof KeyError || error instanceof OwnerError) stop(error.message);
-  throw error;
-}
-async function forbiddenRepositories(f) {
-  if (!f) return /* @__PURE__ */ new Set();
-  return archiveRepositories(f.env.wallets?.remotes ? await f.env.wallets.remotes() : "", f.archive.baseUrl);
-}
-async function configured(f, env = f.env) {
-  try {
-    return configuredWallet(f?.archive.keys, env, {
-      forbidden: await forbiddenRepositories(f)
-    });
-  } catch (error) {
-    return walletStop(error);
-  }
-}
-async function levelWallet(f, args, env = f.env) {
-  const spec = args.keys || args.wallet || OFFLINE;
-  if (spec === OFFLINE) return null;
-  try {
-    if (spec === "command") {
-      const w = await configured(f, env);
-      return w instanceof CommandWallet ? w : parseWallet(spec, env);
-    }
-    return parseWallet(spec, env, {
-      forbidden: await forbiddenRepositories(f)
-    });
-  } catch (error) {
-    return walletStop(error);
-  }
-}
-function walletConfig(args) {
-  const spec = args.keys || "";
-  return spec.startsWith("github:") ? {
-    wallet: spec
-  } : null;
-}
-function keptWhere(args, w, resolved) {
-  return [
-    ...args.export ? [
-      resolved
-    ] : [],
-    ...w ? [
-      w.name
-    ] : []
-  ].join(" and in ");
-}
-async function keepInWallet(f, w, owner, rotation, version, args, current = []) {
-  const env = f.env;
-  env.warn(risk(w.name, owner));
-  const unlocked = await unlockedPasskeys(env, owner);
-  const secret = unlocked.length ? await walletPassphrase(env, w, owner) : await env.passphrase({
-    where: w.name
-  });
-  try {
-    await w.checkWritable();
-    const todo = rotation.map((key) => [
-      key,
-      ROTATION,
-      version
-    ]);
-    for (const [key, v] of current) if (await w.read(owner, key.id, CURRENT) === null) todo.push([
-      key,
-      CURRENT,
-      v
-    ]);
-    const n = todo.length;
-    env.err(`Saving ${theKeys(n)} of ${short(owner)} to ${w.name}\u2026`);
-    let i = 0;
-    for (const [key, kind, v] of todo) {
-      const plain = kind === CURRENT && args.plainCurrent;
-      await putKey(w, owner, key, kind, v, plain ? null : secret, unlocked, env.cost);
-      env.err(`  ${++i}/${n} ${keyLabel(kind, key.did)}  saved`);
-    }
-  } catch (error) {
-    if (error instanceof WalletError || error instanceof KeyError) stop(`${error.message}: nothing was written to the key log`);
-    throw error;
-  }
-  enrollHint(env, owner, unlocked);
-}
-function askedOf(env) {
-  env.asked ??= {};
-  const a = env.asked;
-  a.passkeys ??= /* @__PURE__ */ new Map();
-  a.seen ??= /* @__PURE__ */ new Set();
-  a.failed ??= /* @__PURE__ */ new Set();
-  a.oldRp ??= /* @__PURE__ */ new Set();
-  return a;
-}
-async function unlockedPasskeys(env, owner) {
-  const salt = await passkeySalt(owner);
-  return [
-    ...askedOf(env).passkeys.values()
-  ].filter((p) => sameBytes(p.salt, salt));
-}
-async function walletEntries(w, owner) {
-  try {
-    const out = [];
-    for (const [o, kid] of await w.entries(owner)) out.push([
-      kid,
-      await readAny(w, o, kid)
-    ]);
-    return out;
-  } catch (error) {
-    return walletStop(error);
-  }
-}
-async function walletPassphrase(env, w, owner) {
-  if (env.passphrase.known?.()) return env.passphrase({
-    where: w.name
-  });
-  let texts = [];
-  try {
-    texts = (await walletEntries(w, owner)).map(([, t]) => t).filter((t) => wrapsOf(t).length);
-  } catch {
-    texts = [];
-  }
-  if (!texts.length) return env.passphrase({
-    where: w.name
-  });
-  const secret = await env.passphrase({
-    confirm: false,
-    where: w.name
-  });
-  try {
-    await readKey(texts[0], secret);
-  } catch (error) {
-    if (error instanceof KeyError) stop(`${error.message}: this is not the passphrase of the keys of ${short(owner)} in ${w.name}`);
-    throw error;
-  }
-  return secret;
-}
-function enrollHint(env, owner, unlocked) {
-  if (!unlocked.length && askedOf(env).seen.has(owner)) {
-    env.err(`The new keys of ${short(owner)} open with your passphrase only: run osheaf key enroll so that your passkey opens them too.`);
-  }
-}
-
-// core/init.js
-var SINGLE_ROTATION_RISK = "With a single rotation key, its loss leaves the owner unable ever to change its keys or end, and its theft lets the thief take the owner over (sections 6.2 and 15.1).";
-var ROTATION_KEYS_WARNING = "Keep the rotation keys safe: an owner left with fewer of them than the next version of its key log needs to sign can never change its keys or end (section 6.2).";
-function keyLabel(kind, did) {
-  return `${kind} key`.padEnd(14) + short(did);
-}
-function rotationLine(n, nextThreshold, where2, isNew = false) {
-  const verb = nextThreshold === 1 ? "signs" : "sign";
-  const more = n === 1 ? "" : `; any ${nextThreshold} of them ${verb} the next version of the key log`;
-  return `  rotation keys  ${n}${isNew ? " new" : ""}, kept in ${where2}${more}`;
-}
-async function exportAndConfirm(f, rotation, owner, version, args) {
-  const env = f.env;
-  const secret = args.noPassphrase ? null : await env.passphrase({
-    confirm: true
-  });
-  const ex = env.exportFolder;
-  const inside = await ex.inside(args.export);
-  if (inside) stop(`${args.export} is inside the archive ${inside}: keys are never kept in an archive (section 15.4)`);
-  const paths = [];
-  try {
-    for (const key of rotation) {
-      const path = await ex.write(args.export, rotationFileName(owner, key), await rotationKeyText(key, owner, version, secret, args.cost || env.cost));
-      if ((await readRotationKey(await ex.read(path), secret)).key.did !== key.did) {
-        throw new KeyError(`${path} does not read back`);
-      }
-      paths.push(path);
-    }
-  } catch (error) {
-    if (error instanceof KeyError) stop(error.message);
-    throw error;
-  }
-  const lock = secret !== null ? "locked with your passphrase" : "with no lock (--no-passphrase)";
-  env.out(`Exported ${plural(rotation.length, "rotation key")} of ${short(owner)} to ${args.export}, ${lock}:`);
-  for (const key of rotation) {
-    env.out(`  ${keyLabel("rotation", key.did)}  ${rotationFileName(owner, key)}  check ${await sheetCheck(key.seed)}`);
-  }
-  if (args.print) for (const key of rotation) env.out(await rotationKeySheet(key, owner, version));
-  if (args.yes) return paths;
-  env.out("Put the files (or the printed sheets) away, apart from this computer and from each other.");
-  for (const key of rotation) {
-    const typed = (await env.input(`Type the check of ${rotationFileName(owner, key)} to confirm: `)).trim().toUpperCase();
-    if (typed !== await sheetCheck(key.seed)) {
-      stop("not confirmed: nothing was written to the key log (the exported files may be deleted)");
-    }
-  }
-  return paths;
-}
-async function ownerInit(f, args, { done = true } = {}) {
-  const env = f.env;
-  const single = Boolean(args.singleRotationKey);
-  const nRot = single ? 1 : Number(args.rotation || 3);
-  const nextThreshold = single ? 1 : Number(args.nextThreshold || Math.floor(nRot / 2) + 1);
-  const others = [
-    ...args.key || []
-  ];
-  const threshold = Number(args.threshold || 1);
-  if (!(nextThreshold >= 1 && nextThreshold <= nRot) || !(threshold >= 1 && threshold <= 1 + others.length)) {
-    stop("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)");
-  }
-  if (args.keeper && !keeperValid(args.keeper)) {
-    stop(`a keeper is an ORCID iD (with its check digit) or https://<domain>/: ${args.keeper}`);
-  }
-  const w = await levelWallet(f, args);
-  if (!w && !args.export) {
-    stop("give --export DIR, a folder outside the archive where the rotation keys are written (or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)");
-  }
-  if (w && args.noPassphrase) stop("--no-passphrase: the keys in a wallet are always locked with a passphrase");
-  if (!w && !env.keyStore.keptOnDevice()) {
-    stop("OPENSHEAF_KEY_STORE=none keeps no current key on this computer: keep the keys in a wallet (--keys github:OWNER/REPO|command)");
-  }
-  for (const did of others) {
-    try {
-      didKeyPublic(did);
-    } catch {
-      stop(`not a did:key URI of an Ed25519 key: ${did}`);
-    }
-  }
-  const current = await env.newKey();
-  const rotation = [];
-  for (let k = 0; k < nRot; k++) rotation.push(await env.newKey());
-  let log;
-  for (; ; ) {
-    try {
-      log = await newOwner([
-        current,
-        ...others
-      ], rotation, {
-        threshold,
-        nextThreshold,
-        keeper: args.keeper || null
-      });
-    } catch (error) {
-      stop(error.message);
-    }
-    if (!await f.storage.kind(await f.dirOf(log.id))) break;
-  }
-  if (nextThreshold === 1) env.warn(SINGLE_ROTATION_RISK);
-  if (args.export) await exportAndConfirm(f, rotation, log.owner, 1, args);
-  if (w) await keepInWallet(f, w, log.owner, rotation, 1, args, [
-    [
-      current,
-      1
-    ]
-  ]);
-  let store;
-  try {
-    store = await env.keyStore.keep(log.owner, current);
-  } catch (error) {
-    if (error instanceof KeyError || error.code) stop(error.message);
-    throw error;
-  }
-  await writeKeyLog(f.storage, await f.dirOf(log.id), log);
-  f.changed();
-  const kept = store === "none" ? `${w.name} only (OPENSHEAF_KEY_STORE=none)` : env.keyStore.storeName(store);
-  env.out(`${done ? "Done: the" : "The"} owner ${short(log.owner)} is made, with v1 of its key log:`);
-  env.out(`  owner          ${log.owner}`);
-  env.out(`  current key    ${current.did}, kept in ${kept}`);
-  for (const did of others) env.out(`  current key    ${did}, of another device`);
-  const resolved = args.export ? await env.exportFolder.resolve(args.export) : null;
-  env.out(rotationLine(nRot, nextThreshold, keptWhere(args, w, resolved)));
-  env.warn(ROTATION_KEYS_WARNING);
-  return log;
-}
-var GITATTRIBUTES = `# OpenSheaf archive files: stored and checked out byte for byte,
-# never merged as text (OpenSheaf archives in git, section 4.1). Every
-# attribute is named, so that no attribute of the user's own settings (a
-# user-wide \`*.pdf filter=lfs\`, for instance) applies to them.
-opensheaf.json -text -filter -ident -working-tree-encoding -export-subst -merge
-ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge
-indexes.json   -text -filter -ident -working-tree-encoding -export-subst -merge
-names/**       -text -filter -ident -working-tree-encoding -export-subst -merge
-owners/**      -text -filter -ident -working-tree-encoding -export-subst -merge
-sha512/**      -text -filter -ident -working-tree-encoding -export-subst -merge
-*.pdf binary
-`;
-async function init(storage, env, args, where2) {
-  for (const n of CONFIG_NAMES) if (await storage.kind(n)) exit(`${where2} has a configuration already`);
-  const layout = LAYOUTS[args.layout || "owner-name"];
-  if (!layout) exit(`--layout is one of ${Object.keys(LAYOUTS).join(", ")}`);
-  if (Boolean(args.newOwner) === Boolean(args.owner)) stop("init: give --new-owner, or --owner NAME --key-log DIR");
-  if (args.index && args.index !== "website") {
-    stop(`--index ${args.index}: the TeXmacs index is made by opensheaf-py`);
-  }
-  if (!args.name || !args.baseUrl || !args.curator) stop("init: give --name, --base-url and --curator");
-  const [family, given] = (() => {
-    const k = args.curator.indexOf(",");
-    return k < 0 ? [
-      args.curator.trim(),
-      ""
-    ] : [
-      args.curator.slice(0, k).trim(),
-      args.curator.slice(k + 1).trim()
-    ];
-  })();
-  const cfg = {
-    owner: null,
-    name: args.name,
-    contact: args.contact || args.baseUrl,
-    baseUrl: args.baseUrl.endsWith("/") ? args.baseUrl : args.baseUrl + "/",
-    profiles: [
-      "website"
-    ],
-    storageLayout: layout,
-    mainCollection: "main",
-    curator: {
-      name: given ? `${family}, ${given}` : family,
-      givenName: given,
-      familyName: family,
-      affiliation: args.affiliation || ""
-    },
-    depositor: {
-      name: `${given} ${family}`.trim(),
-      address: args.contact || args.baseUrl
-    },
-    index: {
-      html: {
-        templates: "templates"
-      }
-    }
-  };
-  const f = new ArchiveFolder(storage, env);
-  f.archive = {
-    ...cfg
-  };
-  f.layout = layout;
-  await f.initStorageRoot();
-  let log;
-  if (args.newOwner) {
-    log = await ownerInit(f, args, {
-      done: false
-    });
-  } else {
-    if (!args.keyLog) stop("init --owner NAME needs --key-log DIR, the folder of its owner object");
-    try {
-      const { storage: from, dir, where: shown } = args.keyLogSource;
-      log = await loadKeyLog(from, dir, shown);
-    } catch (error) {
-      if (error instanceof OwnerError) stop(error.message);
-      throw error;
-    }
-    const { errors } = await log.check();
-    if (log.owner !== args.owner || errors.length) {
-      stop(`${args.keyLog} is not a valid key log of ${short(args.owner)}: ` + errors.join("; "));
-    }
-    if (log.ended) stop(`the owner ${short(log.owner)} has ended (section 6.3)`);
-    await writeKeyLog(storage, await f.dirOf(log.id), log);
-    f.changed();
-  }
-  cfg.owner = log.owner;
-  if (args.newOwner && walletConfig(args)) cfg.keys = walletConfig(args);
-  await writeText(storage, CONFIG_NAME, jsonText(cfg));
-  if (!await storage.kind(".gitattributes")) await writeText(storage, ".gitattributes", GITATTRIBUTES);
-  for (const name2 of TEMPLATES) {
-    if (!await storage.kind(`templates/${name2}`)) await storage.write(`templates/${name2}`, await env.template(name2));
-  }
-  await f.configure();
-  await collect2(f, {
-    curated: args.curated
-  });
-  await writeDiscovery(f);
-  await readableIndex(f);
-  env.out(`Done: the archive is made in ${where2}, owned by ${short(log.owner)}. Edit ${CONFIG_NAME} and templates/, then deposit a paper: osheaf deposit --new LABEL ...`);
-  env.err("Note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in incompatible ways, and archives may have to be rebuilt.");
-  return f;
-}
-
-// core/requests.js
 var Problem = class extends Error {
 };
 var LINK2 = /^!?\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)$/;
@@ -22554,11 +22819,11 @@ async function sources(form) {
   if (!mainName) {
     throw new Problem("Several source files are attached: put them in one zip, or say which one is the main source in the field **Main source**.");
   }
-  const named = files.find((p) => p.name === safeName(mainName));
-  if (!named) throw new Problem(`The main source \`${mainName}\` is not among the attached files.`);
+  const named2 = files.find((p) => p.name === safeName(mainName));
+  if (!named2) throw new Problem(`The main source \`${mainName}\` is not among the attached files.`);
   return [
-    named,
-    files.filter((p) => p !== named).map((p) => ({
+    named2,
+    files.filter((p) => p !== named2).map((p) => ({
       ...p,
       logical: p.name
     }))
@@ -23019,8 +23284,8 @@ async function setupOp(r, form, origin) {
   } catch {
     throw new Problem("The key log given is not the folder of an owner object: it should hold the `inventory.json` of `sheaf:<owner>:<owner>` (copy `ocfl/<owner>/<owner>/` of the archive where the owner was made).");
   }
-  const named = field(form, "Owner");
-  if (named && named !== owner) throw new Problem(`The key log given is that of the owner \`${owner}\`, not \`${named}\`.`);
+  const named2 = field(form, "Owner");
+  if (named2 && named2 !== owner) throw new Problem(`The key log given is that of the owner \`${owner}\`, not \`${named2}\`.`);
   const args = {
     owner,
     keyLog: folder.where,
@@ -23043,6 +23308,13 @@ async function setupOp(r, form, origin) {
     if (value) args[option] = value;
   }
   await initCommand(r, args);
+  const wallet = field(form, "Key wallet");
+  if (wallet) await osheaf(r, (f) => keyWallet(f, {
+    owner,
+    add: wallet
+  }, f.env), {
+    presented: false
+  });
   if (await r.storage.kind(KEY_LOG) === "dir") await removeTree2(r.storage, KEY_LOG);
   const purpose = field(form, "Purpose").toLowerCase() || "papers";
   let done;
@@ -23464,6 +23736,62 @@ async function enrollPasskey(wallet, plan, passphrase, cred, prf, { cost = {}, p
   } finally {
     kek.fill(0);
   }
+}
+function walletCandidates(settings2, owner, given = []) {
+  const out = [];
+  for (const w of [
+    ...hints(settings2?.keys, owner),
+    ...given
+  ]) {
+    if (typeof w === "string" && /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(w) && !out.includes(w)) out.push(w);
+  }
+  return out;
+}
+async function holdingWallet(wallets, owner) {
+  for (const w of wallets) {
+    try {
+      if ((await w.entries(owner)).length) return w;
+    } catch (error) {
+      if (!(error instanceof WalletError)) throw error;
+    }
+  }
+  return null;
+}
+async function directRecordWallet({ repo, github, env, owner, wallet, mirror = null, cache = /* @__PURE__ */ new Map(), origin = "the OpenSheaf manager", attempts = 3 }) {
+  const said = [];
+  const quiet = {
+    ...env,
+    out: (l) => said.push(l),
+    err: (l) => said.push(l)
+  };
+  const done = await oneCommit(repo, github, async (storage) => {
+    said.length = 0;
+    const f = await ArchiveFolder.open(storage, quiet);
+    try {
+      await keyWallet(f, {
+        owner,
+        add: wallet
+      }, quiet);
+    } catch (error) {
+      if (error instanceof Stop) throw new OwnerError(error.message);
+      throw error;
+    }
+    const recorded = said.some((l) => l.startsWith("Done: "));
+    return {
+      message: recorded ? `Key wallet ${wallet} hinted for ${short(owner)} in osheaf.json (${origin})
+` : null,
+      recorded
+    };
+  }, {
+    mirror,
+    cache,
+    attempts
+  });
+  return {
+    recorded: Boolean(done.recorded),
+    commit: done.commit || null,
+    said
+  };
 }
 function walletRotationKeys(entries, next) {
   return entries.filter((e) => e.fields.kind === ROTATION && next.includes(e.fields.digest)).map((e) => e.fields.digest);
@@ -24076,12 +24404,14 @@ export {
   checkWallet,
   checksConfirmed,
   confirmationCode,
+  directRecordWallet,
   directRotate,
   directSetup,
   directWrite,
   enrollPasskey,
   enrollPlan,
   gitBlobSha,
+  holdingWallet,
   keepRotationKeys,
   keyFromText,
   keyLogFolder2 as keyLogFolder,
@@ -24097,6 +24427,7 @@ export {
   openWithPassphrase,
   ownerKeyLog,
   ownerLabelProblem,
+  ownersHeld,
   passphraseConfirmed,
   popupRequest,
   popupUrl,
@@ -24117,7 +24448,9 @@ export {
   signingCopy,
   storeSecret,
   verifyFolder,
+  walletCandidates,
   walletEntries2 as walletEntries,
+  hints as walletHints,
   walletLocks,
   walletRotationKeys
 };

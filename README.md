@@ -39,9 +39,15 @@ still checks every push.
 **The keys.** The owner's current keys are those of its key wallet, a
 private GitHub repository where `osheaf key push --wallet
 github:OWNER/REPOSITORY` put them, each locked with the passphrase and the
-owner's passkeys (`osheaf key enroll`). The wallet is named by `keys` in
-the archive's `osheaf.json`, or given in the page (kept in this browser:
-a name, not a secret). The passkeys belong to
+owner's passkeys (`osheaf key enroll`). The wallet is the first that
+the archive's `osheaf.json` hints for the owner (`"keys": {"<owner>":
+{"wallets": [...]}}`, or the earlier `"keys": {"wallet": ...}` for every
+owner), or else the one given in the page (kept in this browser: a name,
+not a secret). Wallets and owners are many to many (a wallet may hold the
+keys of several owners, several people may share an owner's keys, each
+with a passkey of their own, and an owner's keys may be in several
+wallets); choosing a wallet, then the owners to unlock in it, is the
+next step of the page. The passkeys belong to
 <https://unlock.opensheaf.org/>, which no other page can ask; the page
 opens it in a **popup** ("Unlock with your passkey", or the first change
 sent): the popup asks for the passkey (Touch ID), seals its secret to a
@@ -69,7 +75,10 @@ wallet: ready (manage)"; once the keys are unlocked, it is not shown):
    the OpenSheaf app (a link to the installation's settings, which GitHub
    gives the page, or to install the app). The page checks that the
    repository is private, not the archive's, and that the sign-in can read
-   and write it; `osheaf key push` refuses a public repository too.
+   and write it; `osheaf key push` refuses a public repository too. Once
+   the wallet holds keys of the owner, and the archive's `osheaf.json`
+   hints no wallet for it, the page records it there, in a commit, as a
+   hint for the owner (as `osheaf key push --wallet` does), and says so.
 2. *The current key*: the person picks the key file of `osheaf`'s key
    store (`~/.config/opensheaf/keys/OWNER/K.key`, one line, the seed in
    base64) or pastes it, or the text of `osheaf key export --stdout` when
@@ -178,8 +187,10 @@ where it stopped, the keys kept in memory meanwhile (leaving the page asks
 first):
 
 1. the archive set up as the template's setup sets it up (`osheaf init`
-   with that owner; for a selection or a catalogue, its collection created
-   and featured on the home page), verified, one commit;
+   with that owner; the key wallet recorded in `osheaf.json` as a hint for
+   the owner, the setup's field "Key wallet"; for a selection or a
+   catalogue, its collection created and featured on the home page),
+   verified, one commit;
 2. the labels of the issue forms, if the sign-in may create labels
    (*Issues: read and write*; the App does not ask for it: the workflow
    "Set up the archive", run once, creates them);
