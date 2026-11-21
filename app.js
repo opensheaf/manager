@@ -768,13 +768,58 @@ const setup = { repo: null, node: null, state: null, busy: false, keyMode: "file
 function setupPanel() {
   if (setup.repo !== state.repo || !setup.node) {
     direct.forgetNewKey(setup.pending);
-    Object.assign(setup, { repo: state.repo, state: null, busy: false, keyMode: "file", source: null, pending: null });
+    Object.assign(setup, { repo: state.repo, state: null, busy: false, keyMode: "file", source: null, pending: null,
+                           checking: null, shownOpen: null });
     setup.node = el("details", { class: "how setup" });
     setup.node.addEventListener("toggle", () => { if (setup.node.open && !setup.body) renderSetup(); });
     setup.body = null;
     setup.node.append(el("summary", {}, "Set up a key wallet"));
   }
+  setupSummary();
+  checkQuietly();
   return setup.node;
+}
+
+// Whether the wallet is ready: it holds enough of the owner's current keys
+// to sign, and a passkey opens enough of them (as checked by setupState).
+function walletReady(st = setup.state) {
+  const s = state.signers;
+  return Boolean(st && s && st.there.length >= s.threshold && st.enrolled.length >= s.threshold);
+}
+
+// The panel's title and whether it is open, from the checked state: ready,
+// folded as "The key wallet: ready (manage)"; checked and not ready, open;
+// not checked yet, folded. Opened or closed by the person, it stays so.
+function setupSummary() {
+  const ready = walletReady();
+  const summary = setup.node.querySelector("summary");
+  summary.textContent = ready ? "The key wallet: \u2713 ready (manage)" : "Set up a key wallet";
+  const open = setup.state ? !ready : false;
+  if (setup.shownOpen !== open) {
+    setup.shownOpen = open;
+    if (setup.node.open !== open) {
+      setup.node.open = open;
+      if (open && !setup.body) renderSetup();
+    }
+  }
+}
+
+// The wallet named, checked once in the background when the archive opens
+// (no message), so that the panel shows how it stands.
+function checkQuietly() {
+  const s = state.settings, repo = state.repo;
+  if (!s || !s.owner || setup.state || setup.checking || setup.busy) return;
+  const w = direct.walletName(s, pref(WALLET + s.owner));
+  if (!w) return;
+  const gh = ghCore();
+  setup.checking = (async () => {
+    state.signers ||= await direct.signersOf({ gh, repo, cache: state.cache, settings: s });
+    const st = await direct.setupState({ gh, archiveRepo: repo, settings: s, wallet: w, signers: state.signers });
+    if (state.repo !== repo || setup.repo !== repo || setup.state) return;
+    setup.state = st;
+    setupSummary();
+    if (setup.body) renderSetup();
+  })().catch(() => { /* said when checked by hand */ }).finally(() => { setup.checking = null; });
 }
 
 function installLink(walletOwner) {
@@ -788,10 +833,15 @@ const short = (did) => el("code", { title: did }, `${did.slice(8, 20)}...`);
 function renderSetup() {
   const s = state.settings;
   const named = direct.walletName(s);
-  const given = named || direct.walletName({}, pref(WALLET + s.owner)) || `github:${state.user ? state.user.login : "you"}/opensheaf-keys`;
   const st = setup.state;
-  const walletInput = el("input", { id: "setup-wallet", value: given, "aria-label": "Key wallet", disabled: named ? true : undefined });
-  const name = () => direct.walletName({}, walletInput.value.trim());
+  // one wallet field: the one next to "Unlock with your passkey" (or the
+  // wallet osheaf.json names); step 1 checks it
+  const above = () => document.getElementById("wallet");
+  const given = () => named || (above() ? above().value.trim() : pref(WALLET + s.owner)) ||
+    `github:${state.user ? state.user.login : "you"}/opensheaf-keys`;
+  const walletInput = el("code", { id: "setup-wallet" }, given());
+  const name = () => direct.walletName({}, given());
+  if (above()) above().oninput = () => { walletInput.textContent = given(); drawLinks(); };
   const links = el("span", { class: "small" });
   const drawLinks = () => {
     const w = name();
@@ -799,7 +849,6 @@ function renderSetup() {
       " (private), then ", el("a", { href: installLink(w.slice(7).split("/")[0]), target: "_blank", rel: "noopener" },
         "add it to the OpenSheaf app's repositories"), "."] : ["Name it github:OWNER/REPOSITORY."]));
   };
-  walletInput.addEventListener("input", drawLinks);
   drawLinks();
   const busy = (b) => { setup.busy = b; setup.node.querySelectorAll("button").forEach((x) => { x.disabled = b; }); };
   const check = async () => {
@@ -826,7 +875,7 @@ function renderSetup() {
       "open it, as ", el("code", {}, "osheaf key push"), " and ", el("code", {}, "osheaf key enroll"), " do: the same files, " +
       "which osheaf reads too. Each change is a commit to the wallet."),
     el("h4", {}, "1. The wallet"),
-    el("p", {}, "A private repository of yours, never the archive's: "),
+    el("p", {}, "A private repository of yours, never the archive's, named above", named ? " (by osheaf.json)" : "", ": "),
     el("div", { class: "controls" }, walletInput, el("button", { onclick: check }, "Check the wallet")),
     el("p", {}, links),
   ];
@@ -947,6 +996,7 @@ function renderSetup() {
   setup.body = el("div", { class: "setup-body" }, steps);
   setup.node.replaceChildren(setup.node.firstChild, setup.body);
   if (setup.busy) busy(true);
+  setupSummary();
 }
 
 // Step 2, the other way: a new current key made in this page, added to the

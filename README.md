@@ -56,7 +56,11 @@ repository too (the page only reads it, except to set it up, below).
 
 **Setting up a wallet from the page.** An owner whose current key is on
 one computer only, in `osheaf`'s key store, sets up the wallet under
-"Write directly", "Set up a key wallet", while the keys are locked:
+"Write directly", "Set up a key wallet", while the keys are locked (the
+wallet named next to "Unlock with your passkey" is checked in the
+background when the archive opens: once it holds enough of the owner's
+current keys and a passkey opens them, the panel is folded as "The key
+wallet: ready (manage)"; once the keys are unlocked, it is not shown):
 
 1. *The wallet*: a private repository of the person's, never the
    archive's (a link opens GitHub's page to create it, filled in:
