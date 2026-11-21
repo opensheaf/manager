@@ -108,11 +108,14 @@ function message(kind, ...content) {
   const box = $("#toast");
   if (!content.length) { box.replaceChildren(); box.hidden = true; toast.kind = ""; return; }
   showToast(kind, content);
-  if (kind !== "info") {
-    messageLog.unshift({ kind, content, at: new Date() });
-    messageLog.length = Math.min(messageLog.length, 50);
-    showHistory();
-  }
+  if (kind !== "info") remember(kind, content);
+}
+
+// A message kept in the history (under Activity) without being shown.
+function remember(kind, content) {
+  messageLog.unshift({ kind, content, at: new Date() });
+  messageLog.length = Math.min(messageLog.length, 50);
+  showHistory();
 }
 
 function showToast(kind, content) {
@@ -222,10 +225,11 @@ function watchSite(repo, sha) {
         `Website: rebuilding with ${sha.slice(0, 7)} ... ${seconds} s`);
       else if (s === "published") {
         set("published", `✓ Website up to date (${sha.slice(0, 7)}, published in ${seconds} s)`);
-        // said as a message too, unless one that needs reading is shown
-        if (!["bad", "warn", "info"].includes(toast.kind) || $("#toast").hidden) {
-          message("ok", el("p", {}, "✓ The changes are on ", link(), `: GitHub Pages published commit ${sha.slice(0, 7)} in ${seconds} s.`));
-        }
+        // a message too, floating only if none is shown (the answer of the
+        // change stays up); always in the history
+        const said = [el("p", {}, "✓ The changes are on ", link(), `: GitHub Pages published commit ${sha.slice(0, 7)} in ${seconds} s.`)];
+        if ($("#toast").hidden) message("ok", ...said);
+        else remember("ok", said);
       } else if (s === "late") {
         set("late", `Website: ${sha.slice(0, 7)} not published after ${Math.round(seconds / 60)} min`);
         message("warn", el("p", {}, `Commit ${sha.slice(0, 7)} is not on `, link(), ` after ${Math.round(seconds / 60)} minutes: see `,
@@ -660,8 +664,14 @@ function showArchive() {
           o.status === "withdrawn" ? null :
             el("button", { class: "small", onclick: () => openForm("withdraw", { "Label": o.label }) }, "Withdraw")))))
       : el("p", { class: "muted" }, "No papers yet.")));
-  show("#archive", parts);
-  $("#archive").classList.toggle("compact", compact());
+  // drawn again in place: the page keeps its height while the archive is
+  // replaced, and the reader's position
+  const box = $("#archive"), y = window.scrollY;
+  box.style.minHeight = `${box.offsetHeight}px`;
+  show(box, parts);
+  box.classList.toggle("compact", compact());
+  box.style.minHeight = "";
+  window.scrollTo(0, y);
   showDock(true);
   showResults();
 }
