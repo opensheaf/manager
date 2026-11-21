@@ -88,3 +88,24 @@ test("a wallet this sign-in cannot read is said so", async () => {
   keys.forget();
   assert.equal(keys.of(owner).length, 0);
 });
+
+test("the popup's failures: said when its window is closed, from the popup only; its final answer says why", async () => {
+  const w = windows();
+  const p = unlockWithPopup({ win: w.win, open: w.open, mode: core.POPUP_ENROLL, prepare: async () => ({ owner, creds: [] }),
+                             askCode: async () => "" }).then(() => null, (e) => e);
+  await w.send({ type: "opensheaf-unlock-ready" });
+  const { message } = w.popup.posted[0];
+  await w.send({ type: "opensheaf-unlock-status", state: message.state, error: "from elsewhere" }, { origin: "https://evil.example" });
+  await w.send({ type: "opensheaf-unlock-status", state: message.state, error: "from another window" }, { source: {} });
+  await w.send({ type: "opensheaf-unlock-status", state: message.state, error: "NotAllowedError: not allowed." });
+  w.popup.closed = true;
+  assert.match(String(await p), /the window of the passkey was closed after: NotAllowedError: not allowed\.$/);
+  // the popup's own final answer, as it goes
+  const v = windows();
+  const q = unlockWithPopup({ win: v.win, open: v.open, prepare: async () => ({ owner, creds: [cred] }), askCode: async () => "" })
+    .then(() => null, (e) => e);
+  await v.send({ type: "opensheaf-unlock-ready" });
+  await v.send({ type: "opensheaf-unlock-answer", state: v.popup.posted[0].message.state,
+                 error: "the window was closed after: InvalidStateError: excluded" });
+  assert.match(String(await q), /the window was closed after: InvalidStateError: excluded/);
+});

@@ -33,6 +33,8 @@
 import * as core from "./vendor/opensheaf-manager.js";
 
 export const ORIGIN = "the OpenSheaf manager";
+// The popup's status: what failed there (the unlock page's MESSAGES.status).
+export const POPUP_STATUS = "opensheaf-unlock-status";
 export const POPUP_FEATURES = "popup,width=520,height=760";
 
 // The keys this page holds, by owner.
@@ -102,7 +104,7 @@ export function unlockWithPopup({ prepare, askCode, win = window, open = null, t
   const request = Promise.resolve().then(prepare).then(({ owner, creds }) => core.popupRequest(owner, creds, null, null, mode));
   request.catch(() => { try { popup.close(); } catch (_) { /* gone */ } });
   return new Promise((resolve, reject) => {
-    let answered = false;
+    let answered = false, lastStatus = "";
     const finish = (error, value) => {
       win.removeEventListener("message", onMessage);
       clearInterval(watch);
@@ -115,6 +117,11 @@ export function unlockWithPopup({ prepare, askCode, win = window, open = null, t
     const onMessage = async (event) => {
       if (event.origin !== core.UNLOCK_ORIGIN || event.source !== popup) return;
       const data = event.data || {};
+      if (data.type === POPUP_STATUS) {
+        // what failed in the popup, said if it is closed: information only
+        if (typeof data.error === "string") lastStatus = data.error.slice(0, 300);
+        return;
+      }
       if (data.type === core.POPUP_MESSAGES.ready) {
         try {
           popup.postMessage((await request).message, core.UNLOCK_ORIGIN);
@@ -133,7 +140,10 @@ export function unlockWithPopup({ prepare, askCode, win = window, open = null, t
     };
     win.addEventListener("message", onMessage);
     const watch = setInterval(() => {
-      if (popup.closed && !answered) finish(new core.UnlockFailed("the window of the passkey was closed"));
+      if (popup.closed && !answered) {
+        finish(new core.UnlockFailed(lastStatus ? `the window of the passkey was closed after: ${lastStatus}`
+                                                : "the window of the passkey was closed"));
+      }
     }, 500);
     const timer = setTimeout(() => finish(new core.UnlockFailed("no answer from the window of the passkey in time")), timeout);
   });
