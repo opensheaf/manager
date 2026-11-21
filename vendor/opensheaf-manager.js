@@ -1,4 +1,4 @@
-// opensheaf-js ed2da98d390722609440db032b01f52575d44dd7: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 1f95fec52d8ea2ed68736ed3d23226c98136d933: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -1329,13 +1329,13 @@ function lineStatuses(versions2, { exposed = /* @__PURE__ */ new Set(), forkPoin
   const direct = versions2.map((js) => signedDirectly(js));
   const clean = versions2.map((js) => signedDirectly(js, leaveOut));
   const would = versions2.map((js) => js.some((j) => j.status === UNCHECKED) || signedDirectly(js));
-  const later = (list2, k) => list2.slice(k).some(Boolean);
+  const later2 = (list2, k) => list2.slice(k).some(Boolean);
   return versions2.map((js, k) => {
-    if (direct[k] || later(direct, k + 1)) {
-      if (clean[k] || later(clean, k + 1)) return direct[k] ? SIGNED : VOUCHED;
+    if (direct[k] || later2(direct, k + 1)) {
+      if (clean[k] || later2(clean, k + 1)) return direct[k] ? SIGNED : VOUCHED;
       return CONTESTED;
     }
-    if (would[k] || later(would, k + 1)) return UNCHECKED;
+    if (would[k] || later2(would, k + 1)) return UNCHECKED;
     return js.some((j) => j.status === INVALID) ? INVALID : UNSIGNED;
   });
 }
@@ -1596,6 +1596,21 @@ var init_schema = __esm({
 });
 
 // core/owners.js
+var owners_exports = {};
+__export(owners_exports, {
+  INVENTORY_TYPE: () => INVENTORY_TYPE,
+  KEYS_FORMAT: () => KEYS_FORMAT,
+  KeyLog: () => KeyLog,
+  OBJECT_FORMAT: () => OBJECT_FORMAT,
+  RESERVED: () => RESERVED,
+  Version: () => Version,
+  describeVersion: () => describeVersion,
+  firstVersion: () => firstVersion,
+  jsonOrNull: () => jsonOrNull,
+  keyRules: () => keyRules,
+  ownerObject: () => ownerObject,
+  sidecarDigest: () => sidecarDigest
+});
 function jsonOrNull(bytes, { integers = false } = {}) {
   if (!bytes) return null;
   try {
@@ -1780,6 +1795,13 @@ function sameFiles(a, b) {
 }
 function arrayOf(x) {
   return Array.isArray(x) ? x : [];
+}
+function describeVersion(v) {
+  const k = v.keys || {};
+  if (v.forkRecord) return "fork record, carrying " + v.carried.map((c) => `v${c.number}`).join(", ");
+  if (k.ended) return "ended" + (k.successor ? `, successor ${k.successor}` : "");
+  const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  return `${count(arrayOf(k.keys).length, "current key")}, threshold ${k.threshold}, ${count(arrayOf(k.next).length, "rotation key")}, nextThreshold ${k.nextThreshold}` + (arrayOf(k.exposed).length ? `, exposes ${k.exposed.length}` : "");
 }
 var OBJECT_FORMAT, KEYS_FORMAT, INVENTORY_TYPE, OBJ, KEYS, FORKED, RESERVED, Version, CARRIED_FILES, KEYS_FIELDS, KeyLog;
 var init_owners = __esm({
@@ -2281,8 +2303,8 @@ function documentVersionErrors(inv, objOf2) {
           add2(ver, "history does not list each document version once");
         }
         hist.forEach((h, k) => {
-          const later = known.filter((v) => versionNumber(v) > versionNumber(h) && objOf2(v)?.documentVersion === docs[k]);
-          if (later.length) add2(ver, `history entry ${h} is not the last object version of ${docs[k]}`);
+          const later2 = known.filter((v) => versionNumber(v) > versionNumber(h) && objOf2(v)?.documentVersion === docs[k]);
+          if (later2.length) add2(ver, `history entry ${h} is not the last object version of ${docs[k]}`);
         });
       }
     }
@@ -9834,6 +9856,141 @@ var init_describe = __esm({
       ".txt": "text/plain",
       ".html": "text/html"
     };
+  }
+});
+
+// core/takedown.js
+var takedown_exports = {};
+__export(takedown_exports, {
+  mayReturn: () => mayReturn,
+  neededOwners: () => neededOwners,
+  removeEmptyAbove: () => removeEmptyAbove,
+  removeFolder: () => removeFolder,
+  takedown: () => takedown,
+  tombstoneOf: () => tombstoneOf
+});
+function tombstoneOf(f, id) {
+  return f.tombstones.find((t) => t.id === id) ?? null;
+}
+async function mayReturn(f, id, holds) {
+  const t = tombstoneOf(f, id);
+  if (!t) return true;
+  if (!await holds(Number(String(t.lastVersion).slice(1)), t.inventorySha512)) return false;
+  f.tombstones.splice(f.tombstones.indexOf(t), 1);
+  f.env.out(`${id} returns: its tombstone is dropped (section 13.2)`);
+  return true;
+}
+async function removeFolder(storage, path) {
+  if (!/^(ocfl|paper|site)\/./.test(path)) throw new Error(`not a folder a takedown removes: ${path}`);
+  const kind = await storage.kind(path);
+  if (kind === "dir") {
+    for (const entry of await storage.list(path) || []) await removeFolder(storage, joinPath(path, entry.name));
+  }
+  if (kind) await storage.remove(path);
+}
+async function removeEmptyAbove(storage, dir) {
+  for (let p = dir.slice(0, dir.lastIndexOf("/")); p !== "ocfl" && p.includes("/"); p = p.slice(0, p.lastIndexOf("/"))) {
+    if ((await storage.list(p) || []).length) break;
+    await storage.remove(p);
+  }
+}
+async function neededOwners(f) {
+  const out = /* @__PURE__ */ new Map();
+  const need = (owner, id) => {
+    if (!out.has(owner)) out.set(owner, []);
+    if (!out.get(owner).includes(id)) out.get(owner).push(id);
+  };
+  for (const { id, dir, inv } of await f.objects()) {
+    if (!id || !inv || id.startsWith("sheaf:draft:")) continue;
+    const [, name2, owner] = id.split(":");
+    if (name2 === owner) continue;
+    need(owner, id);
+    for (const ver of Object.keys(inv.versions)) {
+      for (let prefix = ""; ; prefix += "parent/") {
+        const bytes = await f.readLogical(dir, inv, prefix + "parent/object.json", ver);
+        if (!bytes) break;
+        let pobj;
+        try {
+          pobj = JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          break;
+        }
+        need(pobj?.owner, id);
+      }
+    }
+  }
+  return out;
+}
+async function takedown(f, args) {
+  const env = f.env;
+  const id = await lineOf(f, args.label);
+  if (id.startsWith("sheaf:draft:")) exit("a draft is deleted, not taken down: osheaf draft delete (section 10.1)");
+  const dir = await f.dirOf(id);
+  const inv = await f.inventory(dir);
+  const head = await f.readObjectJson(dir, inv, OBJ2) || {};
+  const [, name2, owner] = id.split(":");
+  if (head.kind === "owner") {
+    const users = ((await neededOwners(f)).get(owner) || []).filter((i) => i !== id);
+    if (users.length && !(args.byLaw || args.keeper)) {
+      exit(`the key log of ${owner} is needed by ${users.length} object(s) of this archive: it is taken down only for itself, by law or at its keeper's request (section 13.2); give --by-law or --keeper`);
+    }
+    if (users.length) {
+      env.err(`warning: the signatures of ${owner} in ${users.length} object(s) become unchecked here, and the tombstone stands in for its key log (sections 6.5 and 13.2)`);
+    }
+  }
+  if (!args.reason || !args.reason.trim()) exit("a takedown needs --reason, a plain text (section 13.3)");
+  if (!args.yes) {
+    const typed = (await env.input(`take down ${id} for good? type ${name2.slice(0, 8)} to confirm: `)).trim();
+    if (typed !== name2.slice(0, 8)) exit("not confirmed: nothing was taken down");
+  }
+  const genesis = await f.readLogical(dir, inv, GENESIS2, "v1");
+  const tomb = {
+    id,
+    kind: head.kind ?? null,
+    name: name2,
+    owner,
+    genesisName: await nameOf(genesis),
+    lastVersion: inv.head,
+    inventorySha512: sidecarDigest(await f.storage.read(joinPath(dir, "inventory.json.sha512"))),
+    date: env.today(),
+    reason: args.reason.trim()
+  };
+  await writeIndexes(f);
+  const label = f.labelOf(id);
+  if (label) f.labels.delete(label);
+  const cfg = await readJson(f.storage, CONFIG_NAME);
+  const former = {
+    ...cfg.formerAddresses || {}
+  };
+  const gone = Object.keys(former).filter((a) => former[a] === id);
+  for (const folder of [
+    `paper/${label || name2}`,
+    `site/${label || name2}`,
+    ...gone.filter((a) => LABEL.test(a)).map((a) => `site/${a}`)
+  ]) {
+    await removeFolder(f.storage, folder);
+  }
+  if (gone.length) {
+    for (const a of gone) delete former[a];
+    if (Object.keys(former).length) cfg.formerAddresses = former;
+    else delete cfg.formerAddresses;
+    await f.writeConfig(cfg);
+  }
+  await removeFolder(f.storage, dir);
+  await removeEmptyAbove(f.storage, dir);
+  f.changed();
+  f.tombstones.push(tomb);
+  await writeDiscovery(f);
+  env.out(`${label || id}: taken down (${inv.head}); tombstone written (section 13.3)`);
+}
+var init_takedown = __esm({
+  "core/takedown.js"() {
+    init_names();
+    init_owners();
+    init_storage();
+    init_discovery();
+    init_folder();
+    init_describe();
   }
 });
 
@@ -18519,6 +18676,7 @@ var OwnerError = class extends Error {
 };
 var OBJ3 = "object.json";
 var KEYS2 = "keys.json";
+var FORKED2 = "forked/";
 var KEYS_FORMAT2 = "opensheaf-keys/0.2";
 function keysFile({ keys = null, threshold = null, next = null, nextThreshold = null, extensions = null, exposed = null, ended = false, successor = null } = {}) {
   const d = {
@@ -18679,6 +18837,99 @@ async function rotate(log, signers2, { nextKeys, nextThreshold, add: add2 = [], 
     created
   });
 }
+async function recordFork(log, other, { user, message: message2 = "Fork record: another version met", created = null }) {
+  const { errors } = await checked(log);
+  if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
+  if (log.forkRecord) throw new OwnerError("a fork met once the key log has a fork record is reported, not recorded");
+  const prev = log.versions[log.versions.length - 1];
+  const content = /* @__PURE__ */ new Map([
+    [
+      GENESIS,
+      log.genesis
+    ],
+    [
+      OBJ3,
+      jcsBytes(ownerObject(log.owner, prev.digest))
+    ]
+  ]);
+  for (const v of other) {
+    const base = `${FORKED2}${base32(await sha256(v.inventory)).slice(0, 16)}/`;
+    content.set(base + "inventory.json", v.inventory);
+    content.set(base + "inventory.json.sha512", v.sidecar?.length ? v.sidecar : await sidecar(v.inventory));
+    content.set(base + "keys.json", v.files.get(KEYS2) ?? v.files.get("keys.json"));
+    for (const [name2, bytes] of v.witnesses) content.set(base + name2, bytes);
+  }
+  const n = prev.number + 1;
+  const inv = await extendInventory(JSON.parse(new TextDecoder().decode(prev.inventory)), log.id, n, content, created || utcNow(), message2, user);
+  const invBytes = inventoryFile(inv);
+  return append(log, await Version.make(n, content, invBytes, await sidecar(invBytes)));
+}
+async function copyOf(v) {
+  return Version.make(v.number, v.files, v.inventory, v.sidecar, v.witnesses);
+}
+async function metFork(log, otherSide, user, created) {
+  if (log.forkRecord) return [
+    "reported",
+    otherSide[0].number
+  ];
+  await recordFork(log, otherSide, {
+    user,
+    created
+  });
+  return [
+    "fork",
+    otherSide[0].number
+  ];
+}
+async function pull(log, other, { user, created = null }) {
+  if (!sameBytes(other.genesis, log.genesis)) throw new OwnerError("the other copy is the key log of another owner");
+  const { errors } = await checked(log);
+  if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
+  await other.check();
+  const mine = log.side(), theirs = other.side();
+  for (let k = 0; k < Math.min(mine.length, theirs.length); k++) {
+    if (mine[k].digest !== theirs[k].digest) return metFork(log, theirs.slice(mine[k].number - 1), user, created);
+  }
+  const theirFork = other.forkRecord;
+  if (theirs.length > mine.length) {
+    if (log.forkRecord) return [
+      "reported",
+      mine.length + 1
+    ];
+    for (const v of [
+      ...theirs.slice(mine.length),
+      ...theirFork ? [
+        theirFork
+      ] : []
+    ]) await append(log, await copyOf(v));
+    return [
+      "extended",
+      theirs.length - mine.length + (theirFork ? 1 : 0)
+    ];
+  }
+  if (theirFork) {
+    const first = theirFork.carried[0];
+    const held2 = first.number <= mine.length ? mine[first.number - 1] : null;
+    if (held2 && held2.digest !== first.digest) {
+      if (log.forkRecord) return [
+        "reported",
+        first.number
+      ];
+      if (theirs.length === mine.length && log.versions[log.versions.length - 1] === mine[mine.length - 1]) {
+        await append(log, await copyOf(theirFork));
+        return [
+          "fork",
+          first.number
+        ];
+      }
+      return metFork(log, theirFork.carried, user, created);
+    }
+  }
+  return [
+    theirs.length === mine.length ? "same" : "behind",
+    0
+  ];
+}
 function contentPath2(cp, inv, n) {
   const cd = isObject(inv) && typeof inv.contentDirectory === "string" ? inv.contentDirectory : "content";
   const safe = (p) => typeof p === "string" && p !== "" && !p.startsWith("/") && !p.includes("\\") && p.split("/").every((x) => ![
@@ -18833,6 +19084,7 @@ function answerOf(result, creds = []) {
 }
 var POPUP = "popup";
 var POPUP_ENROLL = "popup-enroll";
+var MAX_POPUP_OWNERS = 2;
 var UNLOCK_ORIGIN = new URL(UNLOCK_PAGE).origin;
 var POPUP_MESSAGES = {
   ready: "opensheaf-unlock-ready",
@@ -18851,14 +19103,39 @@ function popupUrl(origin, mode = POPUP) {
   }).toString();
 }
 async function popupRequest(owner, creds, pair = null, state = null, mode = POPUP) {
-  if (!OWNER_NAME.test(owner || "")) throw new UnlockFailed(`not an owner name: ${owner}`);
+  const owners = Array.isArray(owner) ? [
+    ...owner
+  ] : [
+    owner
+  ];
+  if (!owners.length || owners.length > MAX_POPUP_OWNERS || new Set(owners).size !== owners.length) {
+    throw new UnlockFailed(`a popup unlocks one owner, or two at once, not ${owners.length}`);
+  }
+  for (const o of owners) if (!OWNER_NAME.test(o || "")) throw new UnlockFailed(`not an owner name: ${o}`);
   if (!creds.length && popupMode(mode) === POPUP) {
     throw new UnlockFailed("no passkey is enrolled for the keys of this owner (osheaf key enroll)");
   }
+  if (owners.length > 1 && mode !== POPUP) throw new UnlockFailed("a passkey is created for one owner at a time");
   pair ||= await newKeyPair();
   state ||= randomState();
+  const pk = b64url(pair.publicKey), cred = creds.join(",");
+  const message2 = owners.length === 1 ? {
+    type: POPUP_MESSAGES.request,
+    state,
+    pk,
+    owner: owners[0],
+    cred
+  } : {
+    type: POPUP_MESSAGES.request,
+    v: 2,
+    state,
+    pk,
+    owners: owners.join(","),
+    cred
+  };
   return {
-    owner,
+    owner: owners[0],
+    owners,
     mode,
     creds: [
       ...creds
@@ -18866,13 +19143,7 @@ async function popupRequest(owner, creds, pair = null, state = null, mode = POPU
     state,
     pair,
     code: await confirmationCode(state, pair.publicKey),
-    message: {
-      type: POPUP_MESSAGES.request,
-      state,
-      pk: b64url(pair.publicKey),
-      owner,
-      cred: creds.join(",")
-    }
+    message: message2
   };
 }
 function sameCode(typed, code) {
@@ -18912,6 +19183,63 @@ async function openPopupAnswer(request, data2, typed) {
     cred: data2.cred,
     secret
   }, request.creds);
+}
+async function openPopupAnswers(request, data2, typed) {
+  const owners = request.owners || [
+    request.owner
+  ];
+  if (owners.length === 1) {
+    const [cred, secret] = await openPopupAnswer(request, data2, typed);
+    return {
+      cred,
+      secrets: [
+        [
+          owners[0],
+          secret
+        ]
+      ]
+    };
+  }
+  if (!data2 || data2.type !== POPUP_MESSAGES.answer || typeof data2.state !== "string" || !sameSecret(utf8(data2.state), utf8(request.state))) {
+    throw new UnlockFailed("this is not the answer to this request");
+  }
+  if (typeof data2.error === "string") throw failure({
+    error: data2.error
+  });
+  if (data2.v !== 2 || !Array.isArray(data2.sealed) || data2.sealed.length !== owners.length) {
+    throw new UnlockFailed("the page did not answer for every owner of the request (update the unlock page)");
+  }
+  if (!sameCode(typed, request.code)) {
+    throw new UnlockFailed("the code typed is not the code of this request: close the window of the passkey, and unlock again");
+  }
+  const secrets = [];
+  try {
+    fromB64url(data2.cred);
+    for (let k = 0; k < owners.length; k++) {
+      const s = data2.sealed[k] || {};
+      if (s.owner !== owners[k]) throw new Error("another owner");
+      const [epk, ct, tag] = [
+        fromB64url(s.epk),
+        fromB64url(s.ct),
+        fromB64url(s.tag)
+      ];
+      secrets.push([
+        owners[k],
+        await unseal2(request.pair, epk, ct, tag, request.state, POPUP, owners[k], data2.cred)
+      ]);
+    }
+  } catch {
+    for (const [, s] of secrets) s.fill(0);
+    throw new UnlockFailed("the page sent a damaged answer");
+  }
+  for (const [, s] of secrets) answerOf({
+    cred: data2.cred,
+    secret: s
+  }, request.creds);
+  return {
+    cred: data2.cred,
+    secrets
+  };
 }
 
 // core/owner.js
@@ -20061,10 +20389,24 @@ async function init(storage, env, args, where2) {
 
 // core/owner.js
 init_describe();
+async function keyLogOf2(f, owner) {
+  const dir = await f.dirOf(objectId(owner, owner));
+  if (await f.storage.kind(joinPath(dir, "inventory.json")) !== "file") return null;
+  try {
+    return await loadKeyLog(f.storage, dir);
+  } catch (error) {
+    if (error instanceof OwnerError) exit(error.message);
+    throw error;
+  }
+}
 function keyOwner(f, args) {
   const owner = args.owner || f?.archive.owner;
   if (!owner || !OWNER_NAME.test(owner)) stop("give --owner NAME, or run the command in an archive");
   return owner;
+}
+async function writeLog(f, log) {
+  await writeKeyLog(f.storage, await f.dirOf(log.id), log);
+  f.changed();
 }
 function theKeys(n, noun = "key") {
   return n === 1 ? `the ${noun}` : `the ${n} ${noun}s`;
@@ -20179,6 +20521,46 @@ async function keepInWallet(f, w, owner, rotation, version, args, current = []) 
     throw error;
   }
   enrollHint(env, owner, unlocked);
+}
+async function recordKeyLog(f, owner, others) {
+  const env = f.env;
+  let local = await keyLogOf2(f, owner);
+  if (!local) {
+    if (!others.length) return null;
+    const [w, first] = others.shift();
+    await first.check();
+    const { mayReturn: mayReturn2 } = await Promise.resolve().then(() => (init_takedown(), takedown_exports));
+    if (!await mayReturn2(f, objectId(owner, owner), async (n, d) => first.lookup(n, d) != null)) {
+      env.err(`warning: the key log of ${owner} was taken down here, and the copy at ${w} does not hold the version its tombstone pins (section 13.2): not copied`);
+      return null;
+    }
+    const { KeyLog: KeyLog2 } = await Promise.resolve().then(() => (init_owners(), owners_exports));
+    local = await KeyLog2.of(first.genesis, first.versions.filter((v) => v.isVersion));
+    env.out(`key log of ${owner}: copied from ${w} (v${local.versions.length})`);
+  }
+  for (const [w, other] of others) {
+    let what, n;
+    try {
+      [what, n] = await pull(local, other, {
+        user: f.depositor(),
+        created: env.now()
+      });
+    } catch (error) {
+      if (!(error instanceof OwnerError)) throw error;
+      env.err(`warning: the key log of ${owner} at ${w}: ${error.message}`);
+      continue;
+    }
+    if (what === "extended") env.out(`key log of ${owner}: ${n} version${n === 1 ? "" : "s"} added from the copy at ${w}`);
+    else if (what === "fork") {
+      env.out(`key log of ${owner}: a fork at v${n} met at ${w}: fork record appended as v${local.versions[local.versions.length - 1].number}; the owner has ended (section 6.3)`);
+    } else if (what === "reported") {
+      env.out(`key log of ${owner}: the copy at ${w} forks at v${n}; a fork record is held already, so it is reported, not recorded (section 6.3)`);
+    }
+  }
+  await writeLog(f, local);
+  const back = await keyLogOf2(f, owner);
+  await back?.check();
+  return back;
 }
 async function keyWallet(f, args, env) {
   const owner = keyOwner(f, args), who = short(owner);
@@ -22417,6 +22799,284 @@ async function lookForKeys(storage) {
 init_storage();
 init_write();
 init_inputs();
+
+// core/branch.js
+init_http();
+init_resolve();
+init_names();
+init_signatures();
+init_versions();
+init_paths();
+init_write();
+init_storage();
+init_discovery();
+init_folder();
+init_deposit();
+init_collections();
+
+// core/mirror.js
+init_http();
+init_resolve();
+init_names();
+init_owners();
+init_signatures();
+init_storage();
+init_write();
+init_crypto();
+init_keys();
+init_discovery();
+init_folder();
+init_collections();
+init_takedown();
+var MAX_BYTES = 2 ** 30;
+var MAX_FETCH_BYTES = 4 * 2 ** 30;
+function lineWitnessNames(log) {
+  let names = null;
+  return async () => {
+    if (names === null) {
+      const dids = /* @__PURE__ */ new Set();
+      for (const v of log?.versions || []) {
+        for (const did of v.keys?.keys || []) dids.add(did);
+        for (const c of (v.forkRecord ? v.carried : null) || []) for (const did of c.keys?.keys || []) dids.add(did);
+      }
+      names = (await Promise.all([
+        ...dids
+      ].filter((d) => typeof d === "string").map(fileName))).sort();
+    }
+    return names;
+  };
+}
+
+// core/branch.js
+async function fileOf(archive, id, inv, ver, logical) {
+  const url = archive.fileUrl(id, inv, ver, logical);
+  return url ? archive.http.request(url, {
+    limit: MAX_BYTES
+  }) : null;
+}
+async function branchPointFiles(c, k) {
+  const ver = `v${k}`, inv = c.line.inv, a = c.archive;
+  const state = filesOf(inv, ver);
+  const read = /* @__PURE__ */ new Map();
+  for (const p of Object.keys(state)) read.set(p, await fileOf(a, c.id, inv, ver, p));
+  const pobj = JSON.parse(new TextDecoder().decode(read.get(OBJ2)));
+  const files = /* @__PURE__ */ new Map();
+  for (const [p, bytes] of read) if (p !== "datacite.json" && p !== OBJ2 && !isEvidence(p)) files.set(p, bytes);
+  files.set("parent/inventory.json", await a.inventoryBytes(c.id, ver));
+  files.set("parent/object.json", read.get(OBJ2));
+  const names = await a.listWitnesses(c.id, ver) ?? await lineWitnessNames(c.line.log)();
+  const witnesses = /* @__PURE__ */ new Map();
+  for (const name2 of names) {
+    const bytes = await a.witness(c.id, ver, name2);
+    if (bytes) witnesses.set(name2, bytes);
+  }
+  const log = c.line.log;
+  const good = (await judgeFolder(witnesses, {
+    objectId: c.id,
+    version: ver,
+    inventory: c.digest(k),
+    owner: pobj.owner,
+    lookup: log ? (n, d) => log.lookup(n, d) : () => null
+  })).filter((j) => j.status === GOOD).map((j) => j.file);
+  for (const [name2, bytes] of witnesses) {
+    if (good.includes(name2) || good.some((g) => name2.startsWith(g + "."))) files.set(`parent/signatures/${name2}`, bytes);
+  }
+  for (const p of Object.keys(state).filter(isEvidence).sort()) files.set(`parent/${p}`, read.get(p));
+  const parent = {
+    owner: pobj.owner,
+    name: pobj.name,
+    objectVersion: ver,
+    documentVersion: pobj.documentVersion,
+    inventorySha512: c.digest(k)
+  };
+  return {
+    files,
+    parent
+  };
+}
+function chainOwners(files) {
+  const out = [];
+  for (let prefix = ""; files.has(prefix + "parent/object.json"); prefix += "parent/") {
+    out.push(JSON.parse(new TextDecoder().decode(files.get(prefix + "parent/object.json"))).owner);
+  }
+  return out;
+}
+async function levelOfFiles(files) {
+  const digests = /* @__PURE__ */ new Map();
+  for (const [p, bytes] of files) digests.set(p, await sha512(bytes));
+  return level(digests, async (p) => files.get(p));
+}
+async function branchName(f, genesis, parent, owner, later2) {
+  const taken = new Set(f.tombstones.filter((t) => t.owner === owner).map((t) => t.name));
+  for (let k = algorithm(parent.name); k < 16; k++) {
+    const name2 = await nameOf(genesis, k);
+    const dir = await f.dirOf(objectId(name2, owner));
+    const inv = await f.inventory(dir);
+    if (!inv && !taken.has(name2)) return [
+      name2,
+      false
+    ];
+    if (!inv) continue;
+    const head = await f.readObjectJson(dir, inv, OBJ2) || {};
+    const hp = head.parent || {};
+    if (hp.owner === parent.owner && hp.name === parent.name && await later2(head)) return [
+      name2,
+      true
+    ];
+  }
+  exit(`no name of the genesis record from algorithm ${algorithm(parent.name)} to 15 is free for ${owner}: the branch is refused (section 5.3)`);
+}
+function later(head, c, k) {
+  const old = head.parent;
+  const before = Number(String(old.objectVersion).slice(1));
+  if (k === before) exit(`v${k} is the branch point of the branch already`);
+  if (k < before) return false;
+  const objOf2 = (v) => c.line.objs.get(v) ?? null;
+  const order = historyOf(c.line.inv, objOf2, `v${k}`).map((h) => objOf2(h)?.documentVersion);
+  const dv = objOf2(`v${k}`)?.documentVersion;
+  if (dv === old.documentVersion) {
+    exit(`v${k} holds document version ${dv}, as the branch point does: not a new branch point (section 9.4)`);
+  }
+  return order.includes(old.documentVersion) && order.includes(dv) && order.indexOf(dv) > order.indexOf(old.documentVersion);
+}
+async function makeBranch(f, uri, where2, { owner = null, label = null, message: message2 = null } = {}) {
+  owner ||= f.archive.owner;
+  if (!f.archiveOwners().includes(owner)) exit(`${owner} is not an owner this archive hosts`);
+  const r = await openResolver(f);
+  let line, found2;
+  try {
+    ({ id: line, found: found2 } = await r.resolve(uri, where2));
+  } catch (error) {
+    if (error?.kind) throw error;
+    exit(error.message);
+  }
+  if (found2.status !== "verified" || !found2.copy) {
+    exit(`${uri}: ${found2.status}: only a signed version, not contested, is branched (section 9.1)`);
+  }
+  const c = found2.copy, k = Number(found2.version.slice(1));
+  let { files, parent } = await branchPointFiles(c, k);
+  const genesis = files.get(GENESIS2);
+  const rec = await readGenesis(genesis);
+  if (owner === parent.owner || owner === rec.originator) {
+    exit("the owner of a branch is neither the parent's owner nor the originator (sections 5.3 and 9.1): the originator's own lines take in another line's work otherwise (#57)");
+  }
+  const isHere = c.archive === r.home;
+  const at = isHere ? f.archive.baseUrl : c.archive.base.startsWith("https://") ? c.archive.base : null;
+  const segments = await pathOf(c.id, isHere ? f.layout : c.archive.layout);
+  const url = isHere ? `${f.archive.baseUrl}ocfl/${segments.join("/")}/v${k}/` : at ? new URL((c.archive.disc.storageRoot ?? "ocfl/") + segments.join("/"), at).href + `/v${k}/` : null;
+  const parentAt = at ? [
+    at
+  ] : [];
+  if (url) parent.url = url;
+  for (const o of chainOwners(files)) {
+    await r.keyLog(o, isHere ? where2 : [
+      c.where,
+      ...where2
+    ]);
+    const others = (r.logs.get(o)?.found || []).filter((x) => x.where !== r.home.base).map((x) => [
+      x.where,
+      x.log
+    ]);
+    if (!await recordKeyLog(f, o, others)) {
+      exit(`no key log of ${o} found: the evidence of the branch point needs it beside the branch (section 6.5)`);
+    }
+  }
+  const [name2, move] = await branchName(f, genesis, parent, owner, (head) => later(head, c, k));
+  const id = objectId(name2, owner);
+  const pobj = JSON.parse(new TextDecoder().decode(files.get("parent/object.json")));
+  let pdc = null;
+  try {
+    pdc = await c.archive.json(c.id, c.line.inv, `v${k}`, "datacite.json");
+  } catch {
+    pdc = null;
+  }
+  pdc ||= {};
+  const keep = [
+    "mainSource",
+    "sourceFormat",
+    "sourcesMissing",
+    "renditions",
+    "toolchain",
+    "changes",
+    "stage",
+    "notices",
+    "licence",
+    "agreement"
+  ];
+  const obj = {
+    format: OBJ_FORMAT,
+    specification: SPEC,
+    kind: pobj.kind,
+    name: name2,
+    owner,
+    parent,
+    documentVersion: parent.documentVersion
+  };
+  for (const k2 of keep) if (Object.hasOwn(pobj, k2)) obj[k2] = pobj[k2];
+  obj.status = "active";
+  if (move) {
+    const bdir = await f.dirOf(id);
+    const binv = await f.inventory(bdir);
+    let most = 0;
+    for (const x of Object.keys(binv.versions)) most = Math.max(most, (await f.readObjectJson(bdir, binv, OBJ2, x)).documentVersion);
+    obj.documentVersion = most + 1;
+    const notes = new Set((obj.notices || []).filter((n) => n.path).map((n) => n.path));
+    delete obj.notices;
+    files = new Map([
+      ...files
+    ].filter(([p]) => !notes.has(p)));
+  }
+  const dc = Object.fromEntries(Object.entries(pdc).filter(([key]) => key !== "doi" && key !== "url"));
+  dc.publisher = {
+    name: f.archive.name
+  };
+  dc.version = String(obj.documentVersion);
+  if (label || f.labelOf(id)) dc.url = landingUrl(f, label || f.labelOf(id));
+  const rel = pdc.doi ? {
+    relatedIdentifier: pdc.doi,
+    relatedIdentifierType: "DOI",
+    relationType: "IsIdenticalTo"
+  } : parent.url ? {
+    relatedIdentifier: parent.url,
+    relatedIdentifierType: "URL",
+    relationType: "IsIdenticalTo"
+  } : null;
+  if (rel) {
+    dc.relatedIdentifiers = [
+      ...(dc.relatedIdentifiers || []).filter((x) => x.relationType !== "IsIdenticalTo" || ![
+        "URL",
+        "DOI"
+      ].includes(x.relatedIdentifierType)),
+      rel
+    ];
+  }
+  const content = new Map([
+    ...files,
+    [
+      "datacite.json",
+      jsonBytes(dc)
+    ]
+  ]);
+  if (label && !move && (f.labels.has(label) || !LABEL.test(label))) {
+    exit(`--label: a new label of the form of section 3.1 (not '${label}')`);
+  }
+  const [v, problems] = await verdict(await levelOfFiles(content), obj, genesis, (o) => keyLogOf2(f, o));
+  if (v !== CONFIRMED2) exit(`${id}: the branch point would be ${v}: ` + problems.join("; "));
+  const done = await f.addVersion(id, content, obj, message2 || (move ? `Branch point moved to ${parent.objectVersion} of ${line}` : `Branch of ${line} at ${parent.objectVersion} (document version ${parent.documentVersion})`));
+  if (label && !move) f.labels.set(label, id);
+  await writeDiscovery(f);
+  f.env.out(`${label || f.labelOf(id) || id}: ${done.head} ` + (move ? "moves the branch point to " : "branch of ") + `${line} ${parent.objectVersion} (document version ${parent.documentVersion})`);
+  return {
+    id,
+    head: done.head,
+    inv: done,
+    parentAt
+  };
+}
+
+// core/requests.js
+init_names();
+init_folder();
 var Problem = class extends Error {
 };
 var LINK2 = /^!?\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)$/;
@@ -22941,6 +23601,7 @@ async function depositOp(r, form, origin) {
   const fresh = what === NEW_PAPER;
   const label = labelField(form, "Label", fresh ? 32 : 64);
   const cid = await collection(r, form, false);
+  await ownCollection(r, cid);
   const entry = (await labels(r)).get(label);
   if (fresh && entry) {
     throw new Problem(`\`${label}\` is already the label of a ${entry.kind || "line"} of this archive: for a new version of it, choose "${NEW_VERSION}"; for a new paper, another label.`);
@@ -23012,14 +23673,20 @@ async function depositOp(r, form, origin) {
   const issued = date(form, "Date the paper first appeared");
   if (issued) a.issued = issued;
   a.message = `Deposit from ${origin}`;
+  if (fresh && r.owner) a.owner = r.owner;
+  const [target2, branched] = fresh ? [
+    label,
+    ""
+  ] : await continued(r, entry, label, origin);
+  a.label = target2;
   await osheaf(r, (f) => deposit(f, a));
-  const where2 = await place2(r, form, cid, label);
+  const where2 = await place2(r, form, cid, target2);
   const kind = fresh ? "new paper" : "new version";
   return [
     cid,
-    `Deposit ${label}, ${kind}${where2} (${origin})`,
+    `Deposit ${label}, ${kind}${branched}${where2} (${origin})`,
     `Deposit: ${label}`,
-    `\`${label}\` was deposited (${kind})${where2}`
+    `\`${label}\` was deposited (${kind})${branched}${where2}`
   ];
 }
 async function place2(r, form, cid, label) {
@@ -23054,7 +23721,7 @@ async function place2(r, form, cid, label) {
 }
 async function noticeOp(r, form, origin) {
   const label = labelField(form, "Label");
-  await knownDocument(r, label);
+  ownLine(r, await knownDocument(r, label), label, "A notice");
   const about = field(form, "Document version it is about", true);
   if (!/^\d+$/.test(about)) throw new Problem(`**Document version it is about** should be a number (1, 2, ...), not \`${about}\`.`);
   const text3 = field(form, "Text of the notice", true);
@@ -23075,7 +23742,7 @@ async function noticeOp(r, form, origin) {
 }
 async function withdrawOp(r, form, origin) {
   const label = labelField(form, "Label");
-  await knownDocument(r, label);
+  ownLine(r, await knownDocument(r, label), label, "A withdrawal");
   const reason = field(form, "Reason for the withdrawal", true);
   await osheaf(r, (f) => withdraw(f, {
     label,
@@ -23092,7 +23759,7 @@ async function withdrawOp(r, form, origin) {
 }
 async function relicenseOp(r, form, origin) {
   const label = labelField(form, "Label");
-  await knownDocument(r, label);
+  ownLine(r, await knownDocument(r, label), label, "A new licence");
   const rights = licence(form, "New licence");
   if (!LICENCES.has(rights)) throw new Problem("Choose the new licence in the field **New licence**.");
   const method = field(form, "How the authors agreed", true);
@@ -23109,11 +23776,12 @@ async function relicenseOp(r, form, origin) {
     `\`${label}\` was relicensed as ${rights}`
   ];
 }
-async function makeCollection(r, label, title, kind, description, message2) {
+async function makeCollection(r, label, title, kind, description, message2, owner = null) {
   const data2 = {
     title
   };
   if (description) data2.description = description;
+  if (owner) data2.owner = owner;
   Object.assign(data2, {
     type: kind,
     order: "manual",
@@ -23139,7 +23807,9 @@ async function newCollectionOp(r, form, origin) {
   const title = field(form, "Title of the collection", true);
   const kind = field(form, "Kind").toLowerCase().startsWith("catalogue") ? "catalogue" : "selection";
   const parent = await collection(r, form, false);
-  await makeCollection(r, label, title, kind, field(form, "Description"), `New collection ${label} (${origin})`);
+  await ownCollection(r, parent);
+  const s = await settings(r);
+  await makeCollection(r, label, title, kind, field(form, "Description"), `New collection ${label} (${origin})`, r.owner && r.owner !== s.owner ? r.owner : null);
   if (field(form, "Feature it on the home page").toLowerCase().startsWith("yes")) await feature(r, label);
   let where2 = "";
   if (parent) {
@@ -23161,6 +23831,7 @@ async function newCollectionOp(r, form, origin) {
 }
 async function addOp(r, form, origin) {
   const cid = await collection(r, form, true);
+  await ownCollection(r, cid);
   const data2 = await load(r, cid);
   const [entry, key, text3] = await memberRef(r, form, "New member", "Archive of the new member");
   const revisions = versions(form, "Versions you vet (selection)");
@@ -23188,6 +23859,7 @@ async function addOp(r, form, origin) {
 }
 async function vetOp(r, form, origin) {
   const cid = await collection(r, form, true);
+  await ownCollection(r, cid);
   const data2 = await load(r, cid);
   if (data2.type !== "selection") {
     throw new Problem(`Versions are vetted only in a selection; \`${cid}\` is a catalogue, which follows its members (run **Update the collections** in the Actions tab to move them on).`);
@@ -23221,6 +23893,7 @@ async function vetOp(r, form, origin) {
 }
 async function removeOp(r, form, origin) {
   const cid = await collection(r, form, true);
+  await ownCollection(r, cid);
   const data2 = await load(r, cid);
   const [, key, text3] = await memberRef(r, form, "Member to remove", "Archive of the member");
   const member = await find(r, data2, key, text3);
@@ -23371,7 +24044,85 @@ var OPERATIONS = {
 var WORKFLOW_ONLY = [
   "arxiv"
 ];
-async function carryOut(storage, env, operation, fields, files = {}, { origin = "the OpenSheaf manager", schemas: schemas2 = null, digests = true, keyLog = null, defaultBase = null } = {}) {
+async function ownLineOf(f, id, owner) {
+  const dir = await f.dirOf(id);
+  const inv = await f.inventory(dir);
+  if (!inv) return null;
+  const genesis = await f.readLogical(dir, inv, GENESIS2);
+  const [, name2, lineOwner] = id.split(":");
+  for (let k = 0; k < 16; k++) {
+    const other = objectId(await nameOf(genesis, k), owner);
+    if (other === id) continue;
+    const d = await f.dirOf(other);
+    const i = await f.inventory(d);
+    if (!i) continue;
+    const head = await f.readObjectJson(d, i, OBJ2) || {};
+    if (!head.parent || head.parent.owner === lineOwner && head.parent.name === name2) return other;
+  }
+  return null;
+}
+async function branchLabelFor(r, label, owner) {
+  const all = await labels(r);
+  const given = r.branchLabel;
+  if (given) {
+    if (!LABEL2.test(given) || given.length > 64) {
+      throw new Problem(`\`${given}\` is not a valid label for the branch: at most 64 characters, lower-case letters and digits, words joined by \`-\`.`);
+    }
+    if (all.has(given)) throw new Problem(`\`${given}\` is already a label of this archive: choose another for the branch.`);
+    return given;
+  }
+  const named2 = [
+    ...all
+  ].find(([, o]) => o.kind === "owner" && o.name === owner);
+  const word = named2 ? named2[0] : owner.slice(0, 8);
+  const stem = `${label.slice(0, 63 - word.length)}-${word}`.replace(/-+/g, "-").replace(/^-|-$/g, "");
+  let candidate = stem;
+  for (let n = 2; all.has(candidate); n++) candidate = `${stem.slice(0, 63 - String(n).length)}-${n}`;
+  return candidate;
+}
+async function continued(r, entry, label, origin) {
+  if (!r.owner || entry.owner === r.owner) return [
+    label,
+    ""
+  ];
+  const f = await r.folder();
+  const id = objectId(entry.name, entry.owner);
+  const own2 = await ownLineOf(f, id, r.owner);
+  if (own2) {
+    const ownLabel = f.labelOf(own2);
+    if (!ownLabel) {
+      throw new Problem(`The owner \`${r.owner.slice(0, 8)}\` has a line of this work, \`${own2}\`, without a label in this archive: give it one (\`osheaf label\`), and deposit into it.`);
+    }
+    return [
+      ownLabel,
+      `, in the line \`${ownLabel}\` of the owner \`${r.owner.slice(0, 8)}\``
+    ];
+  }
+  const branchLabel = await branchLabelFor(r, label, r.owner);
+  const at = r.branchFrom ? `/v${r.branchFrom}` : "";
+  await osheaf(r, (g) => makeBranch(g, `sheaf:${entry.name}:${entry.owner}${at}`, [], {
+    owner: r.owner,
+    label: branchLabel,
+    message: `Branch of ${label} from ${origin}`
+  }));
+  return [
+    branchLabel,
+    `, in the new branch \`${branchLabel}\` of the owner \`${r.owner.slice(0, 8)}\``
+  ];
+}
+function ownLine(r, entry, label, what) {
+  if (r.owner && entry.owner !== r.owner) {
+    throw new Problem(`${what} is given only by the owner of the line: \`${label}\` is a line of the owner \`${entry.owner.slice(0, 8)}\`, not of \`${r.owner.slice(0, 8)}\`. Act as its owner, or give it on your own branch of the paper.`);
+  }
+}
+async function ownCollection(r, cid) {
+  if (!r.owner || !cid) return;
+  const entry = (await labels(r)).get(cid);
+  if (entry && entry.owner !== r.owner) {
+    throw new Problem(`The collection \`${cid}\` is a line of the owner \`${entry.owner.slice(0, 8)}\`, not of \`${r.owner.slice(0, 8)}\`: only its owner changes its members. Act as its owner.`);
+  }
+}
+async function carryOut(storage, env, operation, fields, files = {}, { origin = "the OpenSheaf manager", schemas: schemas2 = null, digests = true, keyLog = null, defaultBase = null, owner = null, branchFrom = null, branchLabel = null } = {}) {
   const said = [];
   const r = {
     storage,
@@ -23379,6 +24130,9 @@ async function carryOut(storage, env, operation, fields, files = {}, { origin = 
     added: [],
     keyLog,
     defaultBase,
+    owner,
+    branchFrom,
+    branchLabel,
     env: {
       ...env,
       out: (line) => said.push(line),
@@ -23400,6 +24154,12 @@ async function carryOut(storage, env, operation, fields, files = {}, { origin = 
     if (!op) throw new Problem(`Unknown operation \`${operation}\`.`);
     if (operation !== "setup" && !await exists(r, "osheaf.json")) {
       throw new Problem("The archive is not set up yet: set it up first (the workflow **Set up the archive** in the Actions tab, or the manager's setup).");
+    }
+    if (owner && operation !== "setup" && !(await r.folder()).archiveOwners().includes(owner)) {
+      throw new Problem(`\`${owner}\` is not an owner this archive hosts (\`owner\` and \`owners\` in \`osheaf.json\`).`);
+    }
+    if (branchFrom !== null && !(Number.isInteger(branchFrom) && branchFrom >= 1)) {
+      throw new Problem(`A branch is made from a document version, 1, 2, ..., not \`${branchFrom}\`.`);
     }
     let [cid, message2, title, done] = await op(r, form, origin);
     const why = field(form, "Why (optional)");
@@ -23498,9 +24258,9 @@ function browserEnvironment({ assets, keys = /* @__PURE__ */ new Map(), fetch: f
 async function schemasOf(assets) {
   return loadSchemas(async (url) => assets.schemas[String(url).split("/").pop()]);
 }
-async function signers(storage, env) {
+async function signers(storage, env, owner = null) {
   const f = await ArchiveFolder.open(storage, env);
-  const owner = f.archive.owner;
+  owner ||= f.archive.owner;
   const log = await f.keyLog(owner);
   const latest = log?.latest();
   if (!latest) return {
@@ -23696,23 +24456,28 @@ var encrypted = (text3) => text3.split(/\r\n|\r|\n/).some((x) => {
   const p = x.split(/\s+/).filter(Boolean);
   return x.startsWith("encryption ") && p[1] !== "none";
 });
-async function enrollPlan(wallet, owner, { newPasskey = false, entries = null } = {}) {
+async function enrollPlan(wallet, owner, { newPasskey = false, entries = null, borrowed = [] } = {}) {
   entries = (entries || await walletEntries2(wallet, owner)).filter((e) => encrypted(e.text));
   if (!entries.length) throw new WalletError(`the wallet ${wallet.name} holds no key of ${owner} locked with a passphrase`);
   const salt = await passkeySalt(owner);
   const ours = (text3) => passkeysOf(text3).filter((p) => sameBytes(p.salt, salt) && p.rp === PASSKEY_RP).map((p) => p.cred);
-  const known = [
+  let known = [
     ...new Set(entries.flatMap((e) => ours(e.text)))
   ];
+  const borrow = !newPasskey && !known.length && borrowed.length > 0;
+  if (borrow) known = [
+    ...new Set(borrowed)
+  ];
   const fresh = Boolean(newPasskey) || !known.length;
-  const todo = fresh ? entries : entries.filter((e) => !passkeysOf(e.text).some((p) => known.includes(p.cred)));
+  const todo = fresh || borrow ? entries : entries.filter((e) => !passkeysOf(e.text).some((p) => known.includes(p.cred)));
   return {
     owner,
     salt,
     entries,
     known,
     fresh,
-    todo
+    todo,
+    borrowed: borrow
   };
 }
 async function openWithPassphrase(plan, passphrase, walletName) {
@@ -23730,7 +24495,7 @@ async function enrollPasskey(wallet, plan, passphrase, cred, prf, { cost = {}, p
   if (plan.fresh && plan.known.includes(cred)) throw new WalletError("the page sent no new passkey: nothing was changed");
   const kek = await passkeyKek(prf);
   try {
-    if (!plan.fresh) {
+    if (!plan.fresh && !plan.borrowed) {
       let opens = false;
       for (const e of plan.entries) {
         if (!passkeysOf(e.text).some((p) => p.cred === cred)) continue;
@@ -24402,6 +25167,7 @@ export {
   GitHubWallet,
   Key,
   KeyError,
+  MAX_POPUP_OWNERS,
   NEW_KEY_MESSAGE,
   NEW_PAPER,
   NEW_VERSION,
@@ -24445,8 +25211,10 @@ export {
   oneCommit,
   openLocks,
   openPopupAnswer,
+  openPopupAnswers,
   openSealedBox,
   openWithPassphrase,
+  ownLineOf,
   ownerKeyLog,
   ownerLabelProblem,
   ownersHeld,

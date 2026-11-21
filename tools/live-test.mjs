@@ -6,8 +6,13 @@
 // a key file of the file key store): a path for tests, in place of the
 // passkey, which needs a person. The token is GH_TOKEN.
 //
-//   GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key FILE \
-//     --operation notice --fields '{"Label": "x", ...}' [--file 'LABEL=PATH' ...]
+//   GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key [OWNER:]FILE ... \
+//     --operation notice --fields '{"Label": "x", ...}' [--file 'LABEL=PATH' ...] \
+//     [--owner OWNER [--branch-from N] [--branch-label LABEL]]
+//
+// Several --key, of several owners (a key file of a seed alone needs its
+// owner, OWNER:FILE; the default owner by default); --owner is the acting
+// owner, for whom a new version of another owner's paper goes into a branch.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -17,6 +22,9 @@ import { Keys, github, write } from "../direct.js";
 const args = process.argv.slice(2);
 const opt = (name) => { const k = args.indexOf(name); return k < 0 ? null : args[k + 1]; };
 const repo = opt("--repo"), keyFile = opt("--key"), operation = opt("--operation");
+const keyFiles = args.flatMap((a, k) => (a === "--key" ? [args[k + 1]] : []));
+const acting = opt("--owner") ? { owner: opt("--owner"), branchFrom: opt("--branch-from") ? Number(opt("--branch-from")) : null,
+                                  branchLabel: opt("--branch-label") } : null;
 const fields = JSON.parse(opt("--fields") || "{}");
 if (!repo || !keyFile || !operation || !process.env.GH_TOKEN) {
   console.error("usage: GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key FILE --operation OP --fields JSON [--file LABEL=PATH]");
@@ -32,11 +40,15 @@ const gh = github(process.env.GH_TOKEN);
 const started = Date.now();
 const mark = (what) => console.log(`${((Date.now() - started) / 1000).toFixed(1).padStart(6)} s  ${what}`);
 const settings = JSON.parse(new TextDecoder().decode(await gh.request("GET", `repos/${repo}/contents/osheaf.json`, null, { raw: true })));
-const given = await core.keyFromText(await readFile(keyFile, "utf-8"), { owner: settings.owner });
 const keys = new Keys();
-keys.add(given.owner, [given.key]);
-mark(`key of ${given.owner.slice(0, 8)}... read; ${repo} at ${settings.baseUrl}`);
-const res = await write({ gh, repo, operation, fields, files, keys, settings, cache: new Map(), progress: mark });
+for (const spec of keyFiles) {
+  const [o, file] = /^[a-z2-7]{51}[aq]:/.test(spec) ? [spec.slice(0, 52), spec.slice(53)] : [settings.owner, spec];
+  const given = await core.keyFromText(await readFile(file, "utf-8"), { owner: o });
+  keys.add(given.owner, [given.key]);
+  mark(`key of ${given.owner.slice(0, 8)}... read; ${repo} at ${settings.baseUrl}`);
+}
+if (acting) mark(`acting for ${acting.owner.slice(0, 8)}...`);
+const res = await write({ gh, repo, operation, fields, files, keys, settings, cache: new Map(), progress: mark, acting });
 mark(res.ok ? `committed ${res.commit.sha} (${res.commit.changed} files changed, ${res.commit.removed} removed; ` +
               `reads: ${JSON.stringify(res.reads)}, attempts: ${res.attempts})` : `refused:\n${res.message}`);
 if (!res.ok) process.exit(1);

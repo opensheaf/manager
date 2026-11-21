@@ -298,3 +298,14 @@ body.with-dock footer.site { padding-bottom: 4rem; }
 .create .field input[type="checkbox"] { margin-right: 0.4em; }
 details.ceremony { margin-top: 1.5em; }
 details.ceremony > summary { font-weight: 600; }
+
+/* key wallets and owners: the wallets (step 1), the owners in one (step 2) */
+.notice.signing ul.wallets, .notice.signing ul.owners { list-style: none; padding: 0; margin: 0.3em 0; }
+.notice.signing ul.wallets li, .notice.signing ul.owners li { margin: 0.2em 0; }
+.notice.signing h4 { margin: 0.8em 0 0.2em; font-size: 0.95rem; }
+button.small.link { background: none; border: none; padding: 0 0.2em; color: var(--os-muted); text-decoration: underline; cursor: pointer; }
+.small.warn { color: var(--os-warn); }
+/* a branch listed under its line */
+table.papers tr.branch td:first-child code { font-weight: normal; }
+.acting { margin: 0.4em 0 0.8em; }
+.acting .notice p { margin: 0.3em 0; }

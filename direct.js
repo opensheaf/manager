@@ -37,16 +37,142 @@ export const ORIGIN = "the OpenSheaf manager";
 export const POPUP_STATUS = "opensheaf-unlock-status";
 export const POPUP_FEATURES = "popup,width=520,height=760";
 
-// The keys this page holds, by owner.
+// The keys this page holds, by owner, with the wallet each owner's keys
+// were unlocked from: owners unlocked from several wallets add up.
 export class Keys {
-  constructor() { this.byOwner = new Map(); }
-  add(owner, keys) {
+  constructor() { this.byOwner = new Map(); this.from = new Map(); }
+  add(owner, keys, wallet = "") {
     const held = this.byOwner.get(owner) || [];
     for (const k of keys) if (!held.some((h) => h.did === k.did)) held.push(k);
     this.byOwner.set(owner, held);
+    if (wallet) this.from.set(owner, wallet);
   }
   of(owner) { return this.byOwner.get(owner) || []; }
-  forget() { this.byOwner.clear(); }
+  owners() { return [...this.byOwner.keys()].filter((o) => this.of(o).length); }
+  wallet(owner) { return this.from.get(owner) || ""; }
+  forget(owner = null) {
+    if (owner) { this.byOwner.delete(owner); this.from.delete(owner); return; }
+    this.byOwner.clear();
+    this.from.clear();
+  }
+}
+
+// --- wallets and owners ---------------------------------------------------------
+
+// The owners the archive hosts: its default owner first, then the others of
+// osheaf.json ("owners").
+export function hostedOwners(settings) {
+  const out = [];
+  for (const o of [settings && settings.owner, ...((settings && settings.owners) || [])]) {
+    if (typeof o === "string" && o && !out.includes(o)) out.push(o);
+  }
+  return out;
+}
+
+const WALLET_NAME = /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
+
+// The wallets the page offers: those osheaf.json hints, for each owner the
+// archive hosts (and for every owner), then those the person added (kept in
+// this browser). Wallets and owners are many to many: each wallet with the
+// owners it is hinted for, and whether the person added it.
+// [{ wallet, hinted: [owner], given: bool }]
+export function walletChoices(settings, given = []) {
+  const out = new Map();
+  const add = (w, owner, isGiven) => {
+    if (typeof w !== "string" || !WALLET_NAME.test(w.trim())) return;
+    w = w.trim();
+    const e = out.get(w) || { wallet: w, hinted: [], given: false };
+    if (owner && !e.hinted.includes(owner)) e.hinted.push(owner);
+    if (isGiven) e.given = true;
+    out.set(w, e);
+  };
+  const keys = settings && settings.keys;
+  for (const o of hostedOwners(settings)) {
+    // the earliest form, one wallet for the archive: a hint for every owner
+    if (typeof keys === "string") add(keys, o, false);
+    for (const w of core.walletHints(keys, o)) add(w, o, false);
+  }
+  for (const w of given) add(w, null, true);
+  return [...out.values()];
+}
+
+// The owners of the archive whose keys a wallet holds, with how they are
+// locked (core.ownersHeld): [{ owner, entries, locks }], in the order of
+// the archive's owners. Reading needs the sign-in to reach the wallet.
+export async function walletOwners({ gh, archiveRepo, wallet, settings }) {
+  const w = walletOf(gh, archiveRepo, wallet);
+  w.checkName();
+  let held;
+  try {
+    if ((await w.api("GET", `repos/${w.repo}`)) === null) throw new Error("not found");
+    held = await core.ownersHeld(w);
+  } catch (e) {
+    throw new Error(`the key wallet ${wallet} cannot be read with this sign-in (${e.message}): install the ` +
+                    "OpenSheaf app on that repository too, or sign in with a token that can read it");
+  }
+  const hosted = hostedOwners(settings);
+  return held.filter(([o]) => hosted.includes(o)).map(([owner, entries, locks]) => ({ owner, entries, locks }))
+    .sort((a, b) => hosted.indexOf(a.owner) - hosted.indexOf(b.owner));
+}
+
+// The popups that unlock the owners chosen in a wallet, from their locks
+// (LOCKS: [[owner, locks]], core.walletLocks): one touch unlocks two owners
+// when one passkey opens both (version 2 of the popup's request), else one.
+// Owners none of whose current keys a passkey opens are left out (NONE).
+// { batches: [{ owners, creds, locks: Map owner -> locks }], none: [owner] }
+export function unlockPlan(locks) {
+  const rest = [], none = [];
+  for (const [owner, l] of locks) {
+    const creds = [...new Set(l.flatMap((x) => x.creds))];
+    if (creds.length) rest.push({ owner, creds, locks: l });
+    else none.push(owner);
+  }
+  const batches = [];
+  while (rest.length) {
+    const a = rest.shift();
+    const k = rest.findIndex((b) => b.creds.some((c) => a.creds.includes(c)));
+    if (k >= 0 && core.MAX_POPUP_OWNERS >= 2) {
+      const b = rest.splice(k, 1)[0];
+      batches.push({ owners: [a.owner, b.owner], creds: a.creds.filter((c) => b.creds.includes(c)),
+                     locks: new Map([[a.owner, a.locks], [b.owner, b.locks]]) });
+    } else {
+      batches.push({ owners: [a.owner], creds: a.creds, locks: new Map([[a.owner, a.locks]]) });
+    }
+  }
+  return { batches, none };
+}
+
+// The locks of the owners chosen in a wallet, read for unlockPlan: the
+// current keys of each owner's key log (SIGNERSOF(owner), its signers)
+// that the wallet holds. An owner whose keys are not there is said so.
+export async function ownersLocks({ gh, archiveRepo, wallet, owners, signersOf }) {
+  const out = [];
+  for (const owner of owners) {
+    const signers = await signersOf(owner);
+    out.push([owner, await locksOf({ gh, archiveRepo, settings: { owner }, wallet, signers })]);
+  }
+  return out;
+}
+
+// One popup of the plan: the keys of its owners opened with the secrets its
+// passkey gives (one per owner). Gives Map owner -> keys. PREPARE gives the
+// batch (it may still be reading the wallet when the popup opens).
+export async function unlockBatch({ prepare, askCode, win, open }) {
+  let batch = null;
+  const got = await unlockWithPopup({
+    win, open, askCode,
+    prepare: async () => {
+      batch = await prepare();
+      return { owners: batch.owners, creds: batch.creds };
+    },
+  });
+  const out = new Map();
+  try {
+    for (const [owner, secret] of got.secrets) out.set(owner, await core.openLocks(batch.locks.get(owner), owner, got.cred, secret));
+  } finally {
+    for (const [, secret] of got.secrets) secret.fill(0);
+  }
+  return out;
 }
 
 // The GitHub API for the core, with the session's token (a function, renewed
@@ -115,10 +241,18 @@ export async function locksOf({ gh, archiveRepo, settings, wallet, signers }) {
 // Gives [cred, secret], the secret of the passkey (32 bytes). MODE is
 // core.POPUP (unlock with one of creds) or core.POPUP_ENROLL (create a
 // passkey, creds excluded).
+//
+// PREPARE may give { owners, creds } instead, one owner or two (version 2
+// of the request, one touch for both): the answer is then { cred, secrets:
+// [[owner, secret], ...] }.
 export function unlockWithPopup({ prepare, askCode, win = window, open = null, timeout = 5 * 60_000, mode = core.POPUP }) {
   const popup = (open || ((url) => win.open(url, "opensheaf-unlock", POPUP_FEATURES)))(core.popupUrl(win.location.origin, mode));
   if (!popup) return Promise.reject(new core.UnlockFailed("the browser blocked the window of the passkey: allow pop-ups for this page"));
-  const request = Promise.resolve().then(prepare).then(({ owner, creds }) => core.popupRequest(owner, creds, null, null, mode));
+  let several = false;
+  const request = Promise.resolve().then(prepare).then(({ owner, owners, creds }) => {
+    several = Array.isArray(owners);
+    return core.popupRequest(several ? owners : owner, creds, null, null, mode);
+  });
   return new Promise((resolve, reject) => {
     let answered = false, lastStatus = "";
     // a request that cannot be prepared (a wrong passphrase, a wallet not
@@ -151,7 +285,7 @@ export function unlockWithPopup({ prepare, askCode, win = window, open = null, t
         try {
           const req = await request;
           const typed = typeof data.error === "string" ? "" : await askCode();
-          const got = await core.openPopupAnswer(req, data, typed);
+          const got = several ? await core.openPopupAnswers(req, data, typed) : await core.openPopupAnswer(req, data, typed);
           req.pair = null;
           popup.postMessage({ type: core.POPUP_MESSAGES.done }, core.UNLOCK_ORIGIN);
           finish(null, got);
@@ -216,16 +350,32 @@ function walletOf(gh, archiveRepo, wallet) {
 // [did], confirm: whether the passphrase is new (asked twice), plans: what
 // enrolling would do, with the passkey enrolled or with a new one (null when
 // no key there is locked with a passphrase) }.
+//
+// The passkeys of the wallet's other owners (borrowed): an owner without a
+// passkey of its own yet is enrolled with one of them, so that one passkey
+// opens the keys of several owners, two at one touch.
 export async function setupState({ gh, archiveRepo, settings, wallet, signers }) {
   const w = walletOf(gh, archiveRepo, wallet);
   await core.checkWallet(w);
   const entries = await core.walletEntries(w, settings.owner);
+  let borrowed = [];
+  try {
+    const others = (await core.ownersHeld(w)).filter(([o]) => o !== settings.owner).map(([o]) => o);
+    for (const o of others) {
+      for (const lock of await core.walletLocks(w, o, (await core.walletEntries(w, o))
+        .filter((e) => e.fields.kind === "current").map((e) => e.fields.key))) borrowed.push(...lock.creds);
+    }
+    borrowed = [...new Set(borrowed)];
+  } catch (e) {
+    if (!(e instanceof core.WalletError)) throw e;
+    borrowed = [];
+  }
   const current = entries.filter((e) => e.fields.kind === "current");
   const there = signers.dids.filter((d) => current.some((e) => e.fields.key === d));
   const locks = await core.walletLocks(w, settings.owner, signers.dids);
   const plan = async (newPasskey) => {
     try {
-      return await core.enrollPlan(w, settings.owner, { newPasskey, entries });
+      return await core.enrollPlan(w, settings.owner, { newPasskey, entries, borrowed });
     } catch (e) {
       if (e instanceof core.WalletError) return null;
       throw e;
@@ -571,23 +721,29 @@ export function forgetOwner(pending) {
   Object.assign(pending, { current: null, workflows: null, rotation: null, files: null, passphrase: null, walletState: null });
 }
 
-// The signers of the archive: read from the head of its branch.
-export async function signersOf({ gh, repo, cache, settings }) {
+// The signers of an owner the archive hosts (by default its default owner):
+// read from the head of its branch.
+export async function signersOf({ gh, repo, cache, settings, owner = null }) {
   const mirror = settings && /^https:\/\//.test(settings.baseUrl || "") ? settings.baseUrl : null;
   const storage = await core.GitHubStorage.open(repo, gh, { cache, mirror });
-  return core.signers(storage, core.browserEnvironment({ assets: core.ASSETS }));
+  return core.signers(storage, core.browserEnvironment({ assets: core.ASSETS }), owner);
 }
 
 let schemas = null;
 
 // A request written directly; the answer of core.carryOut, with the commit.
+// ACTING: the acting owner ({ owner, branchFrom, branchLabel }, or none: the
+// owner of the line changed, the default owner for a new one): a new
+// version of another owner's line goes into its branch (core.carryOut).
 export async function write({ gh, repo, operation, fields, files = {}, keys, settings, cache, progress = () => {},
-                              fetchImpl = globalThis.fetch && globalThis.fetch.bind(globalThis) }) {
+                              acting = null, fetchImpl = globalThis.fetch && globalThis.fetch.bind(globalThis) }) {
   schemas ||= await core.schemasOf(core.ASSETS);
   const env = core.browserEnvironment({ assets: core.ASSETS, keys: keys.byOwner, fetch: fetchImpl });
   const mirror = settings && /^https:\/\//.test(settings.baseUrl || "") ? settings.baseUrl : null;
+  const options = acting && acting.owner ? { owner: acting.owner, branchFrom: acting.branchFrom ?? null,
+                                             branchLabel: acting.branchLabel || null } : {};
   return core.directWrite({ repo, github: gh, operation, fields, files, env, schemas, mirror, cache, origin: ORIGIN,
-                            progress });
+                            progress, options });
 }
 
 export const { WORKFLOW_ONLY } = core;

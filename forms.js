@@ -44,7 +44,9 @@ export const FORMS = {
   deposit: {
     title: "Deposit a paper",
     help: "A new paper, or a new version of a paper already in the archive (its label; what is left " +
-          "empty stays as before). Every version is signed for the archive's default owner by its workflow.",
+          "empty stays as before). Each version is signed for an owner: in this page, the one chosen (Act as); " +
+          "through the workflow, the archive's default owner. A new version of another owner's paper goes into a " +
+          "branch of it.",
     fields: [
       { label: "This deposit", type: "select", blank: true, required: true, options: [NEW_PAPER, NEW_VERSION],
         help: "A new paper gets a new label and a permanent name (its sheaf URI), made once; a new version keeps them." },

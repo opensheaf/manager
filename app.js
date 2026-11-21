@@ -12,11 +12,13 @@ import { SERVICE, APP_SLUG, TEMPLATE } from "./config.js";
 import { signIn, refresh } from "./gh-auth.js";
 import * as gh from "./github.js";
 import { FORMS, NEW_VERSION, check, subject } from "./forms.js";
-import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf, shortForms, ownerShown, foreignName } from "./archive.js";
+import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf, shortForms, ownerShown, foreignName,
+         grouped, continuation, branchLabel } from "./archive.js";
 import { readArchive, headFiles, awaitRequest, baseUrl } from "./load.js";
 import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
 import * as direct from "./direct.js";
+import * as core from "./vendor/opensheaf-manager.js";
 import { watchPages } from "./pages.js";
 import { recentChanges, answerAt } from "./changes.js";
 import { storedZip, rotationZipName } from "./zip.js";
@@ -25,6 +27,8 @@ const $ = (sel) => document.querySelector(sel);
 const KEY = "opensheaf-manager-auth";
 const VIA_WORKFLOW = "opensheaf-manager-via-workflow";
 const WALLET = "opensheaf-manager-wallet:";
+const WALLETS = "opensheaf-manager-wallets";
+const ACTING = "opensheaf-manager-acting:";
 const COMPACT = "opensheaf-manager-compact";
 const FOLDED = "opensheaf-manager-folded:";
 const compact = () => pref(COMPACT) === "yes";
@@ -60,8 +64,11 @@ const state = {
   reachable: null,   // with the app: the repositories where it is installed (lower case)
   pending: new Map(),// request id -> { what, since }
   sent: new Map(),   // request id -> { name, values }: the forms sent in this tab, to correct
-  keys: new direct.Keys(), // the owner's current keys, unlocked in this page (memory only)
-  signers: null,     // { owner, dids, threshold }: the keys of the owner's key log that sign now
+  keys: new direct.Keys(), // the owners' current keys, unlocked in this page (memory only)
+  signers: null,     // { owner, dids, threshold }: the keys of the default owner's key log that sign now
+  signersBy: new Map(), // owner -> its signers, read once per repository
+  wallets: { chosen: "", owners: new Map(), selected: new Map(), next: null, open: false },
+                     // the wallet chosen; per wallet, the owners it holds (read) and those chosen; the popups left
   cache: new Map(),  // blobs of the repository read in this session, by their git names
   unlocking: null,
   titles: new Map(), // label -> { title, arxiv, versions (the latest document version) }: the papers' titles, read after the archive   // a promise while the popup of the passkey is open
@@ -388,6 +395,8 @@ async function openArchive(repo) {
     showHistory();
     state.cache = new Map();
     state.signers = null;
+    state.signersBy = new Map();
+    state.wallets = { chosen: "", owners: new Map(), selected: new Map(), next: null, open: false };
   }
   state.repo = repo;
   state.ref = "";
@@ -897,8 +906,9 @@ function createPasskey(skip = false) {
 function createDone() {
   const c = creating, p = c.pending, repo = c.repo;
   if (!p) return;
-  state.keys.add(p.owner, [p.signing]);
+  state.keys.add(p.owner, [p.signing], p.wallet.name);
   state.signers = direct.signersOfLog(p.log);
+  state.signersBy.set(p.owner, state.signers);
   pref(WALLET + p.owner, p.wallet.name);
   direct.forgetOwner(p);
   Object.assign(c, { pending: null, node: null, steps: {}, secretShown: false });
@@ -995,6 +1005,7 @@ function titleOf(o) {
 
 async function loadTitles(t, repo) {
   const at = state.ref ? { ref: state.ref } : {};
+  let branches = false;
   for (const o of docs().slice(0, 60)) {
     try {
       const [dc, obj, genesis] = await headFiles(t, repo, o, state.layout,
@@ -1006,13 +1017,18 @@ async function loadTitles(t, repo) {
         showUri(o);
       }
       const ax = ((obj && obj.external) || []).find((e) => e.service === "arXiv" && e.role === "source");
+      const parent = obj && obj.parent && obj.parent.name && obj.parent.owner
+        ? { name: obj.parent.name, owner: obj.parent.owner, documentVersion: obj.parent.documentVersion } : null;
+      if (parent) branches = true;
       state.titles.set(o.label, { title: dc && dc.titles && dc.titles[0] ? dc.titles[0].title : "", arxiv: ax || null,
-                                  versions: obj && Number.isInteger(obj.documentVersion) ? obj.documentVersion : null });
+                                  versions: obj && Number.isInteger(obj.documentVersion) ? obj.documentVersion : null, parent });
       const cell = document.querySelector(`[data-title="${CSS.escape(o.label)}"]`);
       if (cell) cell.replaceChildren(...titleOf(o));
     } catch (_) { /* a title is a convenience */ }
     if (state.repo !== repo) return;
   }
+  // the branches, now known, listed under their lines
+  if (branches || hosted().length > 1) showArchive();
 }
 
 // Members of collections link to the Explorer (archive.js): a line of this
@@ -1098,21 +1114,7 @@ function showArchive() {
         c.members.length ?
           el("button", { class: "small", onclick: () => openForm("remove", { "In collection": c.label }) }, "Remove a member") : null)))
       : el("p", { class: "muted" }, "No collections yet.")),
-    block("papers", "Papers", docs().length,
-        docs().length ? el("table", { class: "papers" },
-      el("tr", {}, el("th", {}, "Label"), el("th", {}, "Title"), el("th", {}, "")),
-      docs().map((o) => el("tr", {},
-        el("td", {}, el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: uri(o), "data-line": `${o.name}:${o.owner}` },
-             el("code", {}, o.label)),
-           o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
-        el("td", { "data-title": o.label }, titleOf(o)),
-        el("td", { class: "actions" },
-          el("button", { class: "small", onclick: () => openForm("deposit", { "Label": o.label, "This deposit": NEW_VERSION }) }, "New version"),
-          el("button", { class: "small", onclick: () => openForm("notice", { "Label": o.label }) }, "Notice"),
-          el("button", { class: "small", onclick: () => openForm("relicense", { "Label": o.label }) }, "Licence"),
-          o.status === "withdrawn" ? null :
-            el("button", { class: "small", onclick: () => openForm("withdraw", { "Label": o.label }) }, "Withdraw")))))
-      : el("p", { class: "muted" }, "No papers yet.")));
+    block("papers", "Papers", docs().length, papersTable()));
   // drawn again in place: the page keeps its height while the archive is
   // replaced, and the reader's position
   const box = $("#archive"), y = window.scrollY;
@@ -1123,6 +1125,60 @@ function showArchive() {
   window.scrollTo(0, y);
   showDock(true);
   showResults();
+}
+
+// The papers, each line followed by its branches in this archive (once the
+// parents of the lines are read), with the owner of each when the archive
+// hosts several or the line is not the default owner's. Notices, licences
+// and withdrawals are acts of a line's owner: on the lines of another owner
+// than the acting one, they are disabled, and the page says why. Through
+// the workflow, which signs for the default owner only, the lines of other
+// owners take no change.
+function papersTable() {
+  const s = state.settings;
+  if (!docs().length) return el("p", { class: "muted" }, "No papers yet.");
+  const acting = actingOwner(), viaWf = viaWorkflow();
+  const several = hosted().length > 1 || docs().some((o) => o.owner !== s.owner);
+  let others = false, foreign = false;
+  const rows = grouped(docs(), (o) => parentOf(o) || null).map(({ line: o, depth }) => {
+    const p = parentOf(o);
+    const parentLine = p ? docs().find((x) => x.name === p.name && x.owner === p.owner) : null;
+    const notOwn = o.owner !== acting;
+    const blocked = viaWf && o.owner !== s.owner;
+    if (notOwn && !blocked) others = true;
+    if (blocked) foreign = true;
+    const why = blocked ? `The workflow signs for the default owner only: changes of the lines of ${ownerText(o.owner)} need Write directly.`
+      : `Only its owner, ${ownerText(o.owner)}, gives notices, licences and withdrawals${unlockedOwner(o.owner) ? ": act as it" : ""}.`;
+    const ownAct = (form, text) => el("button", { class: "small", disabled: notOwn || blocked, title: notOwn || blocked ? why : null,
+                                                  onclick: () => openForm(form, { "Label": o.label }) }, text);
+    const c = !blocked && notOwn ? continuation(o, acting, docs(), parentOf, originatorOfLine(o)) : null;
+    const versionTitle = blocked ? why : !c ? null : c.kind === "new" ? `A new branch of it for ${ownerText(acting)}`
+      : c.kind === "refused" ? `${ownerText(acting)} is the originator of this paper; its own line is not here`
+        : `Goes into ${c.label}, the line of ${ownerText(acting)}`;
+    return el("tr", { class: depth ? "branch" : "" },
+      el("td", { style: depth ? `padding-left: ${0.4 + 1.2 * depth}em` : null },
+        depth ? el("span", { class: "muted", "aria-hidden": "true" }, "\u21b3 ") : null,
+        el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: uri(o), "data-line": `${o.name}:${o.owner}` },
+          el("code", {}, o.label)),
+        o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null,
+        p ? el("span", { class: "chip", title: `A branch of sheaf:${p.name}:${p.owner}, from its document version ${p.documentVersion}` },
+          parentLine ? `branch of ${parentLine.label}` : "branch") : null,
+        several ? el("div", { class: "small muted" }, "owner ", ownerCode(o.owner)) : null),
+      el("td", { "data-title": o.label }, titleOf(o)),
+      el("td", { class: "actions" },
+        el("button", { class: "small", disabled: blocked || (c && c.kind === "refused"), title: versionTitle,
+                       onclick: () => openForm("deposit", { "Label": o.label, "This deposit": NEW_VERSION }) },
+          c && c.kind === "new" ? "New version (branch)" : "New version"),
+        ownAct("notice", "Notice"),
+        ownAct("relicense", "Licence"),
+        o.status === "withdrawn" ? null : ownAct("withdraw", "Withdraw")));
+  });
+  return [el("table", { class: "papers" }, el("tr", {}, el("th", {}, "Label"), el("th", {}, "Title"), el("th", {}, "")), rows),
+    others ? el("p", { class: "small muted" }, "Acting as ", ownerCode(acting), ": notices, licences and withdrawals are " +
+      "given only by a line's owner, and are disabled on the lines of other owners; a new version of another owner's paper " +
+      "goes into a branch of it for ", ownerCode(acting), ".") : null,
+    foreign ? el("p", { class: "small muted" }, "The workflow signs for the default owner only: the lines of other owners " +
+      "are changed with Write directly.") : null];
 }
 
 // A part of the archive's page (collections, papers) that can be folded; how
@@ -1140,18 +1196,119 @@ function block(id, title, count, content) {
 
 const ghCore = () => direct.github(() => token());
 
-// Whether the keys this page holds reach the threshold of the owner's key
-// log (read once per repository).
-function unlocked() {
-  const s = state.signers;
-  if (!s || !s.owner) return false;
-  return state.keys.of(s.owner).filter((k) => s.dids.includes(k.did)).length >= s.threshold;
+// The owners the archive hosts (its default owner first), and how the page
+// shows one: its label in the archive, else its short owner name (section
+// 12.2, at least 8 characters, unique in the archive); files and requests
+// keep the full name, which is the title of what is shown.
+const hosted = () => direct.hostedOwners(state.settings);
+const ownerText = (o) => ownerShown(o, state.lines, state.short);
+const ownerCode = (o) => el("code", { title: o }, ownerText(o));
+const ownersList = (list) => list.map((o, i) => [i ? (i === list.length - 1 ? " and " : ", ") : "", ownerCode(o)]);
+
+// The signers of an owner (the current keys of its key log), read once per
+// repository; those of the default owner are also state.signers, which the
+// setup of a wallet reads.
+async function signersFor(owner) {
+  if (!state.signersBy.has(owner)) {
+    const got = await direct.signersOf({ gh: ghCore(), repo: state.repo, cache: state.cache, settings: state.settings, owner });
+    state.signersBy.set(owner, got);
+  }
+  const got = state.signersBy.get(owner);
+  if (state.settings && owner === state.settings.owner) state.signers = got;
+  return got;
 }
 
+// Whether the keys this page holds reach the threshold of an owner's key log.
+function unlockedOwner(owner) {
+  const s = state.signersBy.get(owner) || (state.signers && state.signers.owner === owner ? state.signers : null);
+  if (!s || !owner) return false;
+  return state.keys.of(owner).filter((k) => s.dids.includes(k.did)).length >= s.threshold;
+}
+
+const unlockedOwners = () => hosted().filter(unlockedOwner);
+function unlocked() { return unlockedOwners().length > 0; }
+
+// The acting owner: the owner chosen among those unlocked (kept in this
+// browser, per archive), else the default owner if unlocked, else the first
+// unlocked; with nothing unlocked, the default owner, for whom the passkey
+// is asked as before. Through the workflow, always the default owner.
+function actingOwner() {
+  const s = state.settings;
+  if (!s) return "";
+  if (viaWorkflow()) return s.owner;
+  const open = unlockedOwners();
+  const chosen = pref(ACTING + state.repo);
+  if (chosen && open.includes(chosen)) return chosen;
+  if (open.includes(s.owner)) return s.owner;
+  return open[0] || s.owner;
+}
+
+function setActing(owner) {
+  pref(ACTING + state.repo, owner && owner !== state.settings.owner ? owner : "");
+}
+
+// The wallets the person added by name, kept in this browser (names, never
+// keys); and those given before for one owner (the earlier preference).
+function givenWallets() {
+  let list = [];
+  try { list = JSON.parse(pref(WALLETS) || "[]"); } catch (_) { list = []; }
+  if (!Array.isArray(list)) list = [];
+  for (const o of hosted()) { const w = pref(WALLET + o); if (w && !list.includes(w)) list.push(w); }
+  return list.filter((w) => typeof w === "string" && direct.walletName({}, w));
+}
+
+function addWallet(w) {
+  const list = givenWallets();
+  if (!list.includes(w)) pref(WALLETS, JSON.stringify([...list, w]));
+}
+
+function removeWallet(w) {
+  for (const o of hosted()) if (pref(WALLET + o) === w) pref(WALLET + o, "");
+  pref(WALLETS, JSON.stringify(givenWallets().filter((x) => x !== w)));
+  if (state.wallets.chosen === w) state.wallets.chosen = "";
+}
+
+const walletChoices = () => direct.walletChoices(state.settings, givenWallets());
+
+// The wallet chosen (step 1): the one chosen in this tab, else the first
+// hinted for the default owner, else the first.
+function chosenWallet() {
+  const all = walletChoices();
+  if (state.wallets.chosen && all.some((c) => c.wallet === state.wallets.chosen)) return state.wallets.chosen;
+  const s = state.settings;
+  const first = all.find((c) => c.hinted.includes(s.owner)) || all[0];
+  return first ? first.wallet : "";
+}
+
+// The owners of the archive whose keys a wallet holds (step 2), read once
+// per wallet in the background; then drawn again.
+function walletOwnersOf(w) {
+  const known = state.wallets.owners.get(w);
+  if (known) return known;
+  const entry = { loading: true, list: [], error: "" };
+  state.wallets.owners.set(w, entry);
+  const repo = state.repo;
+  direct.walletOwners({ gh: ghCore(), archiveRepo: repo, wallet: w, settings: state.settings })
+    .then((list) => {
+      entry.list = list;
+      if (!state.wallets.selected.has(w)) {
+        // the owners chosen at first: those hinted for this wallet, else all
+        const hint = (walletChoices().find((c) => c.wallet === w) || { hinted: [] }).hinted;
+        const pick = list.map((x) => x.owner).filter((o) => hint.includes(o));
+        state.wallets.selected.set(w, new Set(pick.length ? pick : list.map((x) => x.owner)));
+      }
+    })
+    .catch((e) => { entry.error = e.message; })
+    .finally(() => { entry.loading = false; if (state.repo === repo) showArchive(); });
+  return entry;
+}
+
+const selectedIn = (w) => state.wallets.selected.get(w) || new Set();
+
 // How the changes are written, chosen above the forms: directly (carried
-// out and signed in this page, with the owner's keys that the passkey
-// unlocks) or by the archive's workflow. Only what the mode chosen needs is
-// shown; how it works is folded away.
+// out and signed in this page, with the keys that passkeys unlock) or by the
+// archive's workflow. Only what the mode chosen needs is shown; how it works
+// is folded away.
 function signingPanel() {
   const s = state.settings;
   const viaWf = viaWorkflow();
@@ -1163,37 +1320,105 @@ function signingPanel() {
   const how = (...content) => el("details", { class: "how small muted" }, el("summary", {}, "How it works"), ...content);
   let body;
   if (viaWf) {
+    const others = hosted().length > 1;
     body = [
       el("p", {}, "Each change is sent as a request; the archive's workflow carries it out, signs it and commits it, in a minute or two."),
-      how(el("p", {}, "The workflow signs with the owner's key for the workflows, kept in the repository secret ",
+      el("p", { class: "small" }, "The workflow signs only for the default owner, ", ownerCode(s.owner), ". ",
+        others ? "Changes by another owner of the archive, and branches of another owner's paper, need Write directly."
+          : "Branches of a paper by another owner need Write directly."),
+      how(el("p", {}, "The workflow signs with the default owner's key for the workflows, kept in the repository secret ",
         el("code", {}, "OPENSHEAF_SIGNING_KEY"), ". Its answers appear under Activity, at the bottom of the page."))];
-  } else if (unlocked()) {
-    const keys = state.keys.of(s.owner);
-    body = [
-      el("p", {}, "✓ Unlocked: ", keys.map((k, i) => [i ? ", " : "", el("code", { title: k.did }, `${k.did.slice(8, 20)}...`)]),
-        " ", el("button", { class: "small", onclick: () => { state.keys.forget(); showArchive(); message("info", "The keys are locked."); } }, "Lock")),
-      how(el("p", {}, "Each change is carried out in this page, signed with these keys and committed to the repository. " +
-        "The keys stay in this page's memory, and are forgotten when it is closed or locked."))];
   } else {
-    const named = direct.walletName(s);
-    const walletInput = el("input", { id: "wallet", placeholder: "github:you/opensheaf-keys", "aria-label": "Key wallet",
-                                      value: pref(WALLET + s.owner) });
-    body = [
-      el("div", { class: "controls" },
-        named ? el("span", { class: "small" }, "Key wallet ", el("code", {}, named)) : [el("label", { for: "wallet" }, "Key wallet"), walletInput],
-        el("button", { class: "primary", onclick: () => {
-          if (!named) pref(WALLET + s.owner, walletInput.value.trim());
-          unlockKeys().then(() => showArchive(), () => {});
-        } }, "Unlock with your passkey")),
-      how(el("p", {}, "Each change is carried out in this page and committed to the repository, signed with the owner's " +
-          "current key from its key wallet. Your passkey unlocks it in a window of unlock.opensheaf.org; you then type " +
-          "here the code that window shows."),
-        el("p", {}, "The wallet is a private repository of yours where ", el("code", {}, "osheaf key push"),
-          " put the owner's current keys, and ", el("code", {}, "osheaf key enroll"), " your passkey; the OpenSheaf app must " +
-          "be installed on it too (the page only reads it). Without one yet, set it up below.")),
-      setupPanel()];
+    const open = unlockedOwners();
+    body = [];
+    if (open.length) {
+      const acting = actingOwner();
+      const select = el("select", { id: "acting-owner", "aria-label": "Act as",
+                                    onchange: (ev) => { setActing(ev.target.value); showArchive(); } },
+        open.map((o) => el("option", { value: o, selected: o === acting }, ownerText(o) + (o === s.owner ? " (default owner)" : ""))));
+      body.push(
+        el("p", {}, "✓ Unlocked: ", open.map((o, i) => [i ? ", " : "", ownerCode(o),
+            state.keys.wallet(o) ? el("span", { class: "small muted" }, ` (${state.keys.wallet(o).slice(7)})`) : ""]), " ",
+          el("button", { class: "small", onclick: () => { state.keys.forget(); state.wallets.next = null; showArchive();
+                                                         message("info", "The keys are locked."); } }, "Lock")),
+        el("div", { class: "controls" }, el("label", { for: "acting-owner" }, "Act as"), select),
+        el("p", { class: "small muted" }, "New papers and collections are this owner's. A new version of another owner's " +
+          "paper goes into this owner's branch of it, made if needed. Notices, licences and withdrawals are given on its own lines only."));
+      if (acting !== s.owner && !unlockedOwner(s.owner)) body.push(el("p", { class: "small warn" },
+        "Every change of a paper also updates the archive's main catalogue, which the default owner ", ownerCode(s.owner),
+        " signs: unlock its keys too."));
+    }
+    body.push(walletsPanel(open.length > 0));
+    body.push(how(el("p", {}, "Each change is carried out in this page and committed to the repository, signed with the current " +
+        "keys of the acting owner from a key wallet. Your passkey unlocks them in a window of unlock.opensheaf.org; you then type " +
+        "here the code that window shows. The keys stay in this page's memory, and are forgotten when it is closed or locked."),
+      el("p", {}, "A wallet is a private repository where ", el("code", {}, "osheaf key push"), " put the current keys of " +
+        "one owner or several, and ", el("code", {}, "osheaf key enroll"), " a passkey; the OpenSheaf app must be installed on " +
+        "it too (the page only reads it). A wallet may be a group's, shared by its members (each with a passkey of their own), " +
+        "and an owner's keys may be in several wallets. Choose a wallet, then the owners to unlock in it; owners unlocked from " +
+        "several wallets add up. One touch unlocks one owner, or two when one passkey opens both.")));
   }
   return el("div", { class: `notice signing${!viaWf && unlocked() ? " ok" : ""}` }, modes, body);
+}
+
+// The wallets (step 1) and the owners in the one chosen (step 2), with the
+// button that unlocks them; folded once an owner is unlocked. Then the setup
+// of a wallet, for an owner chosen.
+function walletsPanel(folded) {
+  const s = state.settings;
+  const w = chosenWallet();
+  const choices = walletChoices();
+  const pick = (v) => { state.wallets.chosen = v; showArchive(); };
+  const list = choices.length ? el("ul", { class: "wallets" }, choices.map((c) => el("li", {},
+    el("label", {}, el("input", { type: "radio", name: "wallet-choice", value: c.wallet, checked: c.wallet === w,
+                                  onchange: () => pick(c.wallet) }), " ", el("code", {}, c.wallet)),
+    c.hinted.length ? el("span", { class: "small muted" }, " hinted for ", ownersList(c.hinted)) : null,
+    c.given ? [el("span", { class: "small muted" }, " added here "),
+      el("button", { type: "button", class: "small link", title: "Forget this wallet in this browser",
+                     onclick: () => { removeWallet(c.wallet); showArchive(); } }, "remove")] : null)))
+    : el("p", { class: "small muted" }, "The archive hints no wallet. Add yours by its name.");
+  const input = el("input", { id: "wallet", placeholder: "github:you/opensheaf-keys", "aria-label": "Key wallet to add" });
+  const add = el("form", { class: "controls", onsubmit: (ev) => {
+    ev.preventDefault();
+    const v = direct.walletName({}, input.value);
+    if (!v) { message("bad", "Name the wallet as github:OWNER/REPOSITORY."); return; }
+    addWallet(v);
+    pick(v);
+  } }, input, el("button", { type: "submit" }, "Add a wallet"));
+  const steps = [el("h4", {}, "1. The key wallet"), list, add];
+  steps.push(el("h4", {}, "2. The owners in it"));
+  if (!w) steps.push(el("p", { class: "muted small" }, "Once a wallet is chosen."));
+  else {
+    const held = walletOwnersOf(w);
+    if (held.loading) steps.push(el("p", { class: "small muted" }, `Reading ${w} ...`));
+    else if (held.error) steps.push(el("p", { class: "small bad" }, `${held.error}.`),
+      el("p", {}, el("button", { class: "small", onclick: () => { state.wallets.owners.delete(w); showArchive(); } }, "Read it again")));
+    else if (!held.list.length) steps.push(el("p", { class: "small" }, `${w} holds no keys of the owners of this archive. ` +
+      "Set it up below, or choose another wallet."));
+    else {
+      const sel = selectedIn(w);
+      steps.push(el("ul", { class: "owners" }, held.list.map((x) => {
+        const done = unlockedOwner(x.owner);
+        return el("li", {}, el("label", {}, el("input", { type: "checkbox", checked: done || sel.has(x.owner), disabled: done,
+            onchange: (ev) => { const set = new Set(selectedIn(w)); if (ev.target.checked) set.add(x.owner); else set.delete(x.owner);
+                                state.wallets.selected.set(w, set); } }), " ", ownerCode(x.owner),
+            x.owner === s.owner ? " (default owner)" : ""),
+          el("span", { class: "small muted" }, ` ${x.entries} key${x.entries === 1 ? "" : "s"}: ${x.locks}`),
+          done ? el("span", { class: "chip ok" }, "unlocked") : null);
+      })));
+      const next = state.wallets.next && state.wallets.next.wallet === w ? state.wallets.next : null;
+      steps.push(el("div", { class: "controls" },
+        el("button", { class: "primary", onclick: () => unlockKeys().then(() => showArchive(), () => showArchive()) },
+          "Unlock the chosen owners with your passkey"),
+        next ? el("button", { onclick: () => unlockNext().then(() => showArchive(), () => showArchive()) },
+          ["Unlock the next: ", ownersList(next.plan.batches[0].owners)]) : null));
+    }
+  }
+  steps.push(setupPanel());
+  const d = el("details", { class: "how wallets-panel", open: folded ? (state.wallets.open || undefined) : true,
+                            ontoggle: (ev) => { if (folded) state.wallets.open = ev.target.open; } },
+    el("summary", {}, folded ? "Key wallets: unlock more owners" : "Key wallets"), steps);
+  return d;
 }
 
 // --- setting up a key wallet ---------------------------------------------------------
@@ -1204,13 +1429,28 @@ function signingPanel() {
 // push), a passkey enrolled (as osheaf key enroll) in the popup of
 // unlock.opensheaf.org. The panel is kept across redrawings of the archive,
 // so that what is typed in it stays; secrets typed are cleared once used.
-const setup = { repo: null, node: null, state: null, busy: false, keyMode: "file", source: null, pending: null };
+//
+// The setup is for one owner of the archive at a time (by default its
+// default owner), chosen in the panel, and for the wallet chosen above: a
+// member of a group whose wallet is set up already only enrols a passkey
+// of their own there (step 3), possibly the passkey that opens another
+// owner of the wallet, so that one touch opens both.
+const setup = { repo: null, node: null, state: null, busy: false, keyMode: "file", source: null, pending: null,
+                owner: "", wallet: "" };
+
+// The owner and the wallet of the setup, and the settings and signers of
+// that owner.
+const setupOwner = () => (setup.owner && hosted().includes(setup.owner) ? setup.owner : state.settings.owner);
+const setupSettings = () => ({ ...state.settings, owner: setupOwner() });
+const setupSigners = () => state.signersBy.get(setupOwner()) || null;
 
 function setupPanel() {
-  if (setup.repo !== state.repo || !setup.node) {
+  const fresh = setup.repo !== state.repo || !setup.node;
+  const wallet = chosenWallet() || direct.walletName(state.settings, "", setupOwner());
+  if (fresh || setup.wallet !== wallet) {
     direct.forgetNewKey(setup.pending);
     Object.assign(setup, { repo: state.repo, state: null, busy: false, keyMode: "file", source: null, pending: null,
-                           checking: null, shownOpen: null });
+                           checking: null, shownOpen: null, wallet, owner: fresh ? "" : setup.owner });
     setup.node = el("details", { class: "how setup" });
     setup.node.addEventListener("toggle", () => { if (setup.node.open && !setup.body) renderSetup(); });
     setup.body = null;
@@ -1221,10 +1461,19 @@ function setupPanel() {
   return setup.node;
 }
 
+// Another owner chosen for the setup: what was checked is checked again.
+function setupFor(owner) {
+  if (owner === setupOwner()) return;
+  direct.forgetNewKey(setup.pending);
+  Object.assign(setup, { owner, state: null, pending: null, checking: null, shownOpen: null });
+  checkQuietly();
+  renderSetup();
+}
+
 // Whether the wallet is ready: it holds enough of the owner's current keys
 // to sign, and a passkey opens enough of them (as checked by setupState).
 function walletReady(st = setup.state) {
-  const s = state.signers;
+  const s = setupSigners();
   return Boolean(st && s && st.there.length >= s.threshold && st.enrolled.length >= s.threshold);
 }
 
@@ -1234,7 +1483,7 @@ function walletReady(st = setup.state) {
 function setupSummary() {
   const ready = walletReady();
   const summary = setup.node.querySelector("summary");
-  summary.textContent = ready ? "The key wallet: \u2713 ready (manage)" : "Set up a key wallet";
+  summary.textContent = ready ? `The key wallet of ${ownerText(setupOwner())}: \u2713 ready (manage)` : "Set up a key wallet";
   const open = setup.state ? !ready : false;
   if (setup.shownOpen !== open) {
     setup.shownOpen = open;
@@ -1246,39 +1495,42 @@ function setupSummary() {
 }
 
 // A wallet set up here that holds keys of the owner is recorded in the
-// archive's osheaf.json as a hint for the owner, in a commit, when the
-// archive hints none (as osheaf key push --wallet records it), and the
+// archive's osheaf.json as a hint for that owner, in a commit, when the
+// archive does not hint it for the owner yet (as osheaf key wallet --owner
+// OWNER --add records it: an owner may have several wallets), and the
 // person is told; a refusal (no write access) leaves the archive as it is.
 async function recordWalletIfNone(w) {
-  const s = state.settings;
-  if (!s || !s.owner || direct.walletHinted(s) || !setup.state || !setup.state.there.length) return;
+  const s = state.settings, owner = setupOwner();
+  if (!s || !owner || !setup.state || !setup.state.there.length) return;
+  if (core.walletHints(s.keys, owner).includes(w)) return;
   try {
-    const got = await direct.recordWallet({ gh: ghCore(), repo: state.repo, owner: s.owner, wallet: w, cache: state.cache });
+    const got = await direct.recordWallet({ gh: ghCore(), repo: state.repo, owner, wallet: w, cache: state.cache });
     if (got.recorded) {
       const keys = s.keys && typeof s.keys === "object" ? s.keys : {};
-      s.keys = { ...keys, [s.owner]: { wallets: [w] } };
-      message("ok", `${w} is now recorded in the archive's osheaf.json as the owner's key wallet (commit ` +
+      const mine = keys[owner] && typeof keys[owner] === "object" ? keys[owner] : {};
+      s.keys = { ...keys, [owner]: { ...mine, wallets: [...(Array.isArray(mine.wallets) ? mine.wallets : []), w] } };
+      message("ok", `${w} is now recorded in the archive's osheaf.json as a key wallet of ${ownerText(owner)} (commit ` +
         `${(got.commit && got.commit.sha || String(got.commit || "")).slice(0, 7)}), so that osheaf and this page look for ` +
-        "the keys there.");
+        "its keys there.");
     }
   } catch (e) {
     message("warn", `${w} was not recorded in the archive's osheaf.json: ${e.message}. Record it with ` +
-      `osheaf key wallet --add ${w}.`);
+      `osheaf key wallet --owner ${owner} --add ${w}.`);
   }
 }
 
 // The wallet named, checked once in the background when the archive opens
 // (no message), so that the panel shows how it stands.
 function checkQuietly() {
-  const s = state.settings, repo = state.repo;
-  if (!s || !s.owner || setup.state || setup.checking || setup.busy) return;
-  const w = direct.walletName(s, pref(WALLET + s.owner));
+  const s = state.settings, repo = state.repo, owner = setupOwner();
+  if (!s || !owner || setup.state || setup.checking || setup.busy) return;
+  const w = setup.wallet;
   if (!w) return;
   const gh = ghCore();
   setup.checking = (async () => {
-    state.signers ||= await direct.signersOf({ gh, repo, cache: state.cache, settings: s });
-    const st = await direct.setupState({ gh, archiveRepo: repo, settings: s, wallet: w, signers: state.signers });
-    if (state.repo !== repo || setup.repo !== repo || setup.state) return;
+    const signers = await signersFor(owner);
+    const st = await direct.setupState({ gh, archiveRepo: repo, settings: setupSettings(), wallet: w, signers });
+    if (state.repo !== repo || setup.repo !== repo || setup.state || setupOwner() !== owner || setup.wallet !== w) return;
     setup.state = st;
     setupSummary();
     if (setup.body) renderSetup();
@@ -1294,17 +1546,16 @@ function installLink(walletOwner) {
 const short = (did) => el("code", { title: did }, `${did.slice(8, 20)}...`);
 
 function renderSetup() {
-  const s = state.settings;
-  const named = direct.walletName(s);
+  const s = setupSettings();
+  const owner = s.owner;
   const st = setup.state;
-  // one wallet field: the one next to "Unlock with your passkey" (or the
-  // wallet osheaf.json names); step 1 checks it
-  const above = () => document.getElementById("wallet");
-  const given = () => named || (above() ? above().value.trim() : pref(WALLET + s.owner)) ||
-    `github:${state.user ? state.user.login : "you"}/opensheaf-keys`;
+  // the wallet chosen above (step 1 there), else a name to create
+  const given = () => setup.wallet || `github:${state.user ? state.user.login : "you"}/opensheaf-keys`;
   const walletInput = el("code", { id: "setup-wallet" }, given());
   const name = () => direct.walletName({}, given());
-  if (above()) above().oninput = () => { walletInput.textContent = given(); drawLinks(); };
+  const ownerPick = hosted().length > 1 ? el("div", { class: "controls" }, el("label", { for: "setup-owner" }, "For the owner"),
+    el("select", { id: "setup-owner", onchange: (ev) => setupFor(ev.target.value) },
+      hosted().map((o) => el("option", { value: o, selected: o === owner }, ownerText(o) + (o === state.settings.owner ? " (default owner)" : ""))))) : null;
   const links = el("span", { class: "small" });
   const drawLinks = () => {
     const w = name();
@@ -1321,9 +1572,11 @@ function renderSetup() {
     message("info", `Checking ${w} ...`);
     try {
       const gh = ghCore();
-      state.signers ||= await direct.signersOf({ gh, repo: state.repo, cache: state.cache, settings: s });
-      setup.state = await direct.setupState({ gh, archiveRepo: state.repo, settings: s, wallet: w, signers: state.signers });
-      if (!named && pref(WALLET + s.owner) !== w) { pref(WALLET + s.owner, w); showArchive(); }
+      const signers = await signersFor(owner);
+      setup.state = await direct.setupState({ gh, archiveRepo: state.repo, settings: s, wallet: w, signers });
+      if (!walletChoices().some((c) => c.wallet === w)) addWallet(w);
+      state.wallets.chosen = w;
+      setup.wallet = w;
       message("ok", `${w} is private, and this sign-in can read and write it.`);
       await recordWalletIfNone(w);
     } catch (e) {
@@ -1337,14 +1590,16 @@ function renderSetup() {
   const steps = [
     el("p", {}, "The page puts the owner's current key in a key wallet, locked with a passphrase, and lets your passkey " +
       "open it, as ", el("code", {}, "osheaf key push"), " and ", el("code", {}, "osheaf key enroll"), " do: the same files, " +
-      "which osheaf reads too. Each change is a commit to the wallet."),
+      "which osheaf reads too. Each change is a commit to the wallet. In a group's wallet set up already, only step 3 is " +
+      "yours: your own passkey."),
+    ownerPick,
     el("h4", {}, "1. The wallet"),
-    el("p", {}, "A private repository of yours, never the archive's, named above", named ? " (by osheaf.json)" : "", ": "),
+    el("p", {}, "A private repository, never the archive's: the wallet chosen above, or a new one (add its name above): "),
     el("div", { class: "controls" }, walletInput, el("button", { onclick: check }, "Check the wallet")),
     el("p", {}, links),
   ];
   if (st) {
-    const signers = state.signers;
+    const signers = setupSigners();
     steps.push(el("p", { class: "small" }, `${st.wallet.name}: holds ${st.there.length} of the ${signers.dids.length} current ` +
       `key(s) of the owner`, st.there.length ? [" (", st.there.map((d, i) => [i ? ", " : "", short(d)]), ")"] : "",
       `; ${st.enrolled.length} open(s) with a passkey.`));
@@ -1365,12 +1620,12 @@ function renderSetup() {
         busy(true);
         message("info", "Locking the key with the passphrase and putting it in the wallet ...");
         try {
-          const got = await direct.pushCurrentKey({ state: st, settings: s, signers: state.signers, keyText: text,
+          const got = await direct.pushCurrentKey({ state: st, settings: s, signers: setupSigners(), keyText: text,
                                                     passphrase: pass.value });
           message("ok", got.put ? `The current key ${got.did.slice(8, 20)}... is in ${st.wallet.name}, locked with the passphrase.`
                                 : `The current key ${got.did.slice(8, 20)}... was in ${st.wallet.name} already: left as it is.`);
           setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: state.repo, settings: s,
-                                                  wallet: st.wallet.name, signers: state.signers });
+                                                  wallet: st.wallet.name, signers: setupSigners() });
           await recordWalletIfNone(st.wallet.name);
         } catch (e) {
           message("bad", `The key was not put in the wallet: ${e.message}.`);
@@ -1421,7 +1676,7 @@ function renderSetup() {
     const plan = st.plans.enrolled;
     if (!st.there.length) {
       steps.push(el("p", { class: "muted" }, "Once the current key is in the wallet."));
-    } else if (plan && !plan.todo.length && st.enrolled.length >= state.signers.threshold) {
+    } else if (plan && !plan.todo.length && st.enrolled.length >= signers.threshold) {
       steps.push(el("p", {}, "✓ Your passkey opens the owner's keys in the wallet. Click ", el("strong", {}, "Unlock with your passkey"),
         " above."));
     } else {
@@ -1442,18 +1697,23 @@ function renderSetup() {
             message("ok", done.length ? `Your passkey now opens ${done.length} key(s) of the owner in ${st.wallet.name}, ` +
               "and the passphrase still does. Unlock with your passkey above." : "Every key there opens with your passkey already.");
             setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: state.repo, settings: s,
-                                                    wallet: st.wallet.name, signers: state.signers });
+                                                    wallet: st.wallet.name, signers: setupSigners() });
+            state.wallets.owners.delete(st.wallet.name);
           })
           .catch((e) => message("bad", `No passkey was enrolled: ${e.message}.`))
           .finally(() => { busy(false); renderSetup(); });
       };
       steps.push(
-        el("p", {}, plan && plan.known.length
+        el("p", {}, plan && plan.borrowed
+          ? "A passkey of yours opens the keys of another owner of this wallet: it is used for this owner too (Touch ID, " +
+            "in a window of unlock.opensheaf.org), so that one touch then unlocks both."
+          : plan && plan.known.length
           ? "A passkey of yours opens some keys of the owner already: it is used for the others (Touch ID, in a window " +
             "of unlock.opensheaf.org)."
           : "A passkey is created for unlock.opensheaf.org, named after the owner (Touch ID twice, in a window of " +
             "unlock.opensheaf.org); you then type here the code it shows. The keys are opened with the passphrase first."),
-        fresh ? el("p", { class: "small" }, el("label", {}, fresh, " Create a new passkey instead (another device or provider)")) : null,
+        fresh ? el("p", { class: "small" }, el("label", {}, fresh, plan.borrowed ? " Create a passkey for this owner alone instead"
+          : " Create a new passkey instead (another device or provider)")) : null,
         el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); enroll(); } },
           pass, el("button", { type: "submit", class: "primary" }, plan && plan.known.length ? "Add your passkey" : "Create the passkey")));
     }
@@ -1472,7 +1732,7 @@ function renderSetup() {
 // nothing is committed until their checks are typed back. Secrets typed are
 // cleared once read; the keys are in this page's memory only.
 function newKeyForm(st) {
-  const s = state.settings, signers = state.signers;
+  const s = setupSettings(), signers = setupSigners();
   const fromWallet = st.rotationInWallet;
   const source = fromWallet ? (setup.source || "wallet") : "files";
   const need = signers.nextThreshold, of = (signers.next || []).length;
@@ -1586,7 +1846,7 @@ function printSheets(files) {
 // A new key made: its rotation keys to save and confirm, or, once
 // committed, the key to put in the wallet again if that failed.
 function newKeyPending(st) {
-  const p = setup.pending, signers = state.signers;
+  const p = setup.pending, signers = setupSigners();
   const cancel = el("button", { type: "button", onclick: () => {
     direct.forgetNewKey(p);
     setup.pending = null;
@@ -1609,7 +1869,7 @@ function newKeyPending(st) {
       el("ul", { class: "rotation-files" }, p.files.map((f, k) => el("li", {},
         el("a", { href: "#", onclick: (ev) => { ev.preventDefault(); download(f.name, f.text); } }, f.name),
         "  check ", el("code", {}, f.check), "  ", checks[k]))),
-      el("p", { class: "controls" }, saveAllButton(p.files, state.settings.owner, p.version),
+      el("p", { class: "controls" }, saveAllButton(p.files, setupOwner(), p.version),
         el("button", { type: "button", onclick: () => printSheets(p.files) }, "Print the sheets")),
       el("p", { class: "small" }, "Save all the files gives one zip of the files, under the names osheaf gives them: unpack it " +
         "onto the offline media (each file apart from the others), then delete the zip from this computer. Or save each file " +
@@ -1627,7 +1887,7 @@ function newKeyPending(st) {
 // The version committed, then the key put in the wallet; the archive and
 // the setup read again.
 async function finishNewKey(st, typed) {
-  const p = setup.pending, s = state.settings, repo = state.repo;
+  const p = setup.pending, s = setupSettings(), repo = state.repo;
   const say = { wallet: "Putting the new rotation keys in the wallet ...", reading: "Reading the archive ...",
                 "carrying out": "Making the new version of the key log ...", committing: "Signed; committing to the repository ..." };
   setup.busy = true;
@@ -1656,9 +1916,10 @@ async function finishNewKey(st, typed) {
     message("ok", `v${number} of the key log adds the new current key ${did.slice(8, 20)}..., committed to the archive; the key ` +
       `is in ${st.wallet.name}, locked with the passphrase. Now enroll your passkey (step 3).`);
     try {
-      state.signers = await direct.signersOf({ gh: ghCore(), repo, cache: state.cache, settings: s });
+      state.signersBy.delete(s.owner);
+      const signers = await signersFor(s.owner);
       setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: repo, settings: s, wallet: st.wallet.name,
-                                              signers: state.signers });
+                                              signers });
       const a = await readArchive(await token(), repo, { ref: p.committed.commit.sha });
       refreshArchive(repo, a, p.committed.commit.sha);
     } catch (_) { /* read again when the page is */ }
@@ -1682,25 +1943,68 @@ function askCode() {
   });
 }
 
-// Unlocks the owner's keys: the popup opens at once (in the click), the
-// signers and the wallet are read meanwhile. One unlocking at a time.
+// Unlocks the owners chosen in the wallet chosen (step 2), or, with none
+// chosen, the acting owner (the default owner) from its wallet. The popup
+// opens at once (in the click); the signers and the wallet are read
+// meanwhile. One popup is one touch: two owners when one passkey opens
+// both, else one; the others wait for "Unlock the next", since a browser
+// opens a popup only from a click. One unlocking at a time.
 function unlockKeys() {
   if (state.unlocking) return state.unlocking;
   const s = state.settings, repo = state.repo;
-  const wallet = direct.walletName(s, pref(WALLET + s.owner));
+  let wallet = chosenWallet();
+  let wanted = wallet ? [...selectedIn(wallet)] : [];
+  if (!wanted.length) {
+    wanted = [actingOwner() || s.owner];
+    wallet ||= direct.walletName(s, pref(WALLET + s.owner));
+  }
+  wanted = wanted.filter((o) => !unlockedOwner(o));
   if (!wallet) {
-    message("bad", "Name the key wallet of the owner (github:OWNER/REPOSITORY), or send the change to the workflow.");
+    message("bad", "Choose or add the key wallet of the owner (github:OWNER/REPOSITORY), or send the change to the workflow.");
     return Promise.reject(new Error("no wallet"));
   }
-  const gh = ghCore();
+  if (!wanted.length) {
+    message("info", "The owners chosen are unlocked already.");
+    return Promise.resolve();
+  }
+  const planned = direct.ownersLocks({ gh: ghCore(), archiveRepo: repo, wallet, owners: wanted, signersOf: signersFor })
+    .then(direct.unlockPlan);
+  planned.catch(() => { /* said by the popup's end */ });
+  return runUnlock(wallet, planned);
+}
+
+function unlockNext() {
+  const next = state.wallets.next;
+  if (!next) return Promise.resolve();
+  return runUnlock(next.wallet, Promise.resolve(next.plan));
+}
+
+function runUnlock(wallet, planned) {
+  if (state.unlocking) return state.unlocking;
   message("info", "Unlocking in the window of unlock.opensheaf.org: use your passkey there ...");
-  state.unlocking = direct.unlock({
-    gh, archiveRepo: repo, settings: s, wallet, askCode,
-    signers: async () => (state.signers ||= await direct.signersOf({ gh, repo, cache: state.cache, settings: s })),
-  }).then((keys) => {
-    state.keys.add(s.owner, keys);
-    if (!unlocked()) throw new Error(`the passkey opened ${keys.length} key(s), and the key log needs ${state.signers.threshold}`);
-    message("ok", "The owner's keys are unlocked in this page, until it is closed.");
+  state.unlocking = direct.unlockBatch({
+    askCode,
+    prepare: async () => {
+      const p = await planned;
+      if (!p.batches.length) {
+        throw new Error(`no passkey of yours opens the keys of ${p.none.map(ownerText).join(", ")} in ${wallet}: ` +
+                        "enrol yours under Set up a key wallet");
+      }
+      return p.batches[0];
+    },
+  }).then(async (got) => {
+    const p = await planned;
+    for (const [o, keys] of got) state.keys.add(o, keys, wallet);
+    const rest = p.batches.slice(1);
+    state.wallets.next = rest.length ? { wallet, plan: { batches: rest, none: p.none } } : null;
+    const few = [...got.keys()].filter((o) => !unlockedOwner(o));
+    if (few.length) throw new Error(`the passkey opened too few keys of ${few.map(ownerText).join(", ")} for its key log`);
+    if (!unlockedOwner(pref(ACTING + state.repo)) && got.size && !unlockedOwner(state.settings.owner)) setActing([...got.keys()][0]);
+    message("ok", el("p", {}, "Unlocked in this page, until it is closed: ", ownersList([...got.keys()]), ".",
+      rest.length ? [" Click ", el("strong", {}, "Unlock the next"), " for ", ownersList(rest.flatMap((b) => b.owners)),
+                     " (a touch each)."] : "",
+      p.none.length ? [" No passkey of yours opens the keys of ", ownersList(p.none), ` in ${wallet}: enrol yours under ` +
+                       "Set up a key wallet."] : ""));
   }).catch((e) => {
     message("bad", `The keys were not unlocked: ${e.message}.`);
     throw e;
@@ -1710,14 +2014,14 @@ function unlockKeys() {
 
 // A change written directly: carried out, signed and committed (direct.js);
 // the archive is then read again at the new commit.
-async function writeDirectly(name, fields, files, typed, what) {
+async function writeDirectly(name, fields, files, typed, what, acting = null) {
   const repo = state.repo;
   const started = performance.now();
   const say = { reading: "Reading the archive ...", "carrying out": `Carrying out: ${what} ...`,
                 committing: "Signed; committing to the repository ..." };
   let res;
   try {
-    res = await direct.write({ gh: ghCore(), repo, operation: name, fields, files, keys: state.keys,
+    res = await direct.write({ gh: ghCore(), repo, operation: name, fields, files, keys: state.keys, acting,
                                settings: state.settings, cache: state.cache, progress: (p) => message("info", say[p] || p) });
   } catch (e) {
     message("bad", `The change could not be written: ${e.message}`, el("p", {},
@@ -1726,7 +2030,7 @@ async function writeDirectly(name, fields, files, typed, what) {
   }
   if (!res.ok) {
     const id = `direct-${Date.now()}`;
-    state.sent.set(id, { name, values: typed });
+    state.sent.set(id, { name, values: typed, acting });
     message("bad", render(res.message), correctButton(id, res));
     return;
   }
@@ -1742,6 +2046,119 @@ async function writeDirectly(name, fields, files, typed, what) {
   if (state.repo !== repo) return;
   message("ok", render(res.message), el("p", { class: "small muted" }, `Written in ${seconds} s, signed in this page: commit `,
     el("a", { href: res.commit.url || `https://github.com/${repo}/commit/${res.commit.sha}` }, res.commit.sha.slice(0, 7)), "."));
+}
+
+// --- the owner a change is signed for ---------------------------------------------
+
+// The operations on a paper (its label in "Label"), those given only by the
+// paper's owner, and those on the members of a collection, which only its
+// owner changes.
+const OWN_ONLY = { notice: "A notice", withdraw: "A withdrawal", relicense: "A new licence" };
+const COLLECTION_OPS = ["add", "vet", "remove"];
+
+// The parent of a paper's line (the head of its object.json), once read:
+// { owner, name } or null; undefined while not read (loadTitles).
+function parentOf(o) {
+  const t = state.titles.get(o.label);
+  return t ? t.parent : undefined;
+}
+
+const originatorOfLine = (o) => state.originators.get(`${o.name}:${o.owner}`) || "";
+
+// In a form written directly: the owner it is signed for (among those
+// unlocked; the acting owner first), and, for a new version of another
+// owner's paper, where it goes (that owner's branch, made if needed: from
+// which version, and under which label). Drawn again as the paper or the
+// owner changes. READ gives { owner, branchFrom, branchLabel }.
+function actingBlock(name, inputs, preset) {
+  const box = el("div", { class: "acting" });
+  const st = { owner: (preset && preset.owner) || "", touched: Boolean(preset && preset.owner),
+               branchFrom: preset ? preset.branchFrom ?? null : null, branchLabel: (preset && preset.branchLabel) || "" };
+  const draw = () => box.replaceChildren(...actingParts(name, inputs, st, draw));
+  box.read = () => ({ owner: st.owner, branchFrom: st.branchFrom, branchLabel: st.branchLabel });
+  box.redraw = draw;
+  draw();
+  return box;
+}
+
+function actingParts(name, inputs, st, draw) {
+  const s = state.settings;
+  if (!s || viaWorkflow() || direct.WORKFLOW_ONLY.includes(name)) return [];
+  const open = unlockedOwners();
+  const label = inputs["Label"] ? inputs["Label"].value.trim() : "";
+  const line = label ? docs().find((o) => o.label === label) : null;
+  const coll = inputs["In collection"] ? state.collections.find((c) => c.label === inputs["In collection"].value) : null;
+  // by default: the acting owner; for an act of a line's or a collection's
+  // owner, that owner if unlocked
+  if (!st.touched) {
+    const own = OWN_ONLY[name] && line ? line.owner : COLLECTION_OPS.includes(name) && coll ? coll.owner : "";
+    st.owner = own && open.includes(own) ? own : actingOwner();
+  }
+  const choices = open.length ? open : [st.owner];
+  if (!choices.includes(st.owner)) st.owner = choices[0];
+  const parts = [];
+  if (choices.length > 1 || st.owner !== s.owner || (line && line.owner !== st.owner)) {
+    parts.push(el("div", { class: "field" },
+      el("label", { for: `f-${name}-acting` }, "Act as"),
+      el("select", { id: `f-${name}-acting`, onchange: (ev) => { st.owner = ev.target.value; st.touched = true; draw(); } },
+        choices.map((o) => el("option", { value: o, selected: o === st.owner },
+          ownerText(o) + (o === s.owner ? " (default owner)" : "")))),
+      el("p", { class: "help" }, open.length ? "The owner this change is signed for, among those unlocked above."
+        : "The owner this change is signed for: its keys are unlocked when it is sent.")));
+  }
+  const versionOf = inputs["This deposit"] && inputs["This deposit"].value === NEW_VERSION;
+  if (name === "deposit" && versionOf && line && line.owner !== st.owner) {
+    const c = continuation(line, st.owner, docs(), parentOf, originatorOfLine(line));
+    const who = ownerCode(st.owner);
+    if (c.kind === "branch" || c.kind === "originator") {
+      parts.push(el("p", { class: "notice" }, el("code", {}, line.label), " is a line of ", ownerCode(line.owner),
+        ". This new version goes into ", el("code", {}, c.label), ", ",
+        c.kind === "branch" ? ["the branch of it of ", who] : ["the line of ", who, ", the paper's originator"], "."));
+    } else if (c.kind === "refused") {
+      parts.push(el("p", { class: "notice warn" }, who, " is the originator of this paper, and its own line is not in this " +
+        "archive; an originator never owns a branch of its own work. Act as another owner."));
+    } else {
+      const n = versionsOf(line.label);
+      const taken = new Set([...state.lines.map((o) => o.label), ...state.collections.map((x) => x.label)]);
+      // proposed for this paper and this owner, until typed
+      const proposed = branchLabel(line.label, ownerText(st.owner), taken);
+      if (!st.branchLabel || st.proposed === st.branchLabel) st.branchLabel = proposed;
+      st.proposed = proposed;
+      const from = n ? el("select", { id: `f-${name}-branch-from`, onchange: (ev) => {
+          st.branchFrom = Number(ev.target.value) === n ? null : Number(ev.target.value); } },
+        Array.from({ length: n }, (_, i) => n - i).map((v) => el("option", { value: String(v),
+          selected: (st.branchFrom ?? n) === v }, v === n ? `${v} (the latest)` : String(v))))
+        : el("input", { id: `f-${name}-branch-from`, inputmode: "numeric", placeholder: "empty for the latest",
+                        value: st.branchFrom ?? "", oninput: (ev) => { const v = ev.target.value.trim();
+                          st.branchFrom = /^\d+$/.test(v) ? Number(v) : null; } });
+      parts.push(el("div", { class: "notice" },
+        el("p", {}, el("code", {}, line.label), " is a line of ", ownerCode(line.owner), ". This new version goes into a new " +
+          "branch of it for ", who, ": a line of ", who, " that continues the paper from a signed version of it, with the " +
+          "evidence of that version (section 9 of the specification). Later new versions by ", who, " go there too."),
+        c.known ? null : el("p", { class: "small muted" }, "The archive's lines are not all read yet: if this owner has a " +
+          "branch of the paper already, the new version goes there instead."),
+        el("div", { class: "field" }, el("label", { for: `f-${name}-branch-from` }, "Branch from version"), from,
+          el("p", { class: "help" }, "A signed document version of ", el("code", {}, line.label), "; the latest by default.")),
+        el("div", { class: "field" }, el("label", { for: `f-${name}-branch-label` }, "Label of the branch"),
+          el("input", { id: `f-${name}-branch-label`, value: st.branchLabel,
+                        oninput: (ev) => { st.branchLabel = ev.target.value.trim(); } }),
+          el("p", { class: "help" }, "Its address in the archive (paper/LABEL/): lower-case letters and digits, words joined by -."))));
+    }
+  }
+  if (OWN_ONLY[name] && line && line.owner !== st.owner) {
+    parts.push(el("p", { class: "notice warn" }, `${OWN_ONLY[name]} is given only by the owner of the line, `,
+      ownerCode(line.owner), open.includes(line.owner) ? ": act as it." : ": unlock its keys to act as it, or give it on " +
+        "your own branch of the paper."));
+  }
+  if (COLLECTION_OPS.includes(name) && coll && coll.owner !== st.owner) {
+    parts.push(el("p", { class: "notice warn" }, "Only its owner, ", ownerCode(coll.owner), ", changes the members of ",
+      el("code", {}, coll.label), open.includes(coll.owner) ? ": act as it." : ": unlock its keys to act as it."));
+  }
+  if (st.owner !== s.owner && !unlockedOwner(s.owner) && ["deposit", "notice", "withdraw", "relicense"].includes(name)) {
+    parts.push(el("p", { class: "small warn" }, "The main catalogue of the archive follows every paper, and the default " +
+      "owner ", ownerCode(s.owner), " signs it: unlock its keys too."));
+  }
+  return parts;
 }
 
 // --- forms -------------------------------------------------------------------
@@ -1775,13 +2192,15 @@ function options(kind, values) {
   return kind.map((o) => [o, o]);
 }
 
-function openForm(name, preset = {}) {
+function openForm(name, preset = {}, acting = null) {
   const form = FORMS[name];
   const values = { ...preset };
   const inputs = {};
-  const body = el("form", { class: "op", onsubmit: (ev) => { ev.preventDefault(); submit(name, inputs, body); } },
+  let owner = null;
+  const body = el("form", { class: "op", onsubmit: (ev) => { ev.preventDefault(); submit(name, inputs, body, owner.read()); } },
     el("h3", {}, form.title),
     form.help ? el("p", { class: "muted" }, form.help) : null,
+    el("div", { class: "acting-slot" }),
     form.fields.map((f) => {
       const id = `f-${name}-${f.label.replace(/[^a-z0-9]+/gi, "-")}`;
       let input;
@@ -1802,14 +2221,17 @@ function openForm(name, preset = {}) {
       } else input = el("input", { id, placeholder: f.placeholder });
       if (input.type !== "file" && values[f.label] !== undefined) input.value = values[f.label];
       if (f.label === "In collection" && FORMS[name].fields.some((g) => g.options === "members"))
-        input.addEventListener("change", () => openForm(name, { ...collect(inputs), "In collection": input.value }));
+        input.addEventListener("change", () => openForm(name, { ...collect(inputs), "In collection": input.value }, owner.read()));
       // the versions follow the paper chosen
       if (f.label === "Label" && FORMS[name].fields.some((g) => g.options === "versions"))
         input.addEventListener("change", () => {
           const kept = collect(inputs);
           delete kept["Document version it is about"];
-          openForm(name, { ...kept, "Label": input.value });
+          openForm(name, { ...kept, "Label": input.value }, owner.read());
         });
+      // where a deposit goes follows the paper and the kind of deposit
+      if (["Label", "This deposit", "In collection"].includes(f.label))
+        input.addEventListener(input.tagName === "SELECT" ? "change" : "input", () => owner && owner.redraw());
       inputs[f.label] = input;
       return el("div", { class: "field" },
         el("label", { for: id }, f.label, f.required ? el("span", { class: "required" }, " (required)") : null),
@@ -1818,6 +2240,8 @@ function openForm(name, preset = {}) {
     el("div", { class: "controls" },
       el("button", { type: "submit", class: "primary" }, "Send"),
       el("button", { type: "button", onclick: () => show("#form") }, "Cancel")));
+  owner = actingBlock(name, inputs, acting);
+  body.querySelector(".acting-slot").replaceWith(owner);
   show("#form", body);
   body.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -1838,7 +2262,7 @@ function collect(inputs) {
 // arXiv) or the person chose the workflow. If the owner's keys are not
 // unlocked yet, the popup of the passkey is opened in this click, before
 // anything else: browsers open popups only from a click.
-async function submit(name, inputs, formNode) {
+async function submit(name, inputs, formNode, acting = null) {
   const controls = formNode ? [...formNode.querySelectorAll("input, select, textarea, button")] : [];
   if (controls.some((c) => c.disabled)) return;
   const values = collect(inputs);
@@ -1848,7 +2272,8 @@ async function submit(name, inputs, formNode) {
   const { missing } = check(name, values, chosen);
   if (missing.length) { message("bad", `Fill in: ${missing.join(", ")}.`); return; }
   const directly = state.settings && !direct.WORKFLOW_ONLY.includes(name) && !viaWorkflow();
-  const unlocking = directly && !unlocked() ? unlockKeys() : null;
+  const who = (acting && acting.owner) || actingOwner();
+  const unlocking = directly && !unlockedOwner(who) ? unlockKeys() : null;
   controls.forEach((c) => { c.disabled = true; });
   const enable = () => controls.forEach((c) => { c.disabled = false; });
   try {
@@ -1859,13 +2284,14 @@ async function submit(name, inputs, formNode) {
         return;
       }
     }
-    await send(name, inputs, { workflow: !directly });
+    await send(name, inputs, { workflow: !directly, acting: directly ? { ...(acting || {}), owner: acting && acting.owner ||
+                                                                         actingOwner() } : null });
   } finally {
     if (formNode && formNode.isConnected) enable();
   }
 }
 
-async function send(name, inputs, { workflow = true } = {}) {
+async function send(name, inputs, { workflow = true, acting = null } = {}) {
   const values = collect(inputs);
   const typed = { ...values };
   const files = {};
@@ -1876,7 +2302,7 @@ async function send(name, inputs, { workflow = true } = {}) {
   const { fields, missing } = check(name, values, files);
   if (missing.length) { message("bad", `Fill in: ${missing.join(", ")}.`); return; }
   const what = `${FORMS[name].title}${subject(name, fields) ? `: ${subject(name, fields)}` : ""}`;
-  if (!workflow) return writeDirectly(name, fields, files, typed, what);
+  if (!workflow) return writeDirectly(name, fields, files, typed, what, acting);
   return sendRequest(name, fields, files, typed, what);
 }
 
@@ -1947,7 +2373,7 @@ async function resumePending(repo) {
 function correctButton(id, result) {
   const sent = state.sent.get(id);
   if (!sent || result.ok) return null;
-  return el("p", {}, el("button", { onclick: () => openForm(sent.name, sent.values) },
+  return el("p", {}, el("button", { onclick: () => openForm(sent.name, sent.values, sent.acting) },
     "Correct and send again"));
 }
 

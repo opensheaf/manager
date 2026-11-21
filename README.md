@@ -36,37 +36,69 @@ templates, as `osheaf index` writes them), in the same commit: no workflow
 of the archive is needed to present it. The template's `verify` workflow
 still checks every push.
 
-**The keys.** The owner's current keys are those of its key wallet, a
-private GitHub repository where `osheaf key push --wallet
+**The keys.** An owner's current keys are kept in key wallets, private
+GitHub repositories where `osheaf key push --wallet
 github:OWNER/REPOSITORY` put them, each locked with the passphrase and the
-owner's passkeys (`osheaf key enroll`). The wallet is the first that
-the archive's `osheaf.json` hints for the owner (`"keys": {"<owner>":
-{"wallets": [...]}}`, or the earlier `"keys": {"wallet": ...}` for every
-owner), or else the one given in the page (kept in this browser: a name,
-not a secret). Wallets and owners are many to many (a wallet may hold the
-keys of several owners, several people may share an owner's keys, each
-with a passkey of their own, and an owner's keys may be in several
-wallets); choosing a wallet, then the owners to unlock in it, is the
-next step of the page. The passkeys belong to
+passkeys of those who use them (`osheaf key enroll`). Wallets and owners
+are many to many: a wallet may hold the keys of several owners (an
+institution's wallet), several people may share a wallet and its owner
+(a group), each with a passkey of their own, and an owner's keys may be in
+several wallets. Under "Write directly", the page lists the wallets that
+the archive's `osheaf.json` hints for each owner it hosts (`"keys":
+{"<owner>": {"wallets": [...]}}`, or the earlier `"keys": {"wallet":
+...}` for every owner), then those added by name in the page (kept in
+this browser: names, not secrets). Choosing a wallet (step 1) and then
+the owners to unlock in it (step 2, the owners of the archive whose keys
+it holds, read from it) are two steps; "Unlock the chosen owners with
+your passkey" then unlocks them, and owners unlocked from several wallets
+add up in the page. The passkeys belong to
 <https://unlock.opensheaf.org/>, which no other page can ask; the page
-opens it in a **popup** ("Unlock with your passkey", or the first change
-sent): the popup asks for the passkey (Touch ID), seals its secret to a
-one-time key of this page, exactly as for `osheaf key unlock`, and sends
-it back by a window message, to this page's origin only; you type here the
-code of six digits the popup shows, and the page opens the seal with it,
-then the keys. The keys are kept in the page's memory only, as WebCrypto
-keys that cannot be exported, until the page is closed or locked ("Lock");
+opens it in a **popup**: the popup asks for the passkey (Touch ID), seals
+its secret to a one-time key of this page, exactly as for `osheaf key
+unlock`, and sends it back by a window message, to this page's origin
+only; you type here the code of six digits the popup shows, and the page
+opens the seal with it, then the keys. A passkey's secret is derived for
+one owner's salt, and WebAuthn derives at most two at once: one touch
+unlocks two owners when one passkey opens both (version 2 of the popup's
+request, see opensheaf/unlock), else one; the others are unlocked by
+"Unlock the next", a touch each, since a browser opens a popup only from
+a click. The keys are kept in the page's memory only, as WebCrypto keys
+that cannot be exported, until the page is closed or locked ("Lock");
 they are never written to the browser's storage. The GitHub sign-in must
 be able to read the wallet: install the OpenSheaf app on the wallet's
 repository too (the page only reads it, except to set it up, below).
 
+**Acting for an owner; branches.** Once owners are unlocked, "Act as"
+chooses the owner a change is signed for (kept in this browser, per
+archive), and each form may choose another among those unlocked. New
+papers and collections are the acting owner's lines. A new version of a
+paper of another owner goes into the acting owner's branch of it
+(section 9 of the specification): its existing branch if it has one (or,
+for the work's originator, its own line), else a new branch made first,
+from the signed version chosen (the latest by default), with the evidence
+of that version in `parent/`, under a label chosen in the form (the
+paper's label and the owner's). Notices, licences and withdrawals are
+given only by a line's owner: on the lines of another owner they are
+disabled, and the page says why; the members of a collection are changed
+only by its owner. The papers are listed with their branches under them.
+Every change of a paper also updates the archive's main catalogue, which
+the default owner signs: its keys must be unlocked too. Through the
+workflow, which signs with the default owner's key for the workflows,
+only the default owner acts; branches by another owner need "Write
+directly".
+
 **Setting up a wallet from the page.** An owner whose current key is on
 one computer only, in `osheaf`'s key store, sets up the wallet under
-"Write directly", "Set up a key wallet", while the keys are locked (the
-wallet named next to "Unlock with your passkey" is checked in the
-background when the archive opens: once it holds enough of the owner's
-current keys and a passkey opens them, the panel is folded as "The key
-wallet: ready (manage)"; once the keys are unlocked, it is not shown):
+"Write directly", "Key wallets", "Set up a key wallet", for the owner
+chosen there (the default owner by default) and the wallet chosen above
+(checked in the background: once it holds enough of the owner's current
+keys and a passkey opens them, the panel is folded as "The key wallet of
+OWNER: ready (manage)"). A member of a group whose wallet is set up
+already only enrols a passkey of their own (step 3); an owner of a
+wallet without a passkey of its own yet is enrolled with the passkey that
+opens another owner of the wallet, so that one touch unlocks both. A
+wallet that holds keys of the owner and that the archive does not hint
+for it yet is recorded in `osheaf.json` as a hint for that owner:
 
 1. *The wallet*: a private repository of the person's, never the
    archive's (a link opens GitHub's page to create it, filled in:
@@ -77,8 +109,9 @@ wallet: ready (manage)"; once the keys are unlocked, it is not shown):
    repository is private, not the archive's, and that the sign-in can read
    and write it; `osheaf key push` refuses a public repository too. Once
    the wallet holds keys of the owner, and the archive's `osheaf.json`
-   hints no wallet for it, the page records it there, in a commit, as a
-   hint for the owner (as `osheaf key push --wallet` does), and says so.
+   does not hint it for the owner yet, the page records it there, in a
+   commit, as a hint for that owner (as `osheaf key wallet --owner OWNER
+   --add WALLET` does), and says so.
 2. *The current key*: the person picks the key file of `osheaf`'s key
    store (`~/.config/opensheaf/keys/OWNER/K.key`, one line, the seed in
    base64) or pastes it, or the text of `osheaf key export --stdout` when
@@ -297,9 +330,11 @@ wallet: give it the wallet's repository too (Contents: read).
   the answer (GitHub may serve the branch's files from before a push for a
   while), so that the change shows at once.
 - `forms.js`: the forms, with the labels of the archive's issue forms.
-- `direct.js`: writing directly: the popup of the passkey, the keys of
-  the wallet, setting the wallet up, a new archive and its owner made in
-  the page, and an operation carried out and committed.
+- `direct.js`: writing directly: the wallets offered and the owners each
+  holds, the popups that unlock the owners chosen (two at one touch when
+  one passkey opens both), the popup of the passkey, setting a wallet up
+  for an owner, a new archive and its owner made in the page, and an
+  operation carried out and committed for the acting owner.
 - `zip.js`: a zip of text files, stored, for the rotation-key files saved
   at once.
 - `pages.js`: after each commit, whether GitHub Pages has published the
@@ -325,6 +360,9 @@ wallet: give it the wallet's repository too (Contents: read).
   tombstones), never fewer than 8 characters, computed at each reading;
   a line of another archive by the first 16 characters of its name. Full
   forms stay in the titles of links, in links, and in what is written.
+  And the papers with their branches under them, where a new version by
+  another owner goes (its branch, the originator's line, or a new
+  branch), and the label proposed for a branch.
 - `github.js`: the GitHub API: reading files, and writing a request as one
   commit (blobs, a tree, a commit, the branch moved; made again on top if
   the branch moved meanwhile).
@@ -353,6 +391,17 @@ with `tools/live-test.mjs`:
 
     GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key KEYFILE \
       --operation notice --fields '{"Label": "x", "Document version it is about": "1", "Text of the notice": "..."}'
+
+A change by another owner of the archive, with the keys of both owners
+(a key file of a seed alone names its owner, `OWNER:FILE`; the default
+owner signs the main catalogue): a new version of the default owner's
+paper goes into a branch of the acting owner's (`--owner`), made from the
+latest signed version or `--branch-from N`, labelled `--branch-label`:
+
+    GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key KEYFILE --key OWNER2:KEYFILE2 \
+      --owner OWNER2 --branch-label x-member --operation deposit \
+      --fields '{"This deposit": "A new version of a paper in the archive", "Label": "x", ...}' \
+      --file 'PDF of this version=paper.pdf' --file 'Sources=paper.tex'
 
 ## Licence
 

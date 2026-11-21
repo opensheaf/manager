@@ -141,3 +141,76 @@ export function ownerShown(owner, archiveLines, short) {
 export function foreignName(name) {
   return name.length > 16 ? `${name.slice(0, 16)}…` : name;
 }
+
+// --- branches (section 9) -------------------------------------------------------
+
+const lineKey = (o) => `${o.name}:${o.owner}`;
+
+// The papers in the order the page lists them: each line followed by its
+// branches in this archive (a branch is listed under its parent line, a
+// branch of a branch under that branch), by PARENTOF(line), the `parent` of
+// its object.json ({ owner, name }) once read, or null. [{ line, depth }]
+export function grouped(docs, parentOf) {
+  const byKey = new Map(docs.map((o) => [lineKey(o), o]));
+  const children = new Map(), roots = [];
+  for (const o of docs) {
+    const p = parentOf(o);
+    const pk = p && p.name && p.owner ? lineKey(p) : null;
+    if (pk && pk !== lineKey(o) && byKey.has(pk)) {
+      if (!children.has(pk)) children.set(pk, []);
+      children.get(pk).push(o);
+    } else roots.push(o);
+  }
+  const out = [], seen = new Set();
+  const visit = (o, depth) => {
+    if (seen.has(lineKey(o))) return;
+    seen.add(lineKey(o));
+    out.push({ line: o, depth });
+    for (const c of children.get(lineKey(o)) || []) visit(c, depth + 1);
+  };
+  for (const o of roots) visit(o, 0);
+  for (const o of docs) visit(o, 0);   // a cycle, which no archive that verifies has
+  return out;
+}
+
+// Where a new version of LINE goes when ACTING deposits it (as the core's
+// carryOut decides, from what the page has read): "own", its own line;
+// "branch", ACTING's branch of it (LABEL); "originator", the originator's
+// own line of the work, ACTING being its originator (LABEL); "new", a new
+// branch, made first; "refused", ACTING is the work's originator and its
+// own line is not in this archive (an originator never owns a branch of its
+// own work, section 5.3). KNOWN is false while the parents of the lines are
+// not all read: the archive then decides when the change is sent.
+export function continuation(line, acting, docs, parentOf, originator = "") {
+  if (!acting || line.owner === acting) return { kind: "own", label: line.label, known: true };
+  const known = docs.every((o) => parentOf(o) !== undefined);
+  const branch = docs.find((o) => {
+    const p = o.owner === acting && parentOf(o);
+    return p && p.name === line.name && p.owner === line.owner;
+  });
+  if (branch) return { kind: "branch", label: branch.label, known: true };
+  if (originator && originator === acting) {
+    // up the parents to the originator's line, if this archive holds it
+    let cur = line;
+    for (let k = 0; k < 64 && cur; k++) {
+      const p = parentOf(cur);
+      if (!p) break;
+      cur = docs.find((o) => o.name === p.name && o.owner === p.owner) || null;
+      if (cur && cur.owner === acting) return { kind: "originator", label: cur.label, known: true };
+    }
+    return { kind: "refused", label: "", known };
+  }
+  return { kind: "new", label: "", known };
+}
+
+// The label proposed for a new branch: the line's label and the owner's
+// word (its label in the archive, or its short owner name), as a label of
+// section 3.1 (at most 64 characters), not taken in the archive.
+export function branchLabel(label, word, taken) {
+  const clean = (x) => x.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const w = clean(word) || "branch";
+  const stem = `${clean(label).slice(0, 63 - w.length)}-${w}`.replace(/-+/g, "-").replace(/^-|-$/g, "");
+  let out = stem;
+  for (let n = 2; taken.has(out); n++) out = `${stem.slice(0, 63 - String(n).length)}-${n}`;
+  return out;
+}
