@@ -285,3 +285,16 @@ body.with-dock footer.site { padding-bottom: 4rem; }
 .result.change summary { cursor: pointer; }
 .chip.how-page { background: var(--os-ok-bg); color: var(--os-ok); }
 .chip.how-workflow, .chip.how-request { background: var(--os-surface); color: var(--os-muted); }
+
+/* a new archive: the owner made in the page */
+.create .op.setup { margin: 1.2rem 0; padding: 1.2em 1.4em; background: var(--os-surface); border-radius: 4px; }
+.create .op h3 { margin-top: 0; }
+.create h4 { margin: 1.2em 0 0.2em; font-size: 1rem; }
+.create ul.rotation-files { padding-left: 1.2em; }
+.create ul.rotation-files li { margin: 0.25em 0; font-family: var(--os-mono); font-size: 0.85em; }
+.create input.check { width: 5em; margin-left: 0.6em; font-family: var(--os-mono); text-transform: uppercase; }
+.create input.secret { min-width: 24em; font-family: var(--os-mono); font-size: 0.85em; }
+.create input#create-wallet { min-width: 18em; }
+.create .field input[type="checkbox"] { margin-right: 0.4em; }
+details.ceremony { margin-top: 1.5em; }
+details.ceremony > summary { font-weight: 600; }

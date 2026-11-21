@@ -9,7 +9,7 @@ const enc = new TextEncoder();
 const b64url = (bytes) => Buffer.from(bytes).toString("base64url");
 
 // The unlock page's sealing (unlock-core.js), written again here.
-export async function seal(secret, pkText, state, mode) {
+export async function seal(secret, pkText, state, mode, who = owner) {
   const eph = await subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
   const pk = Buffer.from(pkText, "base64url");
   const peer = await subtle.importKey("raw", pk, { name: "X25519" }, false, []);
@@ -20,7 +20,7 @@ export async function seal(secret, pkText, state, mode) {
   const ct = secret.map((b, i) => b ^ both[i]);
   const epk = new Uint8Array(await subtle.exportKey("raw", eph.publicKey));
   const mac = await subtle.importKey("raw", both.slice(32), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const aad = enc.encode(`${mode}|${owner}|${cred}|${pkText}|${b64url(epk)}`);
+  const aad = enc.encode(`${mode}|${who}|${cred}|${pkText}|${b64url(epk)}`);
   const tag = new Uint8Array(await subtle.sign("HMAC", mac, new Uint8Array([...aad, ...ct])));
   return { epk: b64url(epk), ct: b64url(ct), tag: b64url(tag) };
 }

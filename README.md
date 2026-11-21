@@ -140,17 +140,67 @@ which the page reads.
 ## The owner and its keys
 
 Every version of an archive is signed by its owner (section 6 of the
-specification). The owner is made on the author's computer with `osheaf`,
-never in the browser; the page holds the owner's current keys only while
-they are unlocked (above). The archive's workflows sign with a current
-key of their own, kept in the repository secret `OPENSHEAF_SIGNING_KEY`:
-the *key ceremony* of the template's README. For
-a repository not set up yet, the page shows the ceremony step by step (the
+specification): its current keys sign, and its rotation keys, two of
+three, sign any change of the current keys. The archive's workflows sign
+with a current key of their own, kept in the repository secret
+`OPENSHEAF_SIGNING_KEY`.
+
+**A new archive, set up from the page.** A repository made from the
+[archive template](https://github.com/new?template_owner=opensheaf&template_name=archive-template)
+and not set up yet opens on "Create the owner and set up the archive
+here": the archive's fields (those of the template's setup: name,
+purpose, description, curator, affiliation, contact, base URL, empty for
+the address the setup finds), the owner's keeper (optional: an ORCID iD
+or `https://DOMAIN/`), the key wallet (a private repository, checked as
+above), the security level of the rotation keys, whether the archive's
+workflow signs too (ticked by default), and a passphrase, twice. The page
+then makes, in its memory only:
+
+- the owner's current key, which signs in the page;
+- the current key of the workflows (if ticked);
+- three rotation keys, two of which sign the next version of the key log;
+- the first version of the owner's key log, with both current keys and
+  threshold 1, byte for byte what `osheaf init --new-owner --key DID`
+  makes for the same keys and time.
+
+At the offline level (the maximum), the rotation keys are given as the
+files of `osheaf init --export`, locked with the passphrase (one zip, or
+one by one) and as printable sheets, and nothing is committed until the
+check of each is typed back. At the wallet level (`osheaf init --keys`),
+they are put in the wallet, locked with the passphrase, before anything
+is committed. Then, in order, each step said as it goes and tried again
+where it stopped, the keys kept in memory meanwhile (leaving the page asks
+first):
+
+1. the archive set up as the template's setup sets it up (`osheaf init`
+   with that owner; for a selection or a catalogue, its collection created
+   and featured on the home page), verified, one commit;
+2. the labels of the issue forms, if the sign-in may create labels
+   (*Issues: read and write*; the App does not ask for it: the workflow
+   "Set up the archive", run once, creates them);
+3. the owner's current key in the wallet, as `osheaf key push` puts it;
+4. the workflows' key as the repository secret `OPENSHEAF_SIGNING_KEY`,
+   sealed to the repository's public key (libsodium's sealed box) and
+   stored through GitHub's API, if the sign-in may (*Secrets: read and
+   write*, and an administrator of the repository); otherwise it is shown
+   once, with a Copy button and a link to the repository's secrets, and
+   forgotten when the person goes on;
+5. the passkey, as in step 3 of the wallet's setup (or later);
+6. GitHub Pages turned on (branch `main`, its root), if the sign-in may
+   (*Pages: write*); otherwise a link to Settings, Pages.
+
+The archive then opens with the owner's key unlocked: changes are written
+directly. The seeds are wiped once used; nothing is kept in the browser's
+storage but the wallet's name.
+
+**Or on a computer: the key ceremony.** Folded under the form, the page
+shows the *key ceremony* of the template's README step by step (the
 commands to run, a link to the repository's settings where the secret is
 set, whether the secret and the folder `key-log/` are there), then sends
 the setup request with the owner's key log (a zip of the folder of its
-owner object: public keys only). It reads whether the secret is set when
-the sign-in may (never its value), and warns when it is not.
+owner object: public keys only) to the archive's workflow. The rotation
+keys then never pass through a browser. The page reads whether the secret
+is set when the sign-in may (never its value), and warns when it is not.
 
 ## Passkey unlock for osheaf
 
@@ -186,6 +236,13 @@ The page writes to the repository with the author's GitHub account:
   repository, with the permission *Contents: read and write*. This needs no
   service, and works from a copy of the page anywhere.
 
+Setting up a new archive also uses, when the sign-in has them, the
+permissions *Secrets: read and write* (the workflows' key stored as the
+repository's secret), *Issues: read and write* (the labels of the issue
+forms) and *Pages: read and write* (GitHub Pages turned on); without
+them, the page says what to do by hand. GitHub lets only an administrator
+of the repository set its secrets or Pages.
+
 The token stays in the tab (`sessionStorage`), and goes only to GitHub's
 API. Only those who may write to the repository can commit to it or send
 requests, so the archive's workflow needs no further check. A personal
@@ -201,7 +258,8 @@ wallet: give it the wallet's repository too (Contents: read).
   archive's own site (a faster copy of its files, each checked against
   its git name), and the other archives whose papers a collection holds.
 - `app.js`: the interface: signing in, choosing the repository, showing
-  the archive, the key ceremony of a repository not set up, the forms,
+  the archive, the setup of a repository not set up (the owner made in the
+  page, or the key ceremony), the forms,
   sending requests and reading their answers; messages float at the top
   right (a success for a few seconds, a refusal until closed), and the
   Activity bar at the bottom says how the website and the requests are, and
@@ -224,8 +282,8 @@ wallet: give it the wallet's repository too (Contents: read).
   while), so that the change shows at once.
 - `forms.js`: the forms, with the labels of the archive's issue forms.
 - `direct.js`: writing directly: the popup of the passkey, the keys of
-  the wallet, setting the wallet up, and an operation carried out and
-  committed.
+  the wallet, setting the wallet up, a new archive and its owner made in
+  the page, and an operation carried out and committed.
 - `zip.js`: a zip of text files, stored, for the rotation-key files saved
   at once.
 - `pages.js`: after each commit, whether GitHub Pages has published the

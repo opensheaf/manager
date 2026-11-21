@@ -13,7 +13,7 @@ import { signIn, refresh } from "./gh-auth.js";
 import * as gh from "./github.js";
 import { FORMS, NEW_VERSION, check, subject } from "./forms.js";
 import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf } from "./archive.js";
-import { readArchive, headFiles, awaitRequest } from "./load.js";
+import { readArchive, headFiles, awaitRequest, baseUrl } from "./load.js";
 import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
 import * as direct from "./direct.js";
@@ -459,19 +459,19 @@ function showEmpty(repo, meta) {
         el("li", {}, "Come back here, open it, and set it up."))));
 }
 
-// The settings page where the repository's secrets are set: the manager
-// never sets a secret, and never sees a key.
+// The settings page where the repository's secrets are set (by hand, when
+// the sign-in may not set them).
 function secretsPage(repo) {
   return `https://github.com/${repo}/settings/secrets/actions`;
 }
 
 const PIPX = 'pipx install "opensheaf[validate] @ git+https://github.com/opensheaf/opensheaf-py"';
 
-// A repository made from the template and not set up: the key ceremony,
-// step by step. The owner and its rotation keys are made on the author's
-// computer with osheaf, never in the browser; the manager only says what to
-// run, where the secret goes, and then sends the setup with the key log
-// (public keys only).
+// A repository made from the template and not set up, the other way: the
+// key ceremony, step by step. The owner and its rotation keys are made on
+// the author's computer with osheaf; the manager only says what to run,
+// where the secret goes, and then sends the setup with the key log (public
+// keys only) to the archive's workflow.
 function ceremony() {
   const repo = state.repo;
   const user = repo.split("/")[0].toLowerCase();
@@ -483,11 +483,8 @@ function ceremony() {
   const code = (text) => el("pre", {}, text);
   const done = (ok, yes, no) => el("span", { class: `chip ${ok ? "ok" : "warn"}` }, ok ? yes : no);
   return [
-    el("h2", {}, `Set up ${repo}`),
-    el("p", {}, "An archive has an owner, who signs every version: a current key on your computer, a current " +
-      "key for the archive's workflows (they keep the archive when you use this page), and three rotation " +
-      "keys, kept offline, two of which sign any change of keys. The owner is made once, on your computer, " +
-      "with the osheaf command; this page never makes or sees a key."),
+    el("p", {}, "The owner made on your computer with the osheaf command, instead of in this page: its rotation keys " +
+      "never pass through a browser. The archive's workflow then sets the archive up with it."),
     el("ol", { class: "steps" },
       step("Install the tools", "(once, Python 3.9 or later):", code(PIPX)),
       step("Make the owner", "in a scratch folder, its rotation keys exported to a USB stick and printed:",
@@ -533,6 +530,438 @@ function ceremony() {
     el("div", { class: "controls" },
       el("button", { class: "primary", onclick: () => openForm("setup") }, "Set up the archive")),
   ];
+}
+
+// --- a new archive: the owner made in this page ------------------------------
+
+// A repository made from the archive template and not set up: the owner made
+// here (direct.js: prepareOwner ...), as osheaf init --new-owner --key DID
+// makes it, and the archive set up with it as the template's setup sets it
+// up, then the keys put where they belong, each step reported and tried
+// again without losing the keys, which are in this page's memory only (never
+// in the browser's storage). The panel is kept across redrawings, so that
+// what is typed stays; the passphrase is read from its fields when used, and
+// the fields are cleared.
+const creating = { repo: null, node: null, pending: null, values: {}, level: "offline", workflows: true, busy: false,
+                   steps: {}, secretShown: false };
+
+const SETUP_FIELDS = ["Name", "Purpose", "Description", "Curator", "Affiliation", "Contact", "Base URL"];
+
+function newArchive() {
+  const repo = state.repo;
+  const fromTemplate = "https://github.com/new?template_owner=opensheaf&template_name=archive-template";
+  if (creating.repo !== repo || !creating.node) {
+    if (creating.pending) direct.forgetOwner(creating.pending);
+    Object.assign(creating, { repo, node: el("div", { class: "create" }), pending: null, values: {}, level: "offline",
+                              workflows: true, busy: false, steps: {}, secretShown: false });
+    renderCreate();
+  }
+  return [
+    el("h2", {}, `Set up ${repo}`),
+    el("p", {}, `${repo} is not set up yet. (A new archive starts as a `,
+      el("a", { href: fromTemplate }, "repository made from the archive template"), ", public, with the OpenSheaf app " +
+      "installed on it.) An archive has an owner, who signs every version: a current key that signs in this page, " +
+      "kept in your key wallet; a current key for the archive's workflows, kept as a secret of the repository; and " +
+      "three rotation keys, two of which sign any change of keys."),
+    creating.node,
+    el("details", { class: "how ceremony" }, el("summary", {}, "Or make the owner on your computer (the key ceremony)"),
+      ceremony()),
+  ];
+}
+
+function renderCreate() {
+  const c = creating;
+  const p = c.pending;
+  const body = !p ? createForm() : !p.confirmed ? createExport() : createSteps();
+  c.node.replaceChildren(body);
+  if (c.busy) c.node.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+}
+
+function createBusy(b) {
+  creating.busy = b;
+  if (creating.node) creating.node.querySelectorAll("button").forEach((x) => { x.disabled = b; });
+}
+
+// The form: the archive's (those of the template's setup), the owner's
+// keeper, the wallet, the security level, the workflows' key, the passphrase.
+function createForm() {
+  const c = creating, v = c.values;
+  const base = state.base;
+  const field = (label, input, { required = false, help = null } = {}) => el("div", { class: "field" },
+    el("label", { for: input.id }, label, required ? el("span", { class: "required" }, " (required)") : null), input,
+    help ? el("p", { class: "help" }, help) : null);
+  const keep = (name) => (ev) => { v[name] = ev.target.value; };
+  const input = (name, attrs = {}) => el("input", { id: `create-${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
+    value: v[name] || "", oninput: keep(name), ...attrs });
+  const purpose = el("select", { id: "create-purpose", onchange: keep("Purpose") },
+    ["papers", "selection", "catalogue"].map((x) => el("option", { value: x, selected: (v.Purpose || "papers") === x }, x)));
+  if (v.wallet === undefined) {
+    v.wallet = direct.walletName({}, pref(WALLET + "new")) || `github:${state.user ? state.user.login : "you"}/opensheaf-keys`;
+  }
+  const wallet = input("wallet", { "aria-label": "Key wallet" });
+  const links = el("span", { class: "small" });
+  const drawLinks = () => {
+    const w = direct.walletName({}, wallet.value.trim());
+    links.replaceChildren(...(w ? [el("a", { href: direct.newRepositoryUrl(w), target: "_blank", rel: "noopener" }, "Create it on GitHub"),
+      " (private), then ", el("a", { href: installLink(w.slice(7).split("/")[0]), target: "_blank", rel: "noopener" },
+        "add it to the OpenSheaf app's repositories"), "."] : ["Name it github:OWNER/REPOSITORY."]));
+  };
+  wallet.addEventListener("input", drawLinks);
+  drawLinks();
+  const level = (value, text) => el("label", { class: c.level === value ? "on" : "" },
+    el("input", { type: "radio", name: "create-level", value, checked: c.level === value,
+                  onchange: () => { c.level = value; renderCreate(); } }), text);
+  const workflows = el("input", { type: "checkbox", id: "create-workflows", checked: c.workflows,
+                                  onchange: (ev) => { c.workflows = ev.target.checked; } });
+  const pass = el("input", { type: "password", id: "create-pass", name: "new-owner-passphrase", autocomplete: "new-password", "aria-label": "Passphrase",
+                             placeholder: "passphrase" });
+  const again = el("input", { type: "password", id: "create-pass-again", name: "new-owner-passphrase-again", autocomplete: "new-password",
+                              "aria-label": "Passphrase again", placeholder: "passphrase again" });
+  const make = async () => {
+    const missing = ["Name", "Curator"].filter((k) => !(v[k] || "").trim());
+    if (missing.length) { message("bad", `Fill in: ${missing.join(", ")}.`); return; }
+    const w = direct.walletName({}, (v.wallet || "").trim());
+    if (!w) { message("bad", "Name the key wallet as github:OWNER/REPOSITORY."); return; }
+    if ((v["Base URL"] || "").trim() && !/^https?:\/\/\S+$/.test(v["Base URL"].trim())) {
+      message("bad", "The base URL is an https address, such as https://jane.github.io/papers/."); return;
+    }
+    if (!pass.value) { message("bad", "Type a passphrase: it locks the keys."); return; }
+    if (pass.value !== again.value) { message("bad", "The two passphrases differ."); return; }
+    const passphrase = pass.value;
+    pass.value = ""; again.value = "";
+    createBusy(true);
+    message("info", `Checking ${w} and making the keys ...`);
+    try {
+      c.pending = await direct.prepareOwner({ gh: ghCore(), archiveRepo: state.repo, wallet: w, passphrase,
+                                              workflows: c.workflows, level: c.level, keeper: (v.keeper || "").trim() });
+      pref(WALLET + "new", w);
+      watchUnload(true);
+      if (c.pending.confirmed) {
+        createBusy(false);
+        renderCreate();
+        createRun();
+        return;
+      }
+      message("info", "Save the rotation keys, then type their checks: nothing is committed before.");
+    } catch (e) {
+      message("bad", `The owner was not made: ${e.message}.`);
+    } finally {
+      if (!c.pending || !c.pending.confirmed) { createBusy(false); renderCreate(); }
+    }
+  };
+  return el("form", { class: "op", onsubmit: (ev) => { ev.preventDefault(); make(); } },
+    el("h3", {}, "Create the owner and set up the archive here"),
+    el("p", { class: "muted" }, "The page makes the owner's keys and its key log, as osheaf init --new-owner does, sets " +
+      "the archive up with it as the template's setup does (the same files), and puts each key where it belongs. " +
+      "The keys are in this page's memory only until then: keep the page open until it is done."),
+    field("Name", input("Name", { placeholder: "Papers of Jane Doe, or A reading list on ..." }), { required: true }),
+    field("Purpose", purpose, { help: "Papers (yours, or a group's); a selection vets particular versions (a reading list, " +
+      "a journal issue); a catalogue follows its members. For a selection or a catalogue, its collection is created " +
+      "and featured on the home page." }),
+    field("Description", input("Description"), { help: "For a selection or a catalogue (optional)." }),
+    field("Curator", input("Curator", { placeholder: "Doe, Jane" }), { required: true, help: "Your name, as Family, Given." }),
+    field("Affiliation", input("Affiliation")),
+    field("Contact", input("Contact", { placeholder: "empty: the base URL" }), { help: "A web page or mailto: address." }),
+    field("Keeper", input("keeper", { placeholder: "https://orcid.org/0000-0002-1825-0097, or https://example.org/" }),
+      { help: "Optional: who answers for the owner, an ORCID iD or https://DOMAIN/ (section 6.6). It is part of the " +
+        "owner's genesis record, and cannot be changed later." }),
+    field("Base URL", input("Base URL", { placeholder: base ? base.url : "https://OWNER.github.io/REPOSITORY/" }),
+      { help: base ? `Where the site will be served. Empty: ${base.url} (${base.rule}).` : "Where the site will be served." }),
+    el("h4", {}, "The keys"),
+    field("Key wallet", wallet, { help: ["A private repository of yours, never the archive's, where the page puts the " +
+      "owner's current key, locked with the passphrase and your passkey. ", links] }),
+    el("div", { class: "field" }, el("label", {}, "The rotation keys"),
+      el("div", { class: "modes", role: "radiogroup", "aria-label": "The rotation keys" },
+        level("offline", "Offline: files and printed sheets"), level("wallet", "In the wallet")),
+      el("p", { class: "help" }, c.level === "offline"
+        ? "The maximum security level: the three rotation keys are given to you as files, locked with the passphrase, " +
+          "and as sheets to print; you keep them apart from your computer and from each other, and type back the check " +
+          "of each. Nothing is committed before."
+        : "A lower security level (osheaf init --keys): the rotation keys are kept in the wallet, locked with the " +
+          "passphrase; whoever has the wallet and the passphrase can change the owner's keys.")),
+    el("div", { class: "field" }, el("label", { for: "create-workflows" }, workflows, " Let the archive's workflow sign too"),
+      el("p", { class: "help" }, "A current key for the archive's workflows (the issue forms, requests to the workflow, " +
+        "arXiv), stored as the repository secret OPENSHEAF_SIGNING_KEY. Anyone who can change the repository's " +
+        "workflows can sign with it.")),
+    el("div", { class: "field" }, el("label", { for: "create-pass" }, "Passphrase"),
+      el("div", { class: "controls" }, pass, again),
+      el("p", { class: "help" }, "It locks the keys in the wallet and the rotation-key files. Keep it: osheaf asks for it too.")),
+    el("div", { class: "controls" }, el("button", { type: "submit", class: "primary" }, "Create the owner")));
+}
+
+// The offline level: the rotation keys to save, then their checks.
+function createExport() {
+  const p = creating.pending;
+  const checks = p.files.map((f) => el("input", { class: "check", size: 6, autocomplete: "off", spellcheck: "false",
+                                                  "aria-label": `Check of ${f.name}`, placeholder: "check" }));
+  return el("div", { class: "op setup" },
+    el("h3", {}, "Save the rotation keys"),
+    el("p", {}, "The owner ", el("code", { title: p.owner }, `${p.owner.slice(0, 16)}...`), " is made, in this page only. ",
+      el("strong", {}, `Save its ${p.files.length} rotation keys`), " before anything is committed: each file apart from " +
+      "your computer and from the others (a USB stick each, say), or print the sheets, as osheaf init --export asks. " +
+      "They are locked with the passphrase; any two of them sign a change of the owner's keys, and nothing else can."),
+    el("ul", { class: "rotation-files" }, p.files.map((f, k) => el("li", {},
+      el("a", { href: "#", onclick: (ev) => { ev.preventDefault(); download(f.name, f.text); } }, f.name),
+      "  check ", el("code", {}, f.check), "  ", checks[k]))),
+    el("p", { class: "controls" }, saveAllButton(p.files, p.owner, 1),
+      el("button", { type: "button", onclick: () => printSheets(p.files) }, "Print the sheets")),
+    el("p", { class: "small" }, "Save all the files gives one zip of the files, under the names osheaf gives them: unpack it " +
+      "onto the offline media (each file apart from the others), then delete the zip from this computer. Or save each file " +
+      "by its link. Then type the check of each file next to it, to confirm that they are put away; the archive is set up " +
+      "only then."),
+    el("form", { class: "controls", onsubmit: (ev) => {
+      ev.preventDefault();
+      try {
+        direct.confirmOwner(p, checks.map((x) => x.value));
+      } catch (e) {
+        message("bad", `${e.message}.`);
+        return;
+      }
+      renderCreate();
+      createRun();
+    } }, el("button", { type: "submit", class: "primary" }, "Confirm and set up the archive"), createCancel()));
+}
+
+function createCancel() {
+  return el("button", { type: "button", onclick: () => {
+    const p = creating.pending;
+    if (p && p.done.archive && !confirm("The archive is set up already: forget the keys not yet put away?")) return;
+    direct.forgetOwner(p);
+    Object.assign(creating, { pending: null, steps: {}, secretShown: false });
+    watchUnload(false);
+    message("info", "Cancelled: the keys are forgotten (delete any file saved).");
+    if (p && p.done.archive) { creating.node = null; openArchive(state.repo); } else renderCreate();
+  } }, "Cancel");
+}
+
+// The steps, in order; each says how it went, and one that failed is tried
+// again from where it stopped. The passkey waits for a click (a browser
+// opens the popup only then).
+const CREATE_STEPS = [
+  ["archive", "The archive set up and committed"],
+  ["labels", "The labels of the issue forms"],
+  ["wallet", "The owner's current key in the wallet"],
+  ["secret", "The workflows' key as the repository secret"],
+  ["passkey", "Your passkey"],
+  ["pages", "GitHub Pages"],
+];
+
+async function createRun() {
+  const c = creating, p = c.pending, repo = c.repo, gh = ghCore();
+  if (c.busy || !p) return;
+  const set = (name, status, ...note) => { c.steps[name] = { status, note }; renderCreate(); };
+  const say = { wallet: "Putting the rotation keys in the wallet ...", reading: "Reading the repository ...",
+                "carrying out": "Setting the archive up ...", committing: "Signed; committing to the repository ..." };
+  createBusy(true);
+  let finished = false;
+  try {
+    if (!p.done.archive) {
+      set("archive", "now");
+      let answer;
+      try {
+        answer = await direct.setUpArchive({ gh, repo, pending: p, fields: createFields(), cache: state.cache,
+                                             defaultBase: async () => state.base || await baseUrl(await token(), repo),
+                                             progress: (x) => message("info", say[x] || x) });
+      } catch (e) {
+        set("archive", "bad", `Nothing was committed: ${e.message}.`);
+        message("bad", `The archive was not set up: ${e.message}.`);
+        return;
+      }
+      if (!answer.ok) {
+        set("archive", "bad", () => render(answer.message));
+        message("bad", render(answer.message));
+        return;
+      }
+      watchSite(repo, answer.commit.sha);
+      // a function: the note is drawn afresh each time the steps are
+      set("archive", "ok", () => [render(answer.message.split("\n\n")[0]), el("p", {}, "Commit ",
+        el("a", { href: answer.commit.url || `https://github.com/${repo}/commit/${answer.commit.sha}` },
+           answer.commit.sha.slice(0, 7)), ".")]);
+    }
+    if (!p.done.labels) {
+      try {
+        p.done.labels = await direct.createLabels({ gh, repo });
+      } catch (e) {
+        p.done.labels = { refused: true, error: e.message };
+      }
+      set("labels", p.done.labels.refused ? "warn" : "ok", p.done.labels.refused
+        ? ["This sign-in may not create labels (Issues: read and write). They only sort the issues of the forms: ",
+           "running ", el("a", { href: `https://github.com/${repo}/actions/workflows/setup.yml` }, "Set up the archive"),
+           " once in the Actions tab creates them, once the workflows' key is stored."]
+        : "Made.");
+    }
+    if (!p.done.wallet) {
+      set("wallet", "now");
+      message("info", `Putting the owner's current key in ${p.wallet.name} ...`);
+      try {
+        await direct.putOwnerKey({ pending: p });
+      } catch (e) {
+        set("wallet", "bad", `Not put: ${e.message}. The key is kept in this page: try again.`);
+        message("bad", `The current key was not put in the wallet: ${e.message}.`);
+        return;
+      }
+      set("wallet", "ok", `In ${p.wallet.name}, locked with the passphrase.`);
+      message("info");
+    }
+    if (!p.done.secret) {
+      set("secret", "now");
+      try {
+        const how = await direct.storeWorkflowKey({ gh, repo, pending: p });
+        set("secret", how === "refused" ? "warn" : "ok", how === "stored" ? "Stored as OPENSHEAF_SIGNING_KEY." :
+          how === "none" ? "No key for the workflows: they do not sign." : "");
+      } catch (e) {
+        set("secret", "bad", `Not stored: ${e.message}. The key is kept in this page: try again.`);
+        return;
+      }
+    }
+    if (p.done.secret === "refused") {   // shown, until stored by hand
+      message("info", "Store the workflows' key as the repository's secret by hand (step 4), then go on.");
+      return;
+    }
+    if (!p.walletState) {
+      try {
+        await direct.ownerWalletState({ gh, archiveRepo: repo, pending: p });
+      } catch (e) {
+        set("passkey", "bad", `The wallet could not be read: ${e.message}.`);
+        return;
+      }
+    }
+    if (!p.done.passkey) { message("info", "Now your passkey: Create the passkey, or Later."); return; }
+    if (!p.done.pages) {
+      set("pages", "now");
+      try {
+        p.done.pages = await direct.turnPagesOn({ gh, repo });
+      } catch (e) {
+        p.done.pages = { on: false, refused: true };
+      }
+      set("pages", p.done.pages.on ? "ok" : "warn", p.done.pages.on ? "On: the site is published from the branch main." : [
+        "This sign-in may not turn it on. In ", el("a", { href: `https://github.com/${repo}/settings/pages` }, "Settings, Pages"),
+        ": Build and deployment, Source: Deploy from a branch, branch main, folder / (root), Save."]);
+    }
+    finished = true;
+  } finally {
+    createBusy(false);
+    if (finished) createDone(); else if (c.pending) renderCreate();
+  }
+}
+
+// The fields of the setup, as the form of the template's setup gives them.
+function createFields() {
+  const out = {};
+  for (const k of SETUP_FIELDS) {
+    const x = String(creating.values[k] || (k === "Purpose" ? "papers" : "")).trim();
+    if (x) out[k] = x;
+  }
+  return out;
+}
+
+// The passkey, in the click: the popup opens at once.
+function createPasskey(skip = false) {
+  const c = creating, p = c.pending;
+  if (skip) {
+    p.done.passkey = "later";
+    c.steps.passkey = { status: "warn", note: ["Later: under Write directly, Set up a key wallet, step 3."] };
+    createRun();
+    return;
+  }
+  createBusy(true);
+  message("info", "Use your passkey in the window of unlock.opensheaf.org ...");
+  direct.enrollPasskey({ state: p.walletState, settings: { owner: p.owner }, passphrase: p.passphrase, askCode })
+    .then(() => {
+      p.done.passkey = true;
+      c.steps.passkey = { status: "ok", note: [`It opens the owner's key in ${p.wallet.name}.`] };
+      createBusy(false);
+      createRun();
+    })
+    .catch((e) => {
+      c.steps.passkey = { status: "bad", note: [`No passkey was enrolled: ${e.message}. Try again, or later.`] };
+      message("bad", `No passkey was enrolled: ${e.message}.`);
+      createBusy(false);
+      renderCreate();
+    });
+}
+
+// Everything done: the page holds the owner's key, the archive is opened.
+function createDone() {
+  const c = creating, p = c.pending, repo = c.repo;
+  if (!p) return;
+  state.keys.add(p.owner, [p.signing]);
+  state.signers = direct.signersOfLog(p.log);
+  pref(WALLET + p.owner, p.wallet.name);
+  direct.forgetOwner(p);
+  Object.assign(c, { pending: null, node: null, steps: {}, secretShown: false });
+  watchUnload(false);
+  pref(VIA_WORKFLOW, "");
+  message("ok", "The archive is set up, and the owner's key is unlocked in this page: write to it directly.");
+  openArchive(repo);
+}
+
+function createSteps() {
+  const c = creating, p = c.pending;
+  const chip = (status) => status === "ok" ? el("span", { class: "chip ok" }, "done")
+    : status === "bad" ? el("span", { class: "chip bad" }, "not done")
+    : status === "warn" ? el("span", { class: "chip warn" }, "by hand")
+    : status === "now" ? el("span", { class: "chip" }, "now") : null;
+  const items = CREATE_STEPS.map(([name, title]) => {
+    const st = c.steps[name] || {};
+    const extra = [];
+    if (name === "secret" && p.done.secret === "refused") extra.push(secretByHand());
+    if (name === "passkey" && p.walletState && !p.done.passkey && p.done.secret !== "refused") {
+      const plan = p.walletState.plans.enrolled;
+      const known = plan && plan.known.length;
+      extra.push(el("p", { class: "small" }, known
+        ? "A passkey of yours opens other keys in this wallet: it is used for this one too (Touch ID, in a window of " +
+          "unlock.opensheaf.org)."
+        : "A passkey is created for unlock.opensheaf.org (Touch ID, in a window of unlock.opensheaf.org); you then type " +
+          "here the code it shows. It unlocks the owner's key when you come back."),
+        el("div", { class: "controls" }, el("button", { class: "primary", onclick: () => createPasskey() },
+          known ? "Use your passkey" : "Create the passkey"),
+          el("button", { onclick: () => createPasskey(true) }, "Later")));
+    }
+    return el("li", {}, el("strong", {}, title), " ", chip(st.status),
+      st.note && st.note.length ? el("div", { class: "small" }, st.note.map((x) => (typeof x === "function" ? x() : x))) : null,
+      extra);
+  });
+  const failed = Object.values(c.steps).some((x) => x.status === "bad");
+  return el("div", { class: "op setup" },
+    el("h3", {}, "Setting the archive up"),
+    el("p", { class: "small muted" }, "Owner ", el("code", { title: p.owner }, `${p.owner.slice(0, 16)}...`),
+      ". Keep this page open until the steps are done: the keys not yet put away are in its memory only."),
+    el("ol", { class: "steps" }, items),
+    el("div", { class: "controls" }, failed ? el("button", { class: "primary", onclick: () => createRun() }, "Try again") : null,
+      createCancel()));
+}
+
+// The workflows' key, when the sign-in may not store it: shown once, to copy
+// into the repository's secret by hand, then forgotten.
+function secretByHand() {
+  const c = creating, p = c.pending;
+  const value = el("input", { readonly: true, class: "secret", value: direct.workflowKeyLine(p),
+                              "aria-label": "The workflows' key", spellcheck: "false", autocomplete: "off" });
+  return el("div", {},
+    el("p", { class: "small" }, "This sign-in may not set the repository's secrets (it needs the permission Secrets: read " +
+      "and write, and an administrator of the repository). Copy the key below, then in ",
+      el("a", { href: secretsPage(c.repo), target: "_blank", rel: "noopener" }, "the repository's settings"),
+      ", New repository secret: name ", el("code", {}, "OPENSHEAF_SIGNING_KEY"), ", and the key as its value. The page " +
+      "forgets it when you go on."),
+    el("div", { class: "controls" }, value,
+      el("button", { type: "button", onclick: () => {
+        navigator.clipboard.writeText(value.value).then(() => message("ok", "Copied: paste it as the secret's value."),
+          () => { value.select(); message("info", "Select it and copy it (the browser refused the clipboard)."); });
+      } }, "Copy"),
+      el("button", { type: "button", class: "primary", onclick: () => {
+        direct.forgetWorkflowKey(p);
+        value.value = "";
+        c.steps.secret = { status: "warn", note: ["Stored by hand as OPENSHEAF_SIGNING_KEY; the page forgot it."] };
+        createRun();
+      } }, "It is stored: go on")));
+}
+
+// While keys not yet put away are in the page's memory, leaving it asks first.
+function onUnload(ev) { ev.preventDefault(); ev.returnValue = ""; }
+function watchUnload(on) {
+  window.removeEventListener("beforeunload", onUnload);
+  if (on) window.addEventListener("beforeunload", onUnload);
 }
 
 // Titles of the documents, read after the page is shown, and a label for
@@ -603,7 +1032,7 @@ function showArchive() {
     "(.github/workflows/from-request.yml). Bring its .github/ folder up to date from the ",
     el("a", { href: TEMPLATE }, "archive template"), "; until then, requests wait unanswered."));
   if (!s) {
-    parts.push(...ceremony());
+    parts.push(...newArchive());
     show("#archive", parts);
     return;
   }

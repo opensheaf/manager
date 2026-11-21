@@ -1,4 +1,4 @@
-// opensheaf-js 137350ccce805fdcd6d0cacd0cc3819a6208db64: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js d22456107ec5e007479a56d9f17c30a7e9d6e825: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -37,6 +37,2871 @@ var __toESM = (mod2, isNodeMode, target2) => (target2 = mod2 != null ? __create(
   1 ? __defProp(target2, "default", { value: mod2, enumerable: true }) : target2,
   mod2
 ));
+
+// core/http.js
+function pool(size) {
+  let active = 0;
+  const waiting = [];
+  const next = () => {
+    while (active < size && waiting.length) {
+      active++;
+      waiting.shift()();
+    }
+  };
+  function acquire(signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new FetchError("aborted", "", "cancelled"));
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        active--;
+        next();
+      };
+      const grant = () => {
+        signal?.removeEventListener("abort", give);
+        resolve(release);
+      };
+      const give = () => {
+        const k = waiting.indexOf(grant);
+        if (k >= 0) {
+          waiting.splice(k, 1);
+          reject(new FetchError("aborted", "", "cancelled"));
+        }
+      };
+      signal?.addEventListener("abort", give, {
+        once: true
+      });
+      waiting.push(grant);
+      next();
+    });
+  }
+  async function run(task, signal) {
+    const release = await acquire(signal);
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  }
+  run.acquire = acquire;
+  return run;
+}
+function pause(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const stop2 = () => {
+      clearTimeout(timer);
+      reject(new FetchError("aborted", "", "cancelled"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", stop2);
+      resolve();
+    }, ms);
+    if (signal?.aborted) stop2();
+    else signal?.addEventListener("abort", stop2, {
+      once: true
+    });
+  });
+}
+function watchdog() {
+  const controller = new AbortController();
+  let timer = null, ms = 0;
+  return {
+    signal: controller.signal,
+    fired: null,
+    why: "",
+    arm(limit, why) {
+      ms = limit;
+      this.why = why;
+      this.rearm();
+    },
+    rearm() {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        this.fired = this.why;
+        controller.abort();
+      }, ms);
+    },
+    stop() {
+      clearTimeout(timer);
+    }
+  };
+}
+function tooLarge(url, limit, declared = null) {
+  return new FetchError("too-large", url, declared === null ? `more than ${limit} bytes` : `${declared} bytes, more than the limit of ${limit}`);
+}
+async function readLimited(response, url, limit, { dog, large, signal } = {}) {
+  const declared = Number(response.headers.get("content-length"));
+  if (declared > limit) {
+    response.body?.cancel().catch(() => {
+    });
+    throw tooLarge(url, limit, declared);
+  }
+  if (!response.body?.getReader) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > limit) throw tooLarge(url, limit);
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  let buffer = new Uint8Array(Math.min(declared > 0 ? declared : limit, 65536));
+  let size = 0, release = null;
+  const turn = async () => {
+    dog?.stop();
+    release = await large.acquire(signal);
+    dog?.rearm();
+  };
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const end2 = size + value.length;
+      if (end2 > limit) throw tooLarge(url, limit);
+      if (!release && large && end2 > LIMITS.large) await turn();
+      if (end2 > buffer.length) {
+        let room = Math.min(limit, Math.max(2 * buffer.length, end2));
+        if (declared >= end2) room = Math.min(room, declared);
+        if (!release && large && room > LIMITS.large) await turn();
+        if (release && declared >= end2) room = declared;
+        const grown = new Uint8Array(room);
+        grown.set(buffer.subarray(0, size));
+        buffer = grown;
+      }
+      buffer.set(value, size);
+      size = end2;
+      dog?.rearm();
+    }
+  } catch (error) {
+    reader.cancel().catch(() => {
+    });
+    throw error;
+  } finally {
+    release?.();
+  }
+  return size === buffer.length ? buffer : buffer.slice(0, size);
+}
+function nesting(text3) {
+  let depth = 0, most = 0, inString = false;
+  for (let k = 0; k < text3.length; k++) {
+    const c = text3.charCodeAt(k);
+    if (inString) {
+      if (c === 92) k++;
+      else if (c === 34) inString = false;
+    } else if (c === 34) inString = true;
+    else if (c === 91 || c === 123) most = Math.max(most, ++depth);
+    else if (c === 93 || c === 125) depth--;
+  }
+  return most;
+}
+function parseJson(bytes, url = "", { integers = false } = {}) {
+  let text3;
+  try {
+    text3 = new TextDecoder("utf-8", {
+      fatal: true,
+      ignoreBOM: true
+    }).decode(bytes);
+  } catch {
+    throw new FetchError("json", url, "is not UTF-8 (section 2)");
+  }
+  if (/^\ufeff?\s*</.test(text3)) {
+    throw new FetchError("html", url, "an HTML page, not the file: probably a wrong base URL or a site\u2019s fallback page");
+  }
+  if (text3.charCodeAt(0) === 65279) throw new FetchError("json", url, "starts with a byte order mark (section 2)");
+  if (nesting(text3) > LIMITS.nesting) {
+    throw new FetchError("too-large", url, `is nested deeper than ${LIMITS.nesting} levels`);
+  }
+  try {
+    return integers ? parseIntegers(text3) : JSON.parse(text3);
+  } catch (error) {
+    throw new FetchError("json", url, `is not JSON (${error.message})`);
+  }
+}
+function numberProblem(token) {
+  if (!INTEGER.test(token)) return `the number ${token} is not an integer`;
+  const n = BigInt(token);
+  return n > EXACT || n < -EXACT ? `the integer ${token} has no exact form in JSON (section 2)` : null;
+}
+function numberTokens(text3) {
+  const tokens = [];
+  let inString = false;
+  for (let k = 0; k < text3.length; k++) {
+    const c = text3[k];
+    if (inString) {
+      if (c === "\\") k++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "-" || c >= "0" && c <= "9") {
+      let end2 = k;
+      while (end2 < text3.length && /[-+.eE0-9]/.test(text3[end2])) end2++;
+      tokens.push(text3.slice(k, end2));
+      k = end2 - 1;
+    }
+  }
+  return tokens;
+}
+function parseIntegers(text3, { source = HAS_SOURCE } = {}) {
+  const check2 = (token) => {
+    const problem = numberProblem(token);
+    if (problem) throw new Error(problem);
+  };
+  if (!source) {
+    const value = JSON.parse(text3);
+    numberTokens(text3).forEach(check2);
+    return value;
+  }
+  return JSON.parse(text3, (key, value, context) => {
+    if (typeof value === "number") check2(context.source);
+    return value;
+  });
+}
+async function sha512(bytes) {
+  const subtle2 = globalThis.crypto?.subtle;
+  if (!subtle2) {
+    throw new FetchError("crypto", "", "WebCrypto is not available (it needs https: or localhost)");
+  }
+  const digest = new Uint8Array(await subtle2.digest("SHA-512", bytes));
+  return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+var LIMITS, FetchError, Busy, Http, INTEGER, EXACT, HAS_SOURCE;
+var init_http = __esm({
+  "core/http.js"() {
+    LIMITS = {
+      json: 16 * 2 ** 20,
+      page: 16 * 2 ** 20,
+      file: 512 * 2 ** 20,
+      large: 32 * 2 ** 20,
+      cache: 64 * 2 ** 20,
+      timeout: 6e4,
+      stall: 3e4,
+      concurrency: 6,
+      depth: 3,
+      pins: 2e3,
+      mirrors: 5,
+      versions: 1e4,
+      objects: 1e4,
+      nesting: 64,
+      retry: 3e4,
+      pageRequests: 4e4,
+      pageBytes: 256 * 2 ** 20
+    };
+    FetchError = class extends Error {
+      constructor(kind, url, detail, status = null) {
+        super(url ? `${url}: ${detail}` : detail);
+        this.kind = kind;
+        this.url = url;
+        this.detail = detail;
+        this.status = status;
+      }
+    };
+    Busy = class {
+      constructor(retryAfter) {
+        const s = String(retryAfter ?? "").trim();
+        const ms = /^\d+$/.test(s) ? Number(s) * 1e3 : s ? Date.parse(s) - Date.now() : NaN;
+        this.after = Number.isNaN(ms) ? null : Math.min(Math.max(ms, 0), LIMITS.retry);
+      }
+    };
+    Http = class _Http {
+      constructor({ fetch: fetch2 = globalThis.fetch?.bind(globalThis), concurrency = LIMITS.concurrency, timeout = LIMITS.timeout, stall = LIMITS.stall, cacheLimit = LIMITS.cache, run = pool(concurrency), large = pool(1), budget = {
+        requests: LIMITS.pageRequests,
+        bytes: LIMITS.pageBytes
+      }, spent = {
+        requests: 0,
+        bytes: 0
+      } } = {}) {
+        this.fetchImpl = fetch2;
+        this.run = run;
+        this.large = large;
+        this.timeout = timeout;
+        this.stall = stall;
+        this.cache = /* @__PURE__ */ new Map();
+        this.cacheLimit = cacheLimit;
+        this.cacheBytes = 0;
+        this.requests = 0;
+        this.bytesRead = 0;
+        this.budget = budget;
+        this.spent = spent;
+      }
+      newPage() {
+        this.spent.requests = 0;
+        this.spent.bytes = 0;
+      }
+      another({ budget = this.budget } = {}) {
+        return new _Http({
+          fetch: this.fetchImpl,
+          timeout: this.timeout,
+          stall: this.stall,
+          run: this.run,
+          large: this.large,
+          cacheLimit: this.cacheLimit,
+          budget,
+          spent: budget === this.budget ? this.spent : void 0
+        });
+      }
+      checkUrl(url) {
+        let parsed;
+        try {
+          parsed = new URL(url);
+        } catch {
+          throw new FetchError("scheme", String(url), "not an absolute URL");
+        }
+        if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+          throw new FetchError("scheme", parsed.href, `${parsed.protocol} addresses cannot be read by a web page`);
+        }
+        return parsed.href;
+      }
+      async request(url, { method = "GET", limit = LIMITS.json, signal, headers } = {}) {
+        url = this.checkUrl(url);
+        const cancelled = () => new FetchError("aborted", url, "cancelled");
+        for (const wait of [
+          1e3,
+          3e3,
+          null
+        ]) {
+          const release = await this.run.acquire(signal).catch(() => {
+            throw cancelled();
+          });
+          let answer;
+          try {
+            answer = await this.attempt(url, method, limit, signal, wait !== null, headers);
+          } finally {
+            release();
+          }
+          if (!(answer instanceof Busy)) return answer;
+          await pause(answer.after ?? wait, signal).catch(() => {
+            throw cancelled();
+          });
+        }
+      }
+      async attempt(url, method, limit, signal, canRetry, headers) {
+        const room = this.budget ? this.budget.bytes - this.spent.bytes : Infinity;
+        if (this.budget && (this.spent.requests >= this.budget.requests || room <= 0)) {
+          throw new FetchError("budget", url, `not read: this page has made ${this.spent.requests} requests and read ${this.spent.bytes} bytes, the most allowed for one page`);
+        }
+        const dog = watchdog();
+        const both = signal ? AbortSignal.any([
+          signal,
+          dog.signal
+        ]) : dog.signal;
+        this.requests++;
+        this.spent.requests++;
+        dog.arm(this.timeout, `no answer in ${this.timeout / 1e3} s`);
+        try {
+          let response;
+          try {
+            response = await this.fetchImpl(url, {
+              method,
+              signal: both,
+              credentials: "omit",
+              redirect: "follow",
+              ...headers ? {
+                headers
+              } : {}
+            });
+          } catch (error) {
+            throw await this.diagnose(url, error, signal, dog);
+          }
+          const status = response.status;
+          const busy = status === 429 || status >= 500;
+          if (canRetry && busy) {
+            response.body?.cancel().catch(() => {
+            });
+            return new Busy(response.headers.get("retry-after"));
+          }
+          if (!response.ok) {
+            response.body?.cancel().catch(() => {
+            });
+            const kind = status === 404 || status === 410 ? "not-found" : status === 403 ? "forbidden" : busy ? "busy" : "http";
+            throw new FetchError(kind, url, `HTTP ${status}`, status);
+          }
+          if (method === "HEAD") return response;
+          dog.arm(this.stall, `the answer stalled: nothing received for ${this.stall / 1e3} s`);
+          try {
+            const bytes = await readLimited(response, url, Math.min(limit, room), {
+              dog,
+              large: this.large,
+              signal
+            });
+            this.bytesRead += bytes.length;
+            this.spent.bytes += bytes.length;
+            return bytes;
+          } catch (error) {
+            if (error?.kind === "too-large" && room < limit) {
+              throw new FetchError("budget", url, `not read whole: this page may read ${this.budget.bytes} bytes at most`);
+            }
+            if (error instanceof FetchError && error.kind !== "aborted") throw error;
+            throw this.interrupted(url, error, signal, dog);
+          }
+        } finally {
+          dog.stop();
+        }
+      }
+      async diagnose(url, error, signal, dog) {
+        if (signal?.aborted) return new FetchError("aborted", url, "cancelled");
+        if (dog.fired) return new FetchError("timeout", url, dog.fired);
+        const page = globalThis.location;
+        if (page?.protocol === "https:" && url.startsWith("http:") && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url)) {
+          return new FetchError("mixed", url, "an http: address cannot be read from an https: page");
+        }
+        if (typeof document !== "undefined") {
+          try {
+            await this.fetchImpl(url, {
+              method: "HEAD",
+              mode: "no-cors",
+              credentials: "omit",
+              signal: AbortSignal.timeout(this.timeout)
+            });
+            return new FetchError("cors", url, "the server does not allow other sites to read it (no Access-Control-Allow-Origin header), or it is missing");
+          } catch {
+          }
+        }
+        return new FetchError("network", url, `cannot be reached (${error?.message || error})`);
+      }
+      interrupted(url, error, signal, dog) {
+        if (signal?.aborted) return new FetchError("aborted", url, "cancelled");
+        if (dog.fired) return new FetchError("timeout", url, dog.fired);
+        return new FetchError("network", url, `the answer was interrupted (${error?.message || error})`);
+      }
+      cached(url, options = {}) {
+        url = this.checkUrl(url);
+        const { signal, ...rest } = options;
+        let entry = this.cache.get(url);
+        if (entry) {
+          this.cache.delete(url);
+          this.cache.set(url, entry);
+        } else {
+          const controller = new AbortController();
+          entry = {
+            controller,
+            waiters: 0,
+            settled: false,
+            size: 0
+          };
+          entry.answer = this.request(url, {
+            ...rest,
+            signal: controller.signal
+          });
+          this.cache.set(url, entry);
+          entry.answer.then((bytes) => {
+            entry.settled = true;
+            if (this.cache.get(url) !== entry) return;
+            entry.size = bytes.length;
+            this.cacheBytes += entry.size;
+            this.evict();
+          }, () => {
+            entry.settled = true;
+            this.forget(url, entry);
+          });
+        }
+        return this.share(url, entry, signal);
+      }
+      share(url, entry, signal) {
+        if (signal?.aborted) return Promise.reject(new FetchError("aborted", url, "cancelled"));
+        entry.waiters++;
+        return new Promise((resolve, reject) => {
+          let left = false;
+          const leave = () => {
+            if (left) return false;
+            left = true;
+            signal?.removeEventListener("abort", give);
+            if (--entry.waiters === 0 && !entry.settled) {
+              entry.controller.abort();
+              this.forget(url, entry);
+            }
+            return true;
+          };
+          const give = () => {
+            if (leave()) reject(new FetchError("aborted", url, "cancelled"));
+          };
+          signal?.addEventListener("abort", give, {
+            once: true
+          });
+          entry.answer.then((bytes) => {
+            if (leave()) resolve(bytes);
+          }, (error) => {
+            if (leave()) reject(error);
+          });
+        });
+      }
+      forget(url, entry) {
+        if (this.cache.get(url) !== entry) return;
+        this.cache.delete(url);
+        this.cacheBytes -= entry.size;
+      }
+      evict() {
+        for (const [url, entry] of this.cache) {
+          if (this.cacheBytes <= this.cacheLimit) break;
+          if (entry.settled) this.forget(url, entry);
+        }
+      }
+      async json(url, options = {}) {
+        return parseJson(await this.cached(url, options), url);
+      }
+      async text(url, options = {}) {
+        const bytes = await this.request(url, {
+          limit: LIMITS.page,
+          ...options
+        });
+        return new TextDecoder("utf-8").decode(bytes);
+      }
+      async size(url, options = {}) {
+        const response = await this.request(url, {
+          ...options,
+          method: "HEAD"
+        });
+        const length = response.headers.get("content-length");
+        return length === null ? null : Number(length);
+      }
+    };
+    INTEGER = /^-?(?:0|[1-9][0-9]*)$/;
+    EXACT = 2n ** 53n - 1n;
+    HAS_SOURCE = (() => {
+      try {
+        return JSON.parse("1", (key, value, context) => context?.source === "1") === true;
+      } catch {
+        return false;
+      }
+    })();
+  }
+});
+
+// core/crypto.js
+function subtle() {
+  const s = globalThis.crypto?.subtle;
+  if (!s) throw new FetchError("crypto", "", "WebCrypto is not available (it needs https: or localhost)");
+  return s;
+}
+async function sha256(bytes) {
+  return new Uint8Array(await subtle().digest("SHA-256", bytes));
+}
+async function sha512bytes(bytes) {
+  return new Uint8Array(await subtle().digest("SHA-512", bytes));
+}
+function hex(bytes) {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+function utf8(text3) {
+  return new TextEncoder().encode(text3);
+}
+function sameBytes(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
+  return true;
+}
+function base32(bytes) {
+  let out = "", bits = 0, value = 0;
+  for (const b of bytes) {
+    value = value << 8 | b;
+    bits += 8;
+    while (bits >= 5) {
+      out += B32[value >>> bits - 5 & 31];
+      bits -= 5;
+    }
+    value &= (1 << bits) - 1;
+  }
+  if (bits > 0) out += B32[value << 5 - bits & 31];
+  return out;
+}
+function base58(bytes) {
+  let n = 0n;
+  for (const b of bytes) n = n * 256n + BigInt(b);
+  let out = "";
+  while (n > 0n) {
+    out = B58[Number(n % 58n)] + out;
+    n /= 58n;
+  }
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  return "1".repeat(zeros) + out;
+}
+function unbase58(text3) {
+  let n = 0n;
+  for (const c of text3) {
+    const k = B58.indexOf(c);
+    if (k < 0) throw new Error(`not base58btc: ${JSON.stringify(c)}`);
+    n = n * 58n + BigInt(k);
+  }
+  const body = [];
+  while (n > 0n) {
+    body.unshift(Number(n % 256n));
+    n /= 256n;
+  }
+  let zeros = 0;
+  while (zeros < text3.length && text3[zeros] === "1") zeros++;
+  return new Uint8Array([
+    ...new Array(zeros).fill(0),
+    ...body
+  ]);
+}
+function unbase64(text3) {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text3)) {
+    throw new Error("not base64");
+  }
+  const binary2 = atob(text3);
+  return Uint8Array.from(binary2, (c) => c.charCodeAt(0));
+}
+function fromHex(text3) {
+  return Uint8Array.from(text3.match(/../g), (b) => parseInt(b, 16));
+}
+function littleEndian(bytes) {
+  let n = 0n;
+  for (let k = bytes.length - 1; k >= 0; k--) n = n << 8n | BigInt(bytes[k]);
+  return n;
+}
+function yOf(encoding) {
+  return littleEndian(encoding) & (1n << 255n) - 1n;
+}
+function strictlyAcceptable(publicKey, signature) {
+  if (publicKey.length !== 32 || signature.length !== 64) return false;
+  if (littleEndian(signature.subarray(32)) >= L) return false;
+  const a = yOf(publicKey), r = yOf(signature.subarray(0, 32));
+  return a < P && r < P && !SMALL_ORDER_Y.has(a) && !SMALL_ORDER_Y.has(r);
+}
+async function verifyEd25519(publicKey, message2, signature, { engine = "js" } = {}) {
+  if (!strictlyAcceptable(publicKey, signature)) return false;
+  if (engine === "webcrypto") {
+    try {
+      const key = await subtle().importKey("raw", publicKey, {
+        name: "Ed25519"
+      }, false, [
+        "verify"
+      ]);
+      return await subtle().verify({
+        name: "Ed25519"
+      }, key, signature, message2);
+    } catch {
+      return false;
+    }
+  }
+  return verifyInJs(publicKey, message2, signature);
+}
+function power(base, exponent) {
+  let result = 1n;
+  base = mod(base);
+  while (exponent > 0n) {
+    if (exponent & 1n) result = mod(result * base);
+    base = mod(base * base);
+    exponent >>= 1n;
+  }
+  return result;
+}
+function add(p, q) {
+  const a = mod((p.Y - p.X) * (q.Y - q.X));
+  const b = mod((p.Y + p.X) * (q.Y + q.X));
+  const c = mod(2n * D * p.T * q.T);
+  const d = mod(2n * p.Z * q.Z);
+  const e = b - a, f = d - c, g = d + c, h = b + a;
+  return {
+    X: mod(e * f),
+    Y: mod(g * h),
+    Z: mod(f * g),
+    T: mod(e * h)
+  };
+}
+function multiply(n, point) {
+  let result = ZERO;
+  while (n > 0n) {
+    if (n & 1n) result = add(result, point);
+    point = add(point, point);
+    n >>= 1n;
+  }
+  return result;
+}
+function decode(bytes) {
+  const y = yOf(bytes);
+  const sign = bytes[31] >> 7;
+  if (y >= P) return null;
+  const u = mod(y * y - 1n), v = mod(D * y * y + 1n);
+  let x = mod(u * power(v, 3n) * power(u * power(v, 7n), (P - 5n) / 8n));
+  if (mod(v * x * x) !== u) {
+    if (mod(v * x * x) !== mod(-u)) return null;
+    x = mod(x * SQRT_M1);
+  }
+  if (x === 0n && sign === 1) return null;
+  if (Number(x & 1n) !== sign) x = P - x;
+  return {
+    X: x,
+    Y: y,
+    Z: 1n,
+    T: mod(x * y)
+  };
+}
+function encode(point) {
+  const zi = invert(point.Z);
+  const x = mod(point.X * zi), y = mod(point.Y * zi);
+  const out = new Uint8Array(32);
+  let n = y;
+  for (let k = 0; k < 32; k++) {
+    out[k] = Number(n & 255n);
+    n >>= 8n;
+  }
+  out[31] |= Number(x & 1n) << 7;
+  return out;
+}
+async function verifyInJs(publicKey, message2, signature) {
+  const a = decode(publicKey);
+  if (!a) return false;
+  const r = signature.subarray(0, 32);
+  const s = littleEndian(signature.subarray(32));
+  const k = littleEndian(await sha512bytes(new Uint8Array([
+    ...r,
+    ...publicKey,
+    ...message2
+  ]))) % L;
+  const minusA = {
+    X: mod(-a.X),
+    Y: a.Y,
+    Z: a.Z,
+    T: mod(-a.T)
+  };
+  return sameBytes(encode(add(multiply(s, BASE), multiply(k, minusA))), r);
+}
+var B32, B58, P, L, Y8, SMALL_ORDER_Y, mod, invert, D, SQRT_M1, BY, BASE, ZERO;
+var init_crypto = __esm({
+  "core/crypto.js"() {
+    init_http();
+    B32 = "abcdefghijklmnopqrstuvwxyz234567";
+    B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    P = 2n ** 255n - 19n;
+    L = 2n ** 252n + 27742317777372353535851937790883648493n;
+    Y8 = littleEndian(fromHex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"));
+    SMALL_ORDER_Y = /* @__PURE__ */ new Set([
+      0n,
+      1n,
+      P - 1n,
+      P,
+      P + 1n,
+      Y8,
+      P - Y8
+    ]);
+    mod = (a) => (a % P + P) % P;
+    invert = (a) => power(a, P - 2n);
+    D = mod(-121665n * invert(121666n));
+    SQRT_M1 = power(2n, (P - 1n) / 4n);
+    BY = mod(4n * invert(5n));
+    BASE = {
+      X: 15112221349535400772501151409588531511454012693041857206046113283949847762202n,
+      Y: BY,
+      Z: 1n,
+      T: mod(15112221349535400772501151409588531511454012693041857206046113283949847762202n * BY)
+    };
+    ZERO = {
+      X: 0n,
+      Y: 1n,
+      Z: 1n,
+      T: 0n
+    };
+  }
+});
+
+// core/names.js
+function didKey(publicKey) {
+  if (publicKey.length !== 32) throw new Error("an Ed25519 public key has 32 bytes");
+  return "did:key:z" + base58(new Uint8Array([
+    ...ED25519_PUB,
+    ...publicKey
+  ]));
+}
+function didKeyPublic(did) {
+  if (typeof did !== "string" || !did.startsWith("did:key:z")) throw new Error(`not a did:key URI in base58btc: ${did}`);
+  const raw = unbase58(did.slice("did:key:z".length));
+  if (raw.length !== 34 || raw[0] !== ED25519_PUB[0] || raw[1] !== ED25519_PUB[1]) {
+    throw new Error(`not the did:key URI of an Ed25519 key: ${did}`);
+  }
+  if (didKey(raw.subarray(2)) !== did) throw new Error(`not the canonical did:key URI of its key: ${did}`);
+  return raw.subarray(2);
+}
+async function keyDigest(did) {
+  return base32(await sha256(utf8(did)));
+}
+async function keyId(did) {
+  return (await keyDigest(did)).slice(0, 16);
+}
+async function nameOf(genesis, k = 0) {
+  if (!(Number.isInteger(k) && k >= 0 && k <= 15)) throw new Error("the algorithms of names are numbered 0 to 15");
+  const s = base32(await sha256(new Uint8Array([
+    ...utf8(`opensheaf-name-${k}
+`),
+    ...genesis
+  ])));
+  return s.slice(0, -1) + B32[B32.indexOf(s[s.length - 1]) | k];
+}
+function algorithm(name2) {
+  return B32.indexOf(name2[name2.length - 1]) & 15;
+}
+async function isNameOf(name2, genesis) {
+  return typeof name2 === "string" && NAME.test(name2) && await nameOf(genesis, algorithm(name2)) === name2;
+}
+function objectId(name2, owner) {
+  return `sheaf:${name2}:${owner}`;
+}
+function keyLogPin(owner, number, digest) {
+  return `sheaf:${owner}/v${number}?sha512=${digest}`;
+}
+function parseId(id) {
+  const m = typeof id === "string" ? /^sheaf:([^:]+):([^:]+)$/.exec(id) : null;
+  if (!m) return null;
+  if (m[1] === "draft") return LABEL.test(m[2]) && m[2].length <= 64 ? {
+    draft: m[2]
+  } : null;
+  return NAME.test(m[1]) && OWNER_NAME.test(m[2]) ? {
+    name: m[1],
+    owner: m[2]
+  } : null;
+}
+async function readGenesis(bytes) {
+  if (bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191) throw new Error("a genesis record has no byte order mark");
+  let rec;
+  try {
+    rec = parseIntegers(new TextDecoder("utf-8", {
+      fatal: true
+    }).decode(bytes));
+  } catch (error) {
+    throw new Error(`a genesis record is JSON in UTF-8 (${error.message})`);
+  }
+  if (!isObject(rec) || rec.format !== GENESIS_FORMAT) throw new Error(`not a genesis record of format ${GENESIS_FORMAT}`);
+  if (!KINDS.includes(rec.kind)) throw new Error(`unknown kind ${JSON.stringify(rec.kind)}`);
+  if (typeof rec.created !== "string" || !CREATED.test(rec.created)) throw new Error("created must be a date and time in UTC");
+  if (typeof rec.nonce !== "string" || !NONCE.test(rec.nonce)) throw new Error("nonce must have at least 128 bits in lowercase hexadecimal");
+  const ownerFields = [
+    "keys",
+    "threshold",
+    "next",
+    "nextThreshold",
+    "keeper",
+    "extensions"
+  ];
+  const allowed = [
+    "format",
+    "kind",
+    "created",
+    "nonce",
+    ...rec.kind === "owner" ? ownerFields : [
+      "originator"
+    ]
+  ];
+  const extra = Object.keys(rec).filter((k) => !allowed.includes(k)).sort();
+  if (extra.length) throw new Error(`fields not allowed in a genesis record of kind ${rec.kind}: ${extra.join(", ")}`);
+  if (rec.kind === "owner") {
+    const problems = await keyRulesOfRecord(rec);
+    if ("keeper" in rec && !(Array.isArray(rec.keeper) && rec.keeper.length === 1 && typeof rec.keeper[0] === "string" && keeperValid(rec.keeper[0]))) {
+      problems.push("keeper must be a list of one ORCID iD (with its check digit) or https://<domain>/");
+    }
+    if ("extensions" in rec && !(isObject(rec.extensions) && Object.values(rec.extensions).every(isObject))) {
+      problems.push("extensions must map names of extensions to objects");
+    }
+    if (problems.length) throw new Error(problems.join("; "));
+  } else if (typeof rec.originator !== "string" || !OWNER_NAME.test(rec.originator)) {
+    throw new Error("a document or a collection names its originator, an owner name");
+  }
+  return rec;
+}
+function isObject(x) {
+  return x !== null && typeof x === "object" && !Array.isArray(x);
+}
+async function keyRulesOfRecord(rec) {
+  const problems = [];
+  let keys = rec.keys, next = rec.next;
+  if (!Array.isArray(keys) || !keys.length || !keys.every((k) => typeof k === "string" && DID_KEY.test(k))) {
+    problems.push("keys must be a list of at least one did:key URI of an Ed25519 key");
+    keys = [];
+  }
+  if (!Array.isArray(next) || !next.length || !next.every((d) => typeof d === "string" && OWNER_NAME.test(d))) {
+    problems.push("next must be a list of at least one digest of a key (52 characters of base32)");
+    next = [];
+  }
+  for (const [field2, items] of [
+    [
+      "keys",
+      keys
+    ],
+    [
+      "next",
+      next
+    ]
+  ]) {
+    if (new Set(items).size !== items.length) problems.push(`${field2} lists an item twice`);
+  }
+  for (const [field2, count, items] of [
+    [
+      "threshold",
+      rec.threshold,
+      keys
+    ],
+    [
+      "nextThreshold",
+      rec.nextThreshold,
+      next
+    ]
+  ]) {
+    if (!Number.isInteger(count) || count < 1) problems.push(`${field2} must be a positive integer`);
+    else if (count > items.length) problems.push(`${field2} ${count} exceeds the ${items.length} item(s) it counts (rule 1)`);
+  }
+  const digests = await Promise.all(keys.map(keyDigest));
+  if (digests.some((d) => next.includes(d))) problems.push("a key is both a current key and a rotation key (rules 2 and 3)");
+  return problems;
+}
+function jcs(value) {
+  if (value === null || typeof value === "boolean") return String(value);
+  if (typeof value === "number") {
+    if (!Number.isInteger(value)) throw new Error("the canonical JSON of OpenSheaf has no fractional numbers");
+    if (!Number.isSafeInteger(value)) throw new Error(`the integer ${value} has no exact form in JCS`);
+    return String(value);
+  }
+  if (typeof value === "string") {
+    if (!value.isWellFormed()) throw new Error("a string with a lone surrogate has no JCS form");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `[${value.map(jcs).join(",")}]`;
+  if (isObject(value)) {
+    const names = Object.keys(value).sort();
+    return `{${names.map((k) => jcs(k) + ":" + jcs(value[k])).join(",")}}`;
+  }
+  throw new Error(`not a JSON value: ${typeof value}`);
+}
+function jcsBytes(value) {
+  return utf8(jcs(value));
+}
+function parseSheaf(text3, { short: short2 = false, fold = false } = {}) {
+  const fail = (why) => {
+    throw new Error(`not a sheaf: URI (${why}): ${text3}`);
+  };
+  if (typeof text3 !== "string") fail("not a string");
+  const q = text3.indexOf("?");
+  let head = q < 0 ? text3 : text3.slice(0, q);
+  const query = q < 0 ? null : text3.slice(q + 1);
+  if (fold) head = head.toLowerCase();
+  const m = /^sheaf:([^:/]+)(?::([^:/]+))?(?:\/v([^/]*))?$/.exec(head);
+  if (!m) fail("sheaf:<name>[:<owner>][/v<n>]");
+  const [, name2, owner = null, version = null] = m;
+  for (const [label, part] of [
+    [
+      "name",
+      name2
+    ],
+    [
+      "owner",
+      owner
+    ]
+  ]) {
+    if (part === null || label === "owner" && part === "*") continue;
+    if (!PART.test(part) || part.length > 52 || part.length < 52 && !(short2 && part.length >= 8)) {
+      fail(`the ${label} has 52 characters of base32` + (short2 ? ", or at least 8" : ""));
+    }
+  }
+  if (owner && owner.length === 52 && !OWNER_NAME.test(owner)) fail("an owner name is a name of algorithm 0");
+  if (version !== null && !/^[1-9][0-9]*$/.test(version)) fail("a version is /v and a positive integer without leading zeros");
+  const uri = new SheafUri({
+    name: name2,
+    owner,
+    version: version === null ? null : Number(version)
+  });
+  if (query !== null) {
+    const seen = [];
+    for (const p of query.split("&")) {
+      const eq = p.indexOf("=");
+      let key = eq < 0 ? p : p.slice(0, eq);
+      let value = eq < 0 ? "" : p.slice(eq + 1);
+      if (fold) key = key.toLowerCase();
+      if (eq < 0 || !key) fail("parameters are name=value");
+      if (key === "sha512") {
+        if (fold) value = value.toLowerCase();
+        if (seen.includes("sha512") || uri.version === null || !/^[0-9a-f]{128}$/.test(value)) {
+          fail("one sha512, after a version, of 128 hexadecimal digits");
+        }
+        if (seen.includes("at")) fail("at comes after sha512");
+        uri.sha512 = value;
+      } else if (key === "at") {
+        if (seen.includes("at") || !ESCAPED.test(value)) fail("one at, percent-encoded");
+        const at = decodeURIComponent(value);
+        if (!at.startsWith("https://") || !at.endsWith("/")) fail("at is an https URL ending with /");
+        uri.at = at;
+      } else {
+        uri.params.push([
+          key,
+          value
+        ]);
+      }
+      seen.push(key);
+    }
+  }
+  if (owner === "*" && (uri.version !== null || uri.sha512 !== null)) fail("a work, sheaf:<name>:*, has no version");
+  return uri;
+}
+function orcidValid(text3) {
+  const m = ORCID.exec(text3);
+  if (!m) return false;
+  const digits = m.slice(1).join("");
+  let total = 0;
+  for (const ch of digits.slice(0, 15)) total = (total + Number(ch)) * 2;
+  const r = (12 - total % 11) % 11;
+  return (r === 10 ? "X" : String(r)) === digits[15];
+}
+function keeperValid(uri) {
+  if (uri.startsWith("https://orcid.org/")) return orcidValid(uri);
+  return /^https:\/\/[a-z0-9.-]+\/$/.test(uri);
+}
+var NAME, OWNER_NAME, LABEL, DID_KEY, CREATED, NONCE, GENESIS, GENESIS_FORMAT, KINDS, ED25519_PUB, SheafUri, PART, ESCAPED, ORCID;
+var init_names = __esm({
+  "core/names.js"() {
+    init_crypto();
+    init_http();
+    NAME = /^[a-z2-7]{52}$/;
+    OWNER_NAME = /^[a-z2-7]{51}[aq]$/;
+    LABEL = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+    DID_KEY = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
+    CREATED = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$/;
+    NONCE = /^([0-9a-f]{2}){16,}$/;
+    GENESIS = "genesis.json";
+    GENESIS_FORMAT = "opensheaf-genesis/0.2";
+    KINDS = [
+      "document",
+      "collection",
+      "owner"
+    ];
+    ED25519_PUB = [
+      237,
+      1
+    ];
+    SheafUri = class _SheafUri {
+      constructor({ name: name2, owner = null, version = null, sha512: sha5123 = null, at = null, params = [] }) {
+        Object.assign(this, {
+          name: name2,
+          owner,
+          version,
+          sha512: sha5123,
+          at,
+          params
+        });
+      }
+      toString() {
+        let s = `sheaf:${this.name}`;
+        if (this.owner !== null) s += `:${this.owner}`;
+        if (this.version !== null) s += `/v${this.version}`;
+        const query = [];
+        if (this.sha512 !== null) query.push(`sha512=${this.sha512}`);
+        if (this.at !== null) query.push("at=" + encodeURIComponent(this.at).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()));
+        for (const [k, v] of this.params) query.push(`${k}=${v}`);
+        return s + (query.length ? "?" + query.join("&") : "");
+      }
+      isComplete() {
+        return this.name.length === 52 && (this.owner === null || this.owner === "*" || this.owner.length === 52);
+      }
+      canonical(originator = null) {
+        if (!this.isComplete()) throw new Error(`a short form has no canonical form until it is expanded: ${this}`);
+        const owner = this.owner !== null && this.owner === originator ? null : this.owner;
+        return new _SheafUri({
+          name: this.name,
+          owner,
+          version: this.version,
+          sha512: this.sha512
+        }).toString();
+      }
+      matches(name2, owner) {
+        return name2.startsWith(this.name) && (this.owner === null || this.owner === "*" || owner.startsWith(this.owner));
+      }
+    };
+    PART = /^[a-z2-7]+$/;
+    ESCAPED = /^(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})*$/;
+    ORCID = /^(?:https:\/\/orcid\.org\/)?([0-9]{4})-([0-9]{4})-([0-9]{4})-([0-9]{3}[0-9X])$/;
+  }
+});
+
+// core/paths.js
+function isObjectId(s) {
+  return parseId(s) !== null;
+}
+function isVersion(s) {
+  return typeof s === "string" && VERSION_RE.test(s);
+}
+function versionNumber(v) {
+  return Number(String(v).slice(1));
+}
+async function pathOf(id, layout = OWNER_NAME_LAYOUT) {
+  const parts = parseId(id);
+  if (!parts) throw new FetchError("unsafe", "", `${JSON.stringify(id)}: not the identifier of a line or of a draft (sections 3.2 and 4)`);
+  if (layout === HASHED_LAYOUT) {
+    const h = hex(await sha256(utf8(id)));
+    let encoded = [
+      ...id
+    ].map((c) => /^[A-Za-z0-9_-]$/.test(c) ? c : Array.from(utf8(c), (b) => "%" + b.toString(16).padStart(2, "0")).join("")).join("");
+    if (encoded.length > 100) encoded = encoded.slice(0, 100) + "-" + h;
+    return [
+      h.slice(0, 3),
+      h.slice(3, 6),
+      h.slice(6, 9),
+      encoded
+    ];
+  }
+  return parts.draft ? [
+    "draft",
+    parts.draft
+  ] : [
+    parts.owner,
+    parts.name
+  ];
+}
+function logicalPathProblem(p) {
+  if (typeof p !== "string") return "is not a string";
+  if (p.includes("\\")) return "has a \\";
+  if (p.split("/").some((x) => x === "" || x === "." || x === "..")) return "has an empty, . or .. segment";
+  if (p.normalize("NFC") !== p) return "is not in Unicode normalisation form C";
+  return null;
+}
+function unsafePath(path) {
+  if (typeof path !== "string" || path === "") return "is empty";
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") return "has an empty, . or .. segment";
+    if (/[\u0000-\u001f\u007f\\]/.test(segment)) return "has a control character or a backslash";
+  }
+  return null;
+}
+function contentPathProblem(cp, contentDirectory = "content") {
+  const unsafe = unsafePath(cp);
+  if (unsafe) return unsafe;
+  const [ver, dir, ...rest] = cp.split("/");
+  if (!isVersion(ver) || dir !== contentDirectory || rest.length === 0) {
+    return `is not in the content directory of a version (vN/${contentDirectory}/...)`;
+  }
+  return null;
+}
+function encodeSegment(segment) {
+  return encodeURIComponent(segment).replace(/%(3D|2C|3A|40|2B|24|26|3B)/g, (m) => decodeURIComponent(m));
+}
+function under(root, segments) {
+  let url = root;
+  segments.forEach((segment, k) => {
+    const problem = unsafePath(segment) || (segment.includes("/") ? "has a /" : null);
+    if (problem) throw new FetchError("unsafe", root, `the name ${JSON.stringify(segment)} ${problem}`);
+    url += encodeSegment(segment) + (k + 1 < segments.length ? "/" : "");
+  });
+  if (!new URL(url).href.startsWith(new URL(root).href)) {
+    throw new FetchError("unsafe", url, "is not under the storage root");
+  }
+  return url;
+}
+function underPath(root, path) {
+  const problem = unsafePath(path);
+  if (problem) throw new FetchError("unsafe", root, `the path ${JSON.stringify(path)} ${problem}`);
+  return under(root, path.split("/"));
+}
+var VERSION_RE, OWNER_NAME_LAYOUT, HASHED_LAYOUT, LAYOUT_FILE;
+var init_paths = __esm({
+  "core/paths.js"() {
+    init_http();
+    init_crypto();
+    init_names();
+    VERSION_RE = /^v[1-9][0-9]*$/;
+    OWNER_NAME_LAYOUT = "opensheaf-owner-name-storage-layout";
+    HASHED_LAYOUT = "0003-hash-and-id-n-tuple-storage-layout";
+    LAYOUT_FILE = "opensheaf-owner-name-storage-layout.md";
+  }
+});
+
+// core/signatures.js
+function message(objectId2, version, inventory, keyLog) {
+  return utf8(`${SIGNATURE_FORMAT}
+object ${objectId2}
+version ${version}
+inventory ${inventory}
+keylog ${keyLog}
+`);
+}
+async function fileName(did) {
+  return `signature-${await keyId(did)}.json`;
+}
+function readSignatureFile(bytes) {
+  let d;
+  try {
+    d = JSON.parse(new TextDecoder("utf-8", {
+      fatal: true
+    }).decode(bytes));
+  } catch (error) {
+    throw new Error(`not JSON in UTF-8 (${error.message})`);
+  }
+  const names = Object.keys(FIELDS);
+  if (!d || typeof d !== "object" || Array.isArray(d) || Object.keys(d).length !== names.length || !names.every((n) => Object.hasOwn(d, n))) {
+    throw new Error("a signature file has exactly the fields " + names.join(", "));
+  }
+  for (const [field2, pattern2] of Object.entries(FIELDS)) {
+    if (typeof d[field2] !== "string" || !pattern2.test(d[field2])) throw new Error(`${field2} is not of its form`);
+  }
+  didKeyPublic(d.key);
+  if (FIELDS.keyLog.exec(d.keyLog)[1] !== d.signer) throw new Error("keyLog names the key log of another owner than the signer");
+  return d;
+}
+async function judge(bytes, file, { objectId: objectId2, version, inventory, owner, lookup, keyLog = false }) {
+  const bad = (reason, d2 = null) => ({
+    file,
+    status: INVALID,
+    reason,
+    key: d2?.key ?? null,
+    keyLog: null,
+    threshold: null
+  });
+  let d;
+  try {
+    d = readSignatureFile(bytes);
+  } catch (error) {
+    return bad(`malformed: ${error.message}`);
+  }
+  if (file !== await fileName(d.key)) return bad("its name does not match the digest of its key");
+  let signature;
+  try {
+    signature = unbase64(d.signature);
+  } catch {
+    return bad("the signature is not base64", d);
+  }
+  if (!await verifyEd25519(didKeyPublic(d.key), message(d.object, d.version, d.inventorySha512, d.keyLog), signature)) {
+    return bad("the signature does not verify", d);
+  }
+  if (d.object !== objectId2 || d.version !== version || d.inventorySha512 !== inventory) {
+    return bad("it signs another version, or another inventory", d);
+  }
+  if (d.signer !== owner) return bad("its signer is not the owner of the line", d);
+  const [, , number, digest] = FIELDS.keyLog.exec(d.keyLog);
+  const n = Number(number);
+  if (keyLog && (version === "v1" || n !== Number(version.slice(1)) - 1)) {
+    return bad("a key-log version is signed against the version before it, never the first", d);
+  }
+  const found2 = lookup(n, digest);
+  if (!found2) {
+    return {
+      file,
+      status: UNCHECKED,
+      reason: `v${n} of the key log, with that digest, is not reached`,
+      key: d.key,
+      keyLog: [
+        n,
+        digest
+      ],
+      threshold: null
+    };
+  }
+  if (found2.forkRecord || !found2.isVersion) return bad(`v${n} is not a version of the key log, or is a fork record`, d);
+  const keys = found2.keys || {};
+  let threshold;
+  if (keyLog) {
+    if (!(Array.isArray(keys.next) && keys.next.includes(await keyDigest(d.key)))) {
+      return bad(`the key is not a rotation key of v${n} of the key log`, d);
+    }
+    threshold = keys.nextThreshold;
+  } else {
+    if (!(Array.isArray(keys.keys) && keys.keys.includes(d.key))) return bad(`the key is not a current key of v${n} of the key log`, d);
+    threshold = keys.threshold;
+  }
+  return {
+    file,
+    status: GOOD,
+    reason: "",
+    key: d.key,
+    keyLog: [
+      n,
+      digest
+    ],
+    threshold
+  };
+}
+async function judgeFolder(witnesses, context) {
+  const names = [
+    ...witnesses.keys()
+  ].filter((n) => n.startsWith("signature-") && n.endsWith(".json")).sort();
+  return Promise.all(names.map((n) => judge(witnesses.get(n), n, context)));
+}
+function signedDirectly(judgements, leaveOut = null) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const j of judgements) {
+    if (j.status !== GOOD || leaveOut && leaveOut(j)) continue;
+    const key = j.keyLog.join(" ");
+    if (!groups.has(key)) groups.set(key, {
+      threshold: j.threshold,
+      keys: /* @__PURE__ */ new Set()
+    });
+    groups.get(key).keys.add(j.key);
+  }
+  return [
+    ...groups.values()
+  ].some((g) => g.keys.size >= g.threshold);
+}
+function lineStatuses(versions2, { exposed = /* @__PURE__ */ new Set(), forkPoint = null, trusted = null } = {}) {
+  const leaveOut = (j) => {
+    const suspect = exposed.has(j.key) || forkPoint !== null && j.keyLog[0] >= forkPoint;
+    return suspect && !(trusted && trusted(j));
+  };
+  const direct = versions2.map((js) => signedDirectly(js));
+  const clean = versions2.map((js) => signedDirectly(js, leaveOut));
+  const would = versions2.map((js) => js.some((j) => j.status === UNCHECKED) || signedDirectly(js));
+  const later = (list2, k) => list2.slice(k).some(Boolean);
+  return versions2.map((js, k) => {
+    if (direct[k] || later(direct, k + 1)) {
+      if (clean[k] || later(clean, k + 1)) return direct[k] ? SIGNED : VOUCHED;
+      return CONTESTED;
+    }
+    if (would[k] || later(would, k + 1)) return UNCHECKED;
+    return js.some((j) => j.status === INVALID) ? INVALID : UNSIGNED;
+  });
+}
+function latestSigned(statuses) {
+  let found2 = null;
+  statuses.forEach((s, k) => {
+    if (s === SIGNED || s === VOUCHED) found2 = k + 1;
+  });
+  return found2;
+}
+async function lineStatusesOf(objectId2, owner, versions2, log) {
+  const lookup = log ? (n, d) => log.lookup(n, d) : () => null;
+  const judgements = await Promise.all(versions2.map(({ version, digest, witnesses }) => judgeFolder(witnesses, {
+    objectId: objectId2,
+    version,
+    inventory: digest,
+    owner,
+    lookup
+  })));
+  const statuses = lineStatuses(judgements, log ? {
+    exposed: log.exposedKeys(),
+    forkPoint: log.forkPoint
+  } : {});
+  return {
+    judgements,
+    statuses
+  };
+}
+var SIGNATURE_FORMAT, WITNESSES, FIELDS, GOOD, UNCHECKED, INVALID, SIGNED, VOUCHED, CONTESTED, UNSIGNED;
+var init_signatures = __esm({
+  "core/signatures.js"() {
+    init_crypto();
+    init_names();
+    SIGNATURE_FORMAT = "opensheaf-signature/0.2";
+    WITNESSES = "extensions/opensheaf-witnesses";
+    FIELDS = {
+      format: new RegExp(`^${SIGNATURE_FORMAT.replace(/[./]/g, "\\$&")}$`),
+      object: /^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$/,
+      version: /^v[1-9][0-9]*$/,
+      inventorySha512: /^[0-9a-f]{128}$/,
+      signer: OWNER_NAME,
+      key: DID_KEY,
+      keyLog: /^sheaf:([a-z2-7]{51}[aq])\/v([1-9][0-9]*)\?sha512=([0-9a-f]{128})$/,
+      signature: /^[A-Za-z0-9+/]{85}[AQgw]==$/
+    };
+    GOOD = "good";
+    UNCHECKED = "unchecked";
+    INVALID = "invalid";
+    SIGNED = "signed";
+    VOUCHED = "vouched for";
+    CONTESTED = "contested";
+    UNSIGNED = "unsigned";
+  }
+});
+
+// core/schema.js
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+function same(a, b) {
+  return canonical(a) === canonical(b);
+}
+function show(value) {
+  const text3 = JSON.stringify(value) ?? String(value);
+  return text3.length > 60 ? text3.slice(0, 57) + "..." : text3;
+}
+function typeOf(value) {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
+  return typeof value;
+}
+function hasType(type, value) {
+  const t = typeOf(value);
+  return type === t || type === "number" && t === "integer";
+}
+function describeNot(schema4) {
+  const names = (s) => s?.required || [];
+  const forbidden = [
+    ...names(schema4),
+    ...(schema4?.anyOf || []).flatMap(names)
+  ];
+  return forbidden.length ? `must not have ${forbidden.join(", ")}` : "is valid under a schema it must not match";
+}
+function check(s, v, path, root, errors) {
+  if (s === true || s === void 0) return;
+  if (s === false) {
+    errors.push({
+      path,
+      message: "is not allowed"
+    });
+    return;
+  }
+  const fail = (message2) => errors.push({
+    path,
+    message: message2
+  });
+  if (typeof s.$ref === "string") check(resolveRef(root, s.$ref), v, path, root, errors);
+  if (s.type !== void 0) {
+    const types = Array.isArray(s.type) ? s.type : [
+      s.type
+    ];
+    if (!types.some((t) => hasType(t, v))) {
+      fail(`${show(v)} is not of type ${types.join(" or ")}`);
+      return;
+    }
+  }
+  if ("const" in s && !same(s.const, v)) fail(`${show(v)} should be ${show(s.const)}`);
+  if (s.enum && !s.enum.some((e) => same(e, v))) fail(`${show(v)} is not one of ${show(s.enum)}`);
+  if (typeof v === "string") {
+    const length = [
+      ...v
+    ].length;
+    if (s.minLength !== void 0 && length < s.minLength) fail(`${show(v)} is shorter than ${s.minLength}`);
+    if (s.maxLength !== void 0 && length > s.maxLength) fail(`${show(v)} is longer than ${s.maxLength}`);
+    if (s.pattern !== void 0 && !pattern(s.pattern).test(v)) fail(`${show(v)} does not match ${s.pattern}`);
+    if (s.format !== void 0 && FORMATS[s.format] && !FORMATS[s.format](v)) fail(`${show(v)} is not a valid ${s.format}`);
+  }
+  if (typeof v === "number" && s.minimum !== void 0 && v < s.minimum) fail(`${v} is less than ${s.minimum}`);
+  if (typeof v === "number" && s.maximum !== void 0 && v > s.maximum) fail(`${v} is greater than ${s.maximum}`);
+  if (Array.isArray(v)) {
+    if (s.minItems !== void 0 && v.length < s.minItems) fail(`has fewer than ${s.minItems} items`);
+    if (s.maxItems !== void 0 && v.length > s.maxItems) fail(`has more than ${s.maxItems} items`);
+    if (s.uniqueItems && new Set(v.map(canonical)).size !== v.length) fail("has repeated items");
+    if (s.items !== void 0) v.forEach((item, k) => check(s.items, item, `${path}/${k}`, root, errors));
+  }
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    if (s.minProperties !== void 0 && Object.keys(v).length < s.minProperties) {
+      fail(`has fewer than ${s.minProperties} properties`);
+    }
+    for (const name2 of s.required || []) {
+      if (!Object.hasOwn(v, name2)) fail(`${JSON.stringify(name2)} is a required property`);
+    }
+    const props = s.properties || {};
+    for (const [name2, value] of Object.entries(v)) {
+      const where2 = `${path}/${name2.replace(/~/g, "~0").replace(/\//g, "~1")}`;
+      if (Object.hasOwn(props, name2)) check(props[name2], value, where2, root, errors);
+      else if (s.additionalProperties !== void 0) check(s.additionalProperties, value, where2, root, errors);
+      if (s.propertyNames !== void 0) {
+        for (const e of collect(s.propertyNames, name2, root)) {
+          errors.push({
+            path: where2,
+            message: `the name ${e.message}`
+          });
+        }
+      }
+    }
+    for (const [name2, needed] of Object.entries(s.dependentRequired || {})) {
+      if (Object.hasOwn(v, name2)) {
+        for (const other of needed) {
+          if (!Object.hasOwn(v, other)) fail(`${JSON.stringify(other)} is required with ${JSON.stringify(name2)}`);
+        }
+      }
+    }
+  }
+  for (const sub of s.allOf || []) check(sub, v, path, root, errors);
+  if (s.anyOf && !s.anyOf.some((sub) => isValid(sub, v, root))) {
+    const reasons = s.anyOf.map((sub) => collect(sub, v, root)[0]).filter(Boolean).map((e) => (e.path ? `${e.path}: ` : "") + e.message);
+    fail(`satisfies none of the alternatives (${reasons.join("; or ")})`);
+  }
+  if (s.oneOf) {
+    const holding = s.oneOf.filter((sub) => isValid(sub, v, root)).length;
+    if (holding === 0) {
+      const reasons = s.oneOf.map((sub) => collect(sub, v, root)[0]).filter(Boolean).map((e) => (e.path ? `${e.path}: ` : "") + e.message);
+      fail(`satisfies none of the alternatives (${reasons.join("; or ")})`);
+    } else if (holding > 1) {
+      fail(`satisfies ${holding} of the alternatives, and should satisfy one`);
+    }
+  }
+  if (s.not !== void 0 && isValid(s.not, v, root)) fail(describeNot(s.not));
+  if (s.if !== void 0) {
+    if (isValid(s.if, v, root)) {
+      if (s.then !== void 0) check(s.then, v, path, root, errors);
+    } else if (s.else !== void 0) {
+      check(s.else, v, path, root, errors);
+    }
+  }
+}
+function resolveRef(root, ref) {
+  if (!ref.startsWith("#")) throw new Error(`unsupported $ref ${ref}`);
+  return ref.slice(1).split("/").filter(Boolean).map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~")).reduce((node, key) => node?.[key], root);
+}
+function validate(schema4, data2) {
+  const errors = [];
+  check(schema4, data2, "", schema4, errors);
+  return errors;
+}
+function isValid(schema4, data2, root) {
+  const errors = [];
+  check(schema4, data2, "", root, errors);
+  return errors.length === 0;
+}
+function pattern(source) {
+  if (!patterns.has(source)) patterns.set(source, new RegExp(source, "u"));
+  return patterns.get(source);
+}
+function collect(schema4, data2, root) {
+  const errors = [];
+  check(schema4, data2, "", root, errors);
+  return errors;
+}
+async function loadSchemas(read) {
+  const schemas2 = {};
+  for (const [format, file] of Object.entries(SCHEMA_FILES)) {
+    schemas2[format] = await read(new URL(`../schemas/${file}`, import.meta.url));
+  }
+  return schemas2;
+}
+var URI_CHAR, URI, URI_REFERENCE, PERCENT_OK, FORMATS, patterns, SCHEMA_FILES;
+var init_schema = __esm({
+  "core/schema.js"() {
+    URI_CHAR = "[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]";
+    URI = new RegExp(`^[A-Za-z][A-Za-z0-9+.\\-]*:${URI_CHAR}*$`);
+    URI_REFERENCE = new RegExp(`^${URI_CHAR}*$`);
+    PERCENT_OK = (s) => !/%(?![0-9A-Fa-f]{2})/.test(s);
+    FORMATS = {
+      date(s) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+        if (!m) return false;
+        const [y, mo, d] = m.slice(1).map(Number);
+        const leap = y % 4 === 0 && y % 100 !== 0 || y % 400 === 0;
+        const days = [
+          31,
+          leap ? 29 : 28,
+          31,
+          30,
+          31,
+          30,
+          31,
+          31,
+          30,
+          31,
+          30,
+          31
+        ][mo - 1];
+        return days !== void 0 && d >= 1 && d <= days;
+      },
+      uri: (s) => URI.test(s) && PERCENT_OK(s),
+      "uri-reference": (s) => URI_REFERENCE.test(s) && PERCENT_OK(s)
+    };
+    patterns = /* @__PURE__ */ new Map();
+    SCHEMA_FILES = {
+      "opensheaf-archive/0.2": "opensheaf-archive-0.2.schema.json",
+      "opensheaf-object/0.2": "opensheaf-object-0.2.schema.json",
+      "opensheaf-collection/0.2": "opensheaf-collection-0.2.schema.json",
+      "opensheaf-genesis/0.2": "opensheaf-genesis-0.2.schema.json",
+      "opensheaf-keys/0.2": "opensheaf-keys-0.2.schema.json",
+      "opensheaf-signature/0.2": "opensheaf-signature-0.2.schema.json",
+      "opensheaf-index/0.2": "opensheaf-index-0.2.schema.json",
+      "opensheaf-keeper/0.2": "opensheaf-keeper-0.2.schema.json",
+      "opensheaf-timestamps/0.2": "opensheaf-timestamps-0.2.schema.json"
+    };
+  }
+});
+
+// core/owners.js
+function jsonOrNull(bytes, { integers = false } = {}) {
+  if (!bytes) return null;
+  try {
+    const text3 = new TextDecoder("utf-8", {
+      fatal: true
+    }).decode(bytes);
+    return integers ? parseIntegers(text3) : JSON.parse(text3);
+  } catch {
+    return null;
+  }
+}
+async function carriedOf(files) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const [path, bytes] of files) {
+    if (!path.startsWith(FORKED)) continue;
+    const rest = path.slice(FORKED.length);
+    const k = rest.indexOf("/");
+    const d = k < 0 ? rest : rest.slice(0, k);
+    if (!groups.has(d)) groups.set(d, /* @__PURE__ */ new Map());
+    groups.get(d).set(k < 0 ? "" : rest.slice(k + 1), bytes);
+  }
+  const out = [];
+  for (const [d, group] of groups) {
+    const inventory = group.get("inventory.json") || new Uint8Array();
+    const inv = jsonOrNull(inventory);
+    const head = isObject(inv) ? inv.head : null;
+    const number = typeof head === "string" && /^v[0-9]+$/.test(head) ? Number(head.slice(1)) : null;
+    out.push({
+      d,
+      files: group,
+      inventory,
+      sidecar: group.get("inventory.json.sha512") || new Uint8Array(),
+      digest: await sha512(inventory),
+      number,
+      isVersion: true,
+      forkRecord: false,
+      keys: jsonOrNull(group.get("keys.json"), {
+        integers: true
+      }),
+      witnesses: new Map([
+        ...group
+      ].filter(([n]) => !CARRIED_FILES.includes(n)))
+    });
+  }
+  return out.sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
+}
+function sidecarDigest(bytes) {
+  if (!bytes) return null;
+  let text3;
+  try {
+    text3 = new TextDecoder("ascii", {
+      fatal: true
+    }).decode(bytes);
+  } catch {
+    return null;
+  }
+  const parts = text3.split(/\s+/).filter(Boolean);
+  return parts.length === 2 && parts[1] === "inventory.json" ? parts[0].toLowerCase() : null;
+}
+function ownerObject(owner, previous = null) {
+  const d = {
+    format: OBJECT_FORMAT,
+    specification: "0.2",
+    kind: "owner",
+    status: "active",
+    name: owner,
+    owner
+  };
+  if (previous !== null) d.previous = previous;
+  return d;
+}
+async function firstVersion(genesis) {
+  const rec = await readGenesis(genesis);
+  if (rec.kind !== "owner") throw new Error("the genesis record of an owner has kind owner");
+  const owner = await nameOf(genesis);
+  const files = /* @__PURE__ */ new Map([
+    [
+      GENESIS,
+      genesis
+    ],
+    [
+      OBJ,
+      jcsBytes(ownerObject(owner))
+    ],
+    [
+      KEYS,
+      jcsBytes({
+        format: KEYS_FORMAT,
+        keys: rec.keys,
+        threshold: rec.threshold,
+        next: rec.next,
+        nextThreshold: rec.nextThreshold
+      })
+    ]
+  ]);
+  const manifest = {}, state = {};
+  for (const [path, bytes2] of files) {
+    const d = await sha512(bytes2);
+    manifest[d] = [
+      `v1/content/${path}`
+    ];
+    state[d] = [
+      path
+    ];
+  }
+  const inv = {
+    digestAlgorithm: "sha512",
+    head: "v1",
+    id: objectId(owner, owner),
+    manifest,
+    type: INVENTORY_TYPE,
+    versions: {
+      v1: {
+        created: rec.created,
+        state
+      }
+    }
+  };
+  const bytes = jcsBytes(inv);
+  return Version.make(1, files, bytes, utf8(`${await sha512(bytes)}  inventory.json
+`));
+}
+async function keyRules(k, earlier, owner) {
+  if (!isObject(k) || k.format !== KEYS_FORMAT) return [
+    `keys.json is not of format ${KEYS_FORMAT}`
+  ];
+  const problems = [];
+  const extra = Object.keys(k).filter((f) => !KEYS_FIELDS.includes(f)).sort();
+  if (extra.length) problems.push("keys.json has fields the specification does not define: " + extra.join(", "));
+  if ("ended" in k && k.ended !== true) problems.push("ended, when present, is true");
+  if (k.ended === true) {
+    if ([
+      "keys",
+      "threshold",
+      "next",
+      "nextThreshold"
+    ].some((f) => f in k)) {
+      problems.push("an ending version has no keys, threshold, next or nextThreshold (section 6.3)");
+    }
+    const succ = k.successor;
+    if (succ !== void 0 && succ !== null && (typeof succ !== "string" || !OWNER_NAME.test(succ) || succ === owner)) {
+      problems.push("successor is the owner name of another owner (section 6.3)");
+    }
+  } else {
+    if ("successor" in k) problems.push("only an ending version names a successor (section 6.3)");
+    problems.push(...await keyRulesOfRecord(k));
+  }
+  if ("extensions" in k && !(isObject(k.extensions) && Object.values(k.extensions).every(isObject))) {
+    problems.push("extensions maps names of extensions to objects");
+  }
+  let exposed = Array.isArray(k.exposed) ? k.exposed : [];
+  if ("exposed" in k && (!Array.isArray(k.exposed) || !k.exposed.length || !k.exposed.every((x) => typeof x === "string" && DID_KEY.test(x)) || new Set(k.exposed).size !== k.exposed.length)) {
+    problems.push("exposed is a list of distinct did:key URIs");
+    exposed = [];
+  }
+  const strings = (x) => Array.isArray(x) ? x.filter((y) => typeof y === "string") : [];
+  const keys = strings(k.keys), next = strings(k.next);
+  const earlierKeys = new Set(earlier.flatMap((e) => strings(e?.keys)));
+  const earlierNext = new Set(earlier.flatMap((e) => strings(e?.next)));
+  const earlierExposed = new Set(earlier.flatMap((e) => strings(e?.exposed)));
+  if (keys.some((x) => earlierExposed.has(x) || exposed.includes(x))) {
+    problems.push("keys lists a key exposed by this version or an earlier one (rule 2)");
+  }
+  if ((await Promise.all(keys.map(keyDigest))).some((d) => earlierNext.has(d))) {
+    problems.push("keys lists a rotation key of an earlier version (rule 2)");
+  }
+  const earlierKeyDigests = new Set(await Promise.all([
+    ...earlierKeys
+  ].map(keyDigest)));
+  if (next.some((d) => earlierKeyDigests.has(d))) problems.push("next holds the digest of a current key of an earlier version (rule 3)");
+  if (next.some((d) => earlierNext.has(d))) problems.push("next holds a digest that next of an earlier version holds (rule 3)");
+  if (exposed.some((x) => !earlierKeys.has(x))) problems.push("exposed lists a key that keys of no earlier version lists (rule 4)");
+  return problems;
+}
+function heldLookup(side) {
+  return (number, digest) => side.find((x) => x.number === number && x.digest === digest) || null;
+}
+function sameFiles(a, b) {
+  if (a.size !== b.size) return false;
+  for (const [path, bytes] of a) if (!sameBytes(bytes, b.get(path))) return false;
+  return true;
+}
+function arrayOf(x) {
+  return Array.isArray(x) ? x : [];
+}
+var OBJECT_FORMAT, KEYS_FORMAT, INVENTORY_TYPE, OBJ, KEYS, FORKED, RESERVED, Version, CARRIED_FILES, KEYS_FIELDS, KeyLog;
+var init_owners = __esm({
+  "core/owners.js"() {
+    init_http();
+    init_crypto();
+    init_names();
+    init_signatures();
+    init_schema();
+    OBJECT_FORMAT = "opensheaf-object/0.2";
+    KEYS_FORMAT = "opensheaf-keys/0.2";
+    INVENTORY_TYPE = "https://ocfl.io/1.1/spec/#inventory";
+    OBJ = "object.json";
+    KEYS = "keys.json";
+    FORKED = "forked/";
+    RESERVED = [
+      "object.json",
+      "datacite.json",
+      "genesis.json",
+      "members.json",
+      "keys.json",
+      "forked",
+      "parent.inventory.json",
+      "parent.object.json",
+      "parent.signatures",
+      "parent.chain"
+    ];
+    Version = class _Version {
+      static async make(number, files, inventory, sidecar2 = null, witnesses = /* @__PURE__ */ new Map()) {
+        const v = new _Version(number, files, inventory, sidecar2, witnesses);
+        v.digest = await sha512(inventory);
+        if (v.forkRecord) v.carried = await carriedOf(files);
+        return v;
+      }
+      constructor(number, files, inventory, sidecar2, witnesses) {
+        Object.assign(this, {
+          number,
+          files,
+          inventory,
+          sidecar: sidecar2,
+          witnesses,
+          isVersion: true,
+          carried: []
+        });
+      }
+      get keys() {
+        return jsonOrNull(this.files.get(KEYS), {
+          integers: true
+        });
+      }
+      get forkRecord() {
+        return !this.files.has(KEYS) && [
+          ...this.files.keys()
+        ].some((p) => p.startsWith(FORKED));
+      }
+    };
+    CARRIED_FILES = [
+      "inventory.json",
+      "inventory.json.sha512",
+      "keys.json"
+    ];
+    KEYS_FIELDS = [
+      "format",
+      "keys",
+      "threshold",
+      "next",
+      "nextThreshold",
+      "extensions",
+      "ended",
+      "successor",
+      "exposed"
+    ];
+    KeyLog = class _KeyLog {
+      static async of(genesis, versions2 = null, problems = []) {
+        const owner = await nameOf(genesis);
+        return new _KeyLog(genesis, owner, versions2 || [
+          await firstVersion(genesis)
+        ], problems);
+      }
+      constructor(genesis, owner, versions2, problems = []) {
+        this.genesis = genesis;
+        this.owner = owner;
+        this.id = objectId(owner, owner);
+        this.versions = versions2;
+        this.problems = problems;
+        this.checked = null;
+        this.met = null;
+      }
+      pin(number) {
+        return keyLogPin(this.owner, number, this.versions[number - 1].digest);
+      }
+      side() {
+        return this.versions.filter((v) => v.isVersion && !v.forkRecord);
+      }
+      latest() {
+        if (this.ended) return null;
+        const side = this.side();
+        const last = side[side.length - 1];
+        return last && isObject(last.keys) && "keys" in last.keys ? last : null;
+      }
+      get forkRecord() {
+        return this.versions.find((v) => v.forkRecord && v.isVersion) || this.met || null;
+      }
+      get forkPoint() {
+        return this.forkRecord?.carried[0]?.number ?? null;
+      }
+      get ended() {
+        return this.forkRecord !== null || this.side().slice(1).some((v) => v.keys?.ended);
+      }
+      get successor() {
+        return this.side().slice(1).find((v) => v.keys?.ended)?.keys.successor ?? null;
+      }
+      exposedKeys() {
+        const found2 = /* @__PURE__ */ new Set();
+        for (const v of this.side()) for (const x of arrayOf(v.keys?.exposed)) found2.add(x);
+        for (const c of this.forkRecord?.carried || []) for (const x of arrayOf(c.keys?.exposed)) found2.add(x);
+        return found2;
+      }
+      lookup(number, digest) {
+        for (const v of this.versions) if (v.number === number && v.digest === digest) return v;
+        for (const c of this.forkRecord?.carried || []) if (c.number === number && c.digest === digest) return c;
+        return null;
+      }
+      extensions() {
+        const side = this.side();
+        if (side.length <= 1) return jsonOrNull(this.genesis)?.extensions ?? null;
+        return side[side.length - 1].keys?.extensions ?? null;
+      }
+      async check() {
+        if (!this.checked) this.checked = this.checkNow();
+        return this.checked;
+      }
+      async checkNow() {
+        const errors = [
+          ...this.problems
+        ], warnings = [];
+        let rec = null;
+        try {
+          rec = await readGenesis(this.genesis);
+        } catch (error) {
+          errors.push(`genesis.json: ${error.message}`);
+        }
+        if (rec !== null && rec.kind !== "owner") {
+          errors.push("genesis.json: the genesis record of an owner has kind owner");
+          rec = null;
+        }
+        if (rec === null || !this.versions.length) {
+          for (const v of this.versions) v.isVersion = false;
+          return {
+            errors,
+            warnings
+          };
+        }
+        const v1 = this.versions[0];
+        const computed = await firstVersion(this.genesis);
+        if (v1.number !== 1 || !sameFiles(v1.files, computed.files) || !sameBytes(v1.inventory, computed.inventory)) {
+          errors.push("v1: not the version computed from the genesis record (section 6.1)");
+          v1.isVersion = false;
+        } else if (v1.sidecar && v1.sidecar.length && sidecarDigest(v1.sidecar) !== v1.digest) {
+          errors.push("v1: the checksum file does not state the digest of the inventory");
+          v1.isVersion = false;
+        }
+        if ([
+          ...v1.witnesses.keys()
+        ].some((n) => n.startsWith("signature-"))) {
+          warnings.push("v1: a signature file of the computed first version is invalid (section 7.3)");
+        }
+        const side = [
+          v1
+        ];
+        let state = v1.isVersion ? null : "broken";
+        for (const v of this.versions.slice(1)) {
+          const where2 = `v${v.number}`;
+          if (state === "broken") {
+            v.isVersion = false;
+            warnings.push(`${where2}: follows a version that is not a version of the key log`);
+            continue;
+          }
+          if (state === "forked" || state === "ended" && !v.forkRecord) {
+            v.isVersion = false;
+            warnings.push(`${where2}: held after ${state === "forked" ? "a fork record" : "an ending version"}: not a version of the key log (section 6.3)`);
+            continue;
+          }
+          const problems = await this.commonProblems(v, side[side.length - 1]);
+          if (v.forkRecord) {
+            problems.push(...await this.forkRecordProblems(v, side));
+          } else if (v.keys === null) {
+            problems.push("no keys.json, and not a fork record");
+          } else {
+            problems.push(...await keyRules(v.keys, side.map((x) => x.keys), this.owner));
+            if (!problems.length) problems.push(...await this.signatureProblems(v, side[side.length - 1], heldLookup(side), warnings));
+          }
+          if (problems.length) {
+            v.isVersion = false;
+            errors.push(...problems.map((p) => `${where2}: ${p}`));
+            state = "broken";
+          } else if (v.forkRecord) {
+            state = "forked";
+          } else {
+            side.push(v);
+            if (v.keys.ended) state = "ended";
+          }
+        }
+        return {
+          errors,
+          warnings
+        };
+      }
+      async commonProblems(v, prev) {
+        const problems = [];
+        const inv = jsonOrNull(v.inventory);
+        if (!isObject(inv) || inv.id !== this.id || inv.head !== `v${v.number}`) {
+          problems.push(`the inventory is not that of v${v.number} of ${this.id}`);
+        }
+        if (v.sidecar && v.sidecar.length && sidecarDigest(v.sidecar) !== v.digest) {
+          problems.push("the checksum file does not state the digest of the inventory");
+        }
+        if (!sameBytes(v.files.get(GENESIS), this.genesis)) problems.push("genesis.json differs from that of the first version");
+        const obj = jsonOrNull(v.files.get(OBJ));
+        const expected = ownerObject(this.owner, prev.digest);
+        const withoutExtensions = isObject(obj) ? Object.fromEntries(Object.entries(obj).filter(([k]) => k !== "extensions")) : null;
+        if (!withoutExtensions || !same(withoutExtensions, expected)) {
+          problems.push(`object.json has not the fields of an owner and previous, the digest of the inventory of v${prev.number} (section 4.3)`);
+        }
+        for (const path of v.files.keys()) {
+          const top = path.split("/")[0];
+          if (RESERVED.includes(top) && ![
+            GENESIS,
+            OBJ,
+            KEYS
+          ].includes(path) && !path.startsWith(FORKED)) {
+            problems.push(`${path}: a name reserved by section 4.1`);
+          }
+        }
+        return problems;
+      }
+      async signatureProblems(v, prev, lookup, warnings, where2 = null) {
+        where2 = where2 || `v${v.number}`;
+        const good = /* @__PURE__ */ new Set();
+        for (const j of await judgeFolder(v.witnesses, {
+          objectId: this.id,
+          version: `v${v.number}`,
+          inventory: v.digest,
+          owner: this.owner,
+          lookup,
+          keyLog: true
+        })) {
+          if (j.status === GOOD && j.keyLog[0] === prev.number && j.keyLog[1] === prev.digest) good.add(j.key);
+          else if (j.status !== GOOD) warnings.push(`${where2}/${j.file}: ${j.status}: ${j.reason}`);
+        }
+        const need = prev.keys.nextThreshold;
+        if (good.size < need) return [
+          `signed by ${good.size} rotation key${good.size === 1 ? "" : "s"} of v${prev.number}, which needs ${need} (section 6.1)`
+        ];
+        return [];
+      }
+      async forkRecordProblems(fr, side) {
+        const problems = [
+          ...fr.files.keys()
+        ].filter((p) => p !== GENESIS && p !== OBJ && !p.startsWith(FORKED)).map((p) => `${p}: a fork record holds only genesis.json, object.json and forked/ (section 6.3)`);
+        const carried = fr.carried;
+        if (!carried.length || carried.some((c) => c.number === null)) {
+          return [
+            ...problems,
+            "a fork record carries versions, each with its inventory"
+          ];
+        }
+        const first = carried[0].number;
+        const held2 = new Map(side.map((x) => [
+          x.number,
+          x
+        ]));
+        if (carried.some((c, k) => c.number !== first + k)) problems.push("the versions carried are consecutive");
+        if (!held2.has(first - 1) || !held2.has(first) || held2.get(first).digest === carried[0].digest) {
+          problems.push(`the first version carried, v${first}, differs from a version held of that number`);
+          return problems;
+        }
+        let before = side.filter((x) => x.number < first);
+        for (const c of carried) {
+          const where2 = `forked/${c.d}`;
+          const inv = jsonOrNull(c.inventory);
+          if (c.d !== base32(await sha256(c.inventory)).slice(0, 16)) problems.push(`${where2}: not the name its inventory digest gives`);
+          if (!isObject(inv) || inv.id !== this.id) {
+            problems.push(`${where2}: the inventory carried is not one of ${this.id}`);
+            continue;
+          }
+          if (sidecarDigest(c.sidecar) !== c.digest) problems.push(`${where2}: the checksum file does not state the digest of the inventory`);
+          const state = inv.versions?.[`v${c.number}`]?.state || {};
+          const keysDigest = c.files.has("keys.json") ? await sha512(c.files.get("keys.json")) : null;
+          if (!keysDigest || !Object.entries(state).some(([d, paths]) => Array.isArray(paths) && paths.includes(KEYS) && d === keysDigest)) {
+            problems.push(`${where2}: keys.json is not the one its inventory lists`);
+            continue;
+          }
+          const rules = await keyRules(c.keys, before.map((x) => x.keys), this.owner);
+          problems.push(...rules.map((p) => `${where2}: ${p}`));
+          if (!rules.length) {
+            const more = await this.signatureProblems(c, before[before.length - 1], heldLookup(before), [], where2);
+            problems.push(...more.map((p) => `${where2}: ${p}`));
+          }
+          before = [
+            ...before,
+            c
+          ];
+        }
+        return problems;
+      }
+      async meet(other) {
+        await this.check();
+        await other.check();
+        if (!sameBytes(this.genesis, other.genesis)) return this;
+        const mine = this.side(), theirs = other.side();
+        for (let k = 0; k < Math.min(mine.length, theirs.length); k++) {
+          if (mine[k].digest !== theirs[k].digest) return this.withFork(theirs.slice(k));
+        }
+        const theirFork = other.forkRecord;
+        if (theirs.length > mine.length) {
+          if (this.forkRecord) return this;
+          const log = new _KeyLog(this.genesis, this.owner, [
+            ...mine,
+            ...theirs.slice(mine.length),
+            ...theirFork ? [
+              theirFork
+            ] : []
+          ]);
+          log.checked = Promise.resolve({
+            errors: [],
+            warnings: []
+          });
+          log.met = other.met;
+          return log;
+        }
+        if (theirFork) {
+          const first = theirFork.carried[0];
+          const held2 = first && first.number <= mine.length ? mine[first.number - 1] : null;
+          if (held2 && held2.digest !== first.digest && !this.forkRecord) return this.withFork(theirFork.carried);
+        }
+        return this;
+      }
+      withFork(otherSide) {
+        if (this.forkRecord) return this;
+        const log = new _KeyLog(this.genesis, this.owner, this.versions, this.problems);
+        log.checked = this.checked;
+        log.met = {
+          carried: otherSide,
+          isVersion: true,
+          forkRecord: true,
+          met: true
+        };
+        return log;
+      }
+    };
+  }
+});
+
+// core/versions.js
+function versionsOf(inv) {
+  const versions2 = inv && typeof inv.versions === "object" && inv.versions ? Object.keys(inv.versions) : [];
+  return versions2.filter(isVersion).sort((a, b) => versionNumber(a) - versionNumber(b));
+}
+function filesOf(inv, ver) {
+  const files = /* @__PURE__ */ Object.create(null);
+  const state = own(inv?.versions, ver) && inv.versions[ver]?.state || {};
+  for (const [digest, paths] of Object.entries(state)) {
+    for (const p of Array.isArray(paths) ? paths : []) files[p] = digest;
+  }
+  return files;
+}
+function contentPath(inv, ver, logical) {
+  const digest = filesOf(inv, ver)[logical];
+  const paths = digest && own(inv.manifest, digest) ? inv.manifest[digest] : null;
+  return Array.isArray(paths) && typeof paths[0] === "string" ? paths[0] : null;
+}
+function defaultHistory(inv, objOf2, at = inv.head) {
+  const last = /* @__PURE__ */ new Map();
+  for (const ver of versionsOf(inv)) {
+    if (versionNumber(ver) <= versionNumber(at)) {
+      const n = objOf2(ver)?.documentVersion;
+      if (Number.isInteger(n)) last.set(n, ver);
+    }
+  }
+  return [
+    ...last.keys()
+  ].sort((a, b) => a - b).map((n) => last.get(n));
+}
+function historyOf(inv, objOf2, at = inv.head) {
+  const hist = objOf2(at)?.history;
+  return Array.isArray(hist) && hist.length ? hist : defaultHistory(inv, objOf2, at);
+}
+function currentVersion(inv, objOf2, at = inv.head) {
+  const hist = historyOf(inv, objOf2, at);
+  return hist[hist.length - 1] || at;
+}
+function memberPins(m) {
+  if (own(m, "revisions")) {
+    return (Array.isArray(m.revisions) ? m.revisions : []).map((r) => ({
+      version: r?.version,
+      pin: r?.inventorySha512,
+      documentVersion: r?.documentVersion
+    }));
+  }
+  return [
+    {
+      version: m?.version,
+      pin: m?.inventorySha512,
+      documentVersion: null
+    }
+  ];
+}
+function dateOf(dc, ...types) {
+  for (const type of types) {
+    const d = list(dc?.dates).find((x) => x?.dateType === type);
+    if (d && text(d.date)) return d.date;
+  }
+  return null;
+}
+function titleOf(dc) {
+  return text(list(dc?.titles).find((t) => !t?.titleType)?.title) || text(list(dc?.titles)[0]?.title);
+}
+function creatorsOf(dc) {
+  return list(dc?.creators).map((c) => text(c?.name) || [
+    c?.givenName,
+    c?.familyName
+  ].filter(text).join(" ")).filter(Boolean);
+}
+function pdfOf(obj) {
+  const rs = list(obj?.renditions).filter((r) => text(r?.path));
+  return (rs.find((r) => r.mediaType === "application/pdf") || rs.find((r) => r.path.toLowerCase().endsWith(".pdf")))?.path || null;
+}
+function isEvidence(p) {
+  return p === "parent.inventory.json" || p === "parent.object.json" || p.startsWith("parent.signatures/") || p.startsWith("parent.chain/");
+}
+function ownFiles(inv, ver, obj) {
+  const notes = new Set([
+    ...list(obj?.notices),
+    obj?.withdrawal?.reason,
+    obj?.licence
+  ].map((x) => x?.path).filter(text));
+  const files = /* @__PURE__ */ Object.create(null);
+  for (const [p, digest] of Object.entries(filesOf(inv, ver))) {
+    if (!IDENTITY.includes(p) && !isEvidence(p) && !notes.has(p)) files[p] = digest;
+  }
+  return files;
+}
+function documentVersionErrors(inv, objOf2) {
+  const errors = [];
+  const add2 = (ver, message2) => errors.push({
+    ver,
+    message: message2
+  });
+  const versions2 = versionsOf(inv);
+  const seen = /* @__PURE__ */ new Map(), filesOfDoc = /* @__PURE__ */ new Map(), missingOf = /* @__PURE__ */ new Map();
+  let highest = 0, hadHistory = false, notices = [];
+  for (const ver of versions2) {
+    const obj = objOf2(ver);
+    if (!obj || obj.kind !== "document") return errors;
+    const n = obj.documentVersion;
+    const own2 = ownFiles(inv, ver, obj);
+    const change = obj.changes?.text ?? null;
+    if (!seen.size && obj.parent) highest = (Number.isInteger(n) ? n : 1) - 1;
+    if (seen.has(n)) {
+      const before = filesOfDoc.get(n);
+      if (missingOf.get(n)) {
+        const changed = Object.entries(own2).some(([p, d]) => Object.hasOwn(before, p) && before[p] !== d);
+        const removed2 = Object.keys(before).some((p) => !Object.hasOwn(own2, p));
+        if (changed || removed2) add2(ver, `changes files of document version ${n} (only additions allowed)`);
+      } else if (!same(own2, before) || change !== seen.get(n)) {
+        add2(ver, `has other files than document version ${n}`);
+      }
+      missingOf.set(n, Boolean(obj.sourcesMissing));
+      filesOfDoc.set(n, own2);
+    } else {
+      if (n !== highest + 1) add2(ver, `document version ${n} breaks the numbering (expected ${highest + 1})`);
+      for (const [m, files] of filesOfDoc) {
+        if (same(own2, files) && change === seen.get(m)) {
+          add2(ver, `document version ${n} holds the same files and change note as document version ${m}, whose number it keeps`);
+          break;
+        }
+      }
+      highest = Math.max(highest, Number.isInteger(n) ? n : 0);
+      seen.set(n, change);
+      filesOfDoc.set(n, own2);
+      missingOf.set(n, Boolean(obj.sourcesMissing));
+    }
+    const hist = obj.history;
+    if (hadHistory && hist == null) add2(ver, "lacks the history of earlier versions");
+    if (hist != null) {
+      hadHistory = true;
+      const known = versions2.filter((v) => versionNumber(v) <= versionNumber(ver));
+      if (!Array.isArray(hist) || hist.some((h) => !known.includes(h))) {
+        add2(ver, "history names unknown object versions");
+      } else {
+        const docs = hist.map((h) => objOf2(h)?.documentVersion);
+        const all = Array.from({
+          length: highest
+        }, (_, k) => k + 1);
+        if (new Set(docs).size !== docs.length || !same([
+          ...new Set(docs)
+        ].sort((a, b) => a - b), all)) {
+          add2(ver, "history does not list each document version once");
+        }
+        hist.forEach((h, k) => {
+          const later = known.filter((v) => versionNumber(v) > versionNumber(h) && objOf2(v)?.documentVersion === docs[k]);
+          if (later.length) add2(ver, `history entry ${h} is not the last object version of ${docs[k]}`);
+        });
+      }
+    }
+    const current = Array.isArray(obj.notices) ? obj.notices : [];
+    if (notices.some((x) => !current.some((y) => same(x, y)))) add2(ver, "drops or changes an earlier notice");
+    notices = current;
+  }
+  return errors;
+}
+var own, list, text, IDENTITY;
+var init_versions = __esm({
+  "core/versions.js"() {
+    init_paths();
+    init_schema();
+    own = (o, k) => o !== null && typeof o === "object" && Object.hasOwn(o, k);
+    list = (x) => Array.isArray(x) ? x : [];
+    text = (x) => typeof x === "string" ? x : null;
+    IDENTITY = [
+      "datacite.json",
+      "object.json",
+      "genesis.json"
+    ];
+  }
+});
+
+// core/archive.js
+function baseOf(url, relativeTo = globalThis.location?.href) {
+  const u = new URL(url, relativeTo);
+  u.hash = "";
+  u.search = "";
+  let s = u.href;
+  if (/\/[^/]*\.[A-Za-z0-9]{1,8}$/.test(u.pathname)) s = s.slice(0, s.lastIndexOf("/") + 1);
+  return s.endsWith("/") ? s : s + "/";
+}
+var Archive;
+var init_archive = __esm({
+  "core/archive.js"() {
+    init_http();
+    init_paths();
+    init_versions();
+    init_names();
+    init_owners();
+    init_signatures();
+    init_crypto();
+    Archive = class _Archive {
+      static async open(http, url, options = {}) {
+        const base = baseOf(url);
+        const where2 = base + "opensheaf.json";
+        const disc = parseJson(await http.cached(where2, options), where2);
+        if (!isObject(disc)) throw new FetchError("json", where2, "is not a JSON object");
+        const archive = new _Archive(http, base, disc);
+        if (!archive.old) {
+          const ids = [
+            ...archive.objects().map((o) => o.id),
+            ...archive.drafts().map((d) => d.id),
+            ...archive.tombstones().map((t) => t.id).filter(isObjectId)
+          ];
+          await Promise.all(ids.map((id) => archive.locate(id).catch(() => null)));
+        }
+        return archive;
+      }
+      constructor(http, base, disc) {
+        this.http = http;
+        this.base = base;
+        this.disc = disc;
+        this.old = disc.specification === "0.1" || disc.format === "opensheaf-archive/0.1" || disc.specification !== "0.2" && Object.hasOwn(disc, "archiveId");
+        this.name = typeof disc.name === "string" && disc.name ? disc.name : base;
+        this.layout = disc.storageLayout === HASHED_LAYOUT ? HASHED_LAYOUT : OWNER_NAME_LAYOUT;
+        let root;
+        try {
+          root = new URL(typeof disc.storageRoot === "string" ? disc.storageRoot : "ocfl/", base).href;
+        } catch {
+          root = base + "ocfl/";
+        }
+        this.root = root.endsWith("/") ? root : root + "/";
+        this.paths = /* @__PURE__ */ new Map();
+        this.keyLogs = /* @__PURE__ */ new Map();
+        this.lines = /* @__PURE__ */ new Map();
+        this.lister = null;
+      }
+      objects() {
+        const list2 = Array.isArray(this.disc.objects) ? this.disc.objects : [];
+        return list2.filter((o) => isObject(o) && isObjectId(o.id) && !parseId(o.id).draft);
+      }
+      entry(id) {
+        return this.objects().find((o) => o.id === id) || null;
+      }
+      drafts() {
+        const list2 = Array.isArray(this.disc.drafts) ? this.disc.drafts : [];
+        return list2.filter((d) => isObject(d) && isObjectId(d.id) && parseId(d.id).draft);
+      }
+      tombstones() {
+        const list2 = Array.isArray(this.disc.tombstones) ? this.disc.tombstones : [];
+        return list2.filter((t) => isObject(t) && typeof t.id === "string");
+      }
+      owners() {
+        return (Array.isArray(this.disc.owners) ? this.disc.owners : []).filter((o) => typeof o === "string");
+      }
+      labelOf(id) {
+        return this.objects().find((o) => o.id === id && typeof o.label === "string")?.label ?? null;
+      }
+      byLabel(label) {
+        return this.objects().find((o) => o.label === label)?.id ?? null;
+      }
+      where(id) {
+        const parts = parseId(id);
+        if (parts && parts.name === parts.owner) return `owner ${parts.owner}`;
+        return this.labelOf(id) || id || "?";
+      }
+      async locate(id) {
+        if (!this.paths.has(id)) this.paths.set(id, await pathOf(id, this.layout));
+        return this.paths.get(id);
+      }
+      url(id, ...segments) {
+        if (!this.paths.has(id)) {
+          throw new FetchError("unsafe", this.root, `${JSON.stringify(id)} is not the identifier of an object (section 4)`);
+        }
+        return under(this.root, [
+          ...this.paths.get(id),
+          ...segments
+        ]);
+      }
+      versionUrl(id, ver, file) {
+        if (!isVersion(ver)) throw new FetchError("unsafe", this.root, `${JSON.stringify(ver)} is not an object version (section 4.1)`);
+        return this.url(id, ver, file);
+      }
+      folderUrl(id, ver) {
+        const folder = this.url(id, "x").slice(0, -1);
+        if (!ver) return folder;
+        return this.versionUrl(id, ver, "x").slice(0, -1);
+      }
+      contentUrl(id, inv, cp) {
+        const problem = contentPathProblem(cp, inv?.contentDirectory || "content");
+        if (problem) throw new FetchError("unsafe", this.root, `the content path ${JSON.stringify(cp)} ${problem}`);
+        return underPath(this.folderUrl(id), cp);
+      }
+      inventoryUrl(id, ver) {
+        return ver ? this.versionUrl(id, ver, "inventory.json") : this.url(id, "inventory.json");
+      }
+      witnessUrl(id, ver, name2) {
+        if (!isVersion(ver)) throw new FetchError("unsafe", this.root, `${JSON.stringify(ver)} is not an object version (section 4.1)`);
+        return this.url(id, ...WITNESSES.split("/"), ver, name2);
+      }
+      async inventoryBytes(id, ver, options = {}) {
+        await this.locate(id);
+        return this.http.cached(this.inventoryUrl(id, ver), options);
+      }
+      async inventory(id, ver, options = {}) {
+        const bytes = await this.inventoryBytes(id, ver, options);
+        const where2 = this.inventoryUrl(id, ver);
+        const inv = parseJson(bytes, where2);
+        if (!isObject(inv) || !isObject(inv.versions) || !isObject(inv.manifest)) {
+          throw new FetchError("json", where2, "is not an OCFL inventory");
+        }
+        if (Object.keys(inv.versions).length > LIMITS.versions) {
+          throw new FetchError("too-large", where2, `has more than ${LIMITS.versions} object versions`);
+        }
+        return inv;
+      }
+      async sidecarBytes(id, ver, options = {}) {
+        await this.locate(id);
+        const where2 = ver ? this.versionUrl(id, ver, "inventory.json.sha512") : this.url(id, "inventory.json.sha512");
+        return this.http.cached(where2, {
+          ...options,
+          limit: 4096
+        });
+      }
+      async sidecar(id, ver, options = {}) {
+        return sidecarDigest(await this.sidecarBytes(id, ver, options)) ?? "";
+      }
+      async pin(id, ver, options = {}) {
+        const digest = await sha512(await this.inventoryBytes(id, ver, options));
+        if (await this.sidecar(id, ver, options) !== digest) {
+          throw new FetchError("digest", this.inventoryUrl(id, ver), "the inventory does not match its checksum file");
+        }
+        return digest;
+      }
+      fileUrl(id, inv, ver, logical) {
+        const cp = contentPath(inv, ver, logical);
+        return cp ? this.contentUrl(id, inv, cp) : null;
+      }
+      async json(id, inv, ver, logical, options = {}) {
+        await this.locate(id);
+        const url = this.fileUrl(id, inv, ver, logical);
+        if (!url) return null;
+        return this.http.json(url, {
+          ...options,
+          limit: LIMITS.json
+        });
+      }
+      async bytes(id, inv, ver, logical, options = {}) {
+        await this.locate(id);
+        const url = this.fileUrl(id, inv, ver, logical);
+        if (!url) return null;
+        return this.http.cached(url, {
+          ...options,
+          limit: LIMITS.json
+        });
+      }
+      async descriptions(id, inv, ver, options = {}) {
+        const [obj, dc] = await Promise.all([
+          this.json(id, inv, ver, "object.json", options),
+          this.json(id, inv, ver, "datacite.json", options)
+        ]);
+        return {
+          obj,
+          dc
+        };
+      }
+      async objectsOf(id, inv, options = {}) {
+        const versions2 = versionsOf(inv);
+        const objs = await Promise.all(versions2.map((v) => this.json(id, inv, v, "object.json", options).catch((error) => {
+          if (error.kind === "aborted") throw error;
+          return null;
+        })));
+        return new Map(versions2.map((v, k) => [
+          v,
+          objs[k]
+        ]));
+      }
+      async history(id, at, options = {}) {
+        const inv = await this.inventory(id, null, options);
+        const objs = await this.objectsOf(id, inv, options);
+        const objOf2 = (v) => objs.get(v) ?? null;
+        return {
+          inv,
+          objs,
+          hist: historyOf(inv, objOf2, at || inv.head),
+          current: currentVersion(inv, objOf2, at || inv.head)
+        };
+      }
+      async listWitnesses(id, ver) {
+        if (!this.lister) return null;
+        const found2 = await this.lister(this.url(id, ...WITNESSES.split("/"), ver, "x").slice(0, -1));
+        return found2 ? found2.filter((e) => e.kind === "file").map((e) => e.name) : null;
+      }
+      async listFolder(id, ...segments) {
+        if (!this.lister) return null;
+        return this.lister(this.url(id, ...segments, "x").slice(0, -1));
+      }
+      async witness(id, ver, name2, options = {}) {
+        await this.locate(id);
+        try {
+          return await this.http.cached(this.witnessUrl(id, ver, name2), {
+            ...options,
+            limit: LIMITS.json
+          });
+        } catch (error) {
+          if (error.kind === "not-found" || error.kind === "forbidden") return null;
+          throw error;
+        }
+      }
+      keyLog(owner, options = {}) {
+        if (!this.keyLogs.has(owner)) {
+          const loading = this.readKeyLog(owner, options);
+          this.keyLogs.set(owner, loading);
+          loading.catch((error) => {
+            if (error?.kind === "aborted") this.keyLogs.delete(owner);
+          });
+        }
+        return this.keyLogs.get(owner);
+      }
+      async readKeyLog(owner, options) {
+        const id = objectId(owner, owner);
+        let rootBytes;
+        try {
+          rootBytes = await this.inventoryBytes(id, null, options);
+        } catch (error) {
+          if (error.kind === "not-found") return null;
+          throw error;
+        }
+        const root = jsonOrNull(rootBytes);
+        const head = typeof root?.head === "string" && /^v[0-9]+$/.test(root.head) ? Number(root.head.slice(1)) : NaN;
+        if (!Number.isInteger(head)) throw new Error(`${this.where(id)}: not an OCFL object with an inventory`);
+        const versions2 = [], problems = [];
+        for (let n = 1; n <= Math.min(head, LIMITS.versions); n++) {
+          const ver = `v${n}`;
+          let invBytes, entry;
+          try {
+            invBytes = await this.inventoryBytes(id, ver, options);
+            entry = parseJson(invBytes);
+            if (!isObject(entry.manifest) || !isObject(entry.versions?.[ver]?.state)) throw new Error("not an inventory");
+          } catch (error) {
+            if (error.kind === "aborted") throw error;
+            problems.push(`${ver}: no readable inventory in the version folder (section 4.1; ${error.detail || error.message})`);
+            break;
+          }
+          const sc = await this.sidecarBytes(id, ver, options).catch((error) => {
+            if (error.kind === "aborted") throw error;
+            return new Uint8Array();
+          });
+          const digest = await sha512(invBytes);
+          if (sidecarDigest(sc) !== digest) problems.push(`${ver}: the checksum file does not state the digest of the inventory`);
+          const files = /* @__PURE__ */ new Map();
+          for (const [d, paths] of Object.entries(entry.versions[ver].state)) {
+            if (!Array.isArray(paths) || !paths.length) continue;
+            let bytes = new Uint8Array();
+            try {
+              const cp = entry.manifest[d]?.[0];
+              bytes = await this.http.cached(this.contentUrl(id, entry, cp), {
+                ...options,
+                limit: LIMITS.json
+              });
+            } catch (error) {
+              if (error.kind === "aborted") throw error;
+              problems.push(`${ver}: the content of ${paths[0]} is missing`);
+            }
+            if (await sha512(bytes) !== d) problems.push(`${ver}: ${paths[0]} does not have the digest its inventory states`);
+            for (const p of paths) files.set(p, bytes);
+          }
+          const witnesses = /* @__PURE__ */ new Map();
+          const prev = versions2[versions2.length - 1]?.keys;
+          for (const d of n > 1 && Array.isArray(prev?.next) ? prev.next : []) {
+            if (typeof d !== "string") continue;
+            const name2 = `signature-${d.slice(0, 16)}.json`;
+            const bytes = await this.witness(id, ver, name2, options);
+            if (bytes) witnesses.set(name2, bytes);
+          }
+          versions2.push(await Version.make(n, files, invBytes, sc, witnesses));
+        }
+        if (!versions2.length || !versions2[0].files.has("genesis.json")) {
+          throw new Error(`${this.where(id)}: no genesis record in the first version`);
+        }
+        if (versions2[versions2.length - 1].number === head && !sameBytes(rootBytes, versions2[versions2.length - 1].inventory)) {
+          problems.push("the root inventory differs from that of the head version");
+        }
+        const log = await KeyLog.of(versions2[0].files.get("genesis.json"), versions2, problems);
+        if (root.id !== log.id) {
+          problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
+        }
+        await log.check();
+        return log;
+      }
+      line(id, options = {}) {
+        const key = options.log === void 0 ? id : null;
+        if (key && this.lines.has(key)) return this.lines.get(key);
+        const loading = this.readLine(id, options);
+        if (key) {
+          this.lines.set(key, loading);
+          loading.catch(() => this.lines.delete(key));
+        }
+        return loading;
+      }
+      async readLine(id, { log, signal } = {}) {
+        const options = {
+          signal
+        };
+        const inv = await this.inventory(id, null, options);
+        const names = versionsOf(inv);
+        const objs = await this.objectsOf(id, inv, options);
+        const versions2 = await Promise.all(names.map(async (ver) => {
+          const bytes = await this.inventoryBytes(id, ver, options).catch((error) => {
+            if (error.kind === "aborted") throw error;
+            return null;
+          });
+          return {
+            ver,
+            digest: bytes ? await sha512(bytes) : "",
+            obj: objs.get(ver) ?? null
+          };
+        }));
+        const owner = objs.get(names[0])?.owner;
+        if (log === void 0) {
+          log = typeof owner === "string" ? await this.keyLog(owner, options).catch((error) => {
+            if (error?.kind === "aborted") throw error;
+            return null;
+          }) : null;
+        }
+        let judgements, statuses, unnamed = false, listed = null;
+        if (this.lister) listed = await Promise.all(versions2.map((v) => this.listWitnesses(id, v.ver)));
+        if (listed?.every((x) => x !== null)) {
+          const withWitnesses = await Promise.all(versions2.map(async (v, k) => {
+            const witnesses = /* @__PURE__ */ new Map();
+            for (const name2 of listed[k]) {
+              const bytes = await this.witness(id, v.ver, name2, options);
+              if (bytes) witnesses.set(name2, bytes);
+            }
+            return {
+              version: v.ver,
+              digest: v.digest,
+              witnesses
+            };
+          }));
+          if (log) {
+            ({ judgements, statuses } = await lineStatusesOf(id, owner, withWitnesses, log));
+          } else {
+            judgements = await Promise.all(withWitnesses.map((v) => judgeFolder(v.witnesses, {
+              objectId: id,
+              version: v.version,
+              inventory: v.digest,
+              owner,
+              lookup: () => null
+            })));
+            statuses = lineStatuses(judgements);
+          }
+        } else if (!log) {
+          listed = null;
+          unnamed = true;
+          judgements = versions2.map(() => []);
+          statuses = versions2.map(() => UNCHECKED);
+        } else {
+          listed = null;
+          const dids = /* @__PURE__ */ new Set();
+          for (const v of log.versions) {
+            for (const did of Array.isArray(v.keys?.keys) ? v.keys.keys : []) dids.add(did);
+            for (const c of v.carried || []) for (const did of Array.isArray(c.keys?.keys) ? c.keys.keys : []) dids.add(did);
+          }
+          for (const c of log.met?.carried || []) for (const did of Array.isArray(c.keys?.keys) ? c.keys.keys : []) dids.add(did);
+          const files = (await Promise.all([
+            ...dids
+          ].filter((d) => typeof d === "string").map(fileName))).sort();
+          const withWitnesses = await Promise.all(versions2.map(async (v) => {
+            const witnesses = /* @__PURE__ */ new Map();
+            for (const name2 of files) {
+              const bytes = await this.witness(id, v.ver, name2, options);
+              if (bytes) witnesses.set(name2, bytes);
+            }
+            return {
+              version: v.ver,
+              digest: v.digest,
+              witnesses
+            };
+          }));
+          ({ judgements, statuses } = await lineStatusesOf(id, owner, withWitnesses, log));
+        }
+        const n = latestSigned(statuses);
+        return {
+          id,
+          inv,
+          versions: versions2,
+          objs,
+          owner,
+          log,
+          judgements,
+          statuses,
+          unnamed,
+          listed,
+          latest: n ? `v${n}` : null
+        };
+      }
+    };
+  }
+});
+
+// core/storage.js
+function checkPath(path, { folder = false } = {}) {
+  if (typeof path !== "string") throw new StorageError(`not a path: ${String(path)}`);
+  if (path === "" && folder) return path;
+  if (path === "" || path.startsWith("/")) throw new StorageError(`not a relative path: ${JSON.stringify(path)}`);
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === "." || segment === ".." || /[\u0000-\u001f\u007f\\]/.test(segment)) {
+      throw new StorageError(`an unsafe path: ${JSON.stringify(path)}`);
+    }
+  }
+  return path;
+}
+function joinPath(...parts) {
+  return parts.filter((p) => p !== "" && p !== null && p !== void 0).join("/");
+}
+function parentOf(path) {
+  const k = path.lastIndexOf("/");
+  return k < 0 ? "" : path.slice(0, k);
+}
+function compareText(a, b) {
+  const x = [
+    ...a
+  ], y = [
+    ...b
+  ];
+  for (let k = 0; k < Math.min(x.length, y.length); k++) {
+    const d = x[k].codePointAt(0) - y[k].codePointAt(0);
+    if (d) return d;
+  }
+  return x.length - y.length;
+}
+async function readText(storage, path) {
+  const bytes = await storage.read(path);
+  return bytes === null ? null : decoder.decode(bytes);
+}
+async function readJson(storage, path) {
+  const text3 = await readText(storage, path);
+  if (text3 === null) return null;
+  try {
+    return JSON.parse(text3);
+  } catch (error) {
+    throw new StorageError(`${path}: not JSON (${error.message})`);
+  }
+}
+async function writeText(storage, path, text3, options) {
+  return storage.write(path, utf8(text3), options);
+}
+function storageFetch(storage, origin = ORIGIN, { fallback = null } = {}) {
+  const base = new URL(origin);
+  return async (url, init2 = {}) => {
+    const u = new URL(url);
+    if (u.origin !== base.origin || !u.pathname.startsWith(base.pathname)) {
+      if (fallback) return fallback(url, init2);
+      throw new TypeError(`fetch failed: ${url} is not in this archive`);
+    }
+    let bytes = null;
+    try {
+      bytes = await storage.read(checkPath(decodeURIComponent(u.pathname.slice(base.pathname.length))));
+    } catch {
+      bytes = null;
+    }
+    if (bytes === null) return new Response("not found", {
+      status: 404
+    });
+    const headers = {
+      "content-length": String(bytes.length)
+    };
+    return new Response(init2.method === "HEAD" ? null : bytes, {
+      status: 200,
+      headers
+    });
+  };
+}
+function storageLister(storage, origin = ORIGIN) {
+  const base = new URL(origin);
+  return async (url) => {
+    const u = new URL(url);
+    if (u.origin !== base.origin || !u.pathname.startsWith(base.pathname)) return null;
+    try {
+      const path = decodeURIComponent(u.pathname.slice(base.pathname.length)).replace(/\/$/, "");
+      return await storage.list(checkPath(path, {
+        folder: true
+      })) || [];
+    } catch {
+      return [];
+    }
+  };
+}
+var StorageError, MemoryStorage, decoder, ORIGIN;
+var init_storage = __esm({
+  "core/storage.js"() {
+    init_crypto();
+    StorageError = class extends Error {
+    };
+    MemoryStorage = class {
+      constructor() {
+        this.files = /* @__PURE__ */ new Map();
+      }
+      async read(path) {
+        checkPath(path);
+        const bytes = this.files.get(path);
+        return bytes ? bytes.slice() : null;
+      }
+      async write(path, bytes, { exclusive = false } = {}) {
+        checkPath(path);
+        if (exclusive && this.files.has(path)) throw new StorageError(`${path} exists already`);
+        if (await this.kind(path) === "dir") throw new StorageError(`${path} is a folder`);
+        for (let p = parentOf(path); p; p = parentOf(p)) {
+          if (this.files.has(p)) throw new StorageError(`${p} is a file`);
+        }
+        this.files.set(path, Uint8Array.from(bytes));
+      }
+      async kind(path) {
+        checkPath(path, {
+          folder: true
+        });
+        if (path === "") return "dir";
+        if (this.files.has(path)) return "file";
+        const prefix = path + "/";
+        for (const k of this.files.keys()) if (k.startsWith(prefix)) return "dir";
+        return null;
+      }
+      async list(path) {
+        checkPath(path, {
+          folder: true
+        });
+        if (await this.kind(path) !== "dir") return null;
+        const prefix = path ? path + "/" : "";
+        const found2 = /* @__PURE__ */ new Map();
+        for (const k of this.files.keys()) {
+          if (!k.startsWith(prefix)) continue;
+          const rest = k.slice(prefix.length);
+          const slash = rest.indexOf("/");
+          found2.set(slash < 0 ? rest : rest.slice(0, slash), slash < 0 ? "file" : "dir");
+        }
+        return [
+          ...found2
+        ].map(([name2, kind]) => ({
+          name: name2,
+          kind
+        })).sort((a, b) => compareText(a.name, b.name));
+      }
+      async rename(from, to) {
+        checkPath(from);
+        checkPath(to);
+        const what = await this.kind(from);
+        if (!what) throw new StorageError(`no ${from} to move`);
+        if (await this.kind(to) === "dir") throw new StorageError(`${to} exists already`);
+        if (what === "file") {
+          this.files.set(to, this.files.get(from));
+          this.files.delete(from);
+          return;
+        }
+        for (const k of [
+          ...this.files.keys()
+        ]) {
+          if (k.startsWith(from + "/")) {
+            this.files.set(to + k.slice(from.length), this.files.get(k));
+            this.files.delete(k);
+          }
+        }
+      }
+      async remove(path) {
+        checkPath(path);
+        const what = await this.kind(path);
+        if (what === "dir") throw new StorageError(`${path} is a folder that is not empty`);
+        this.files.delete(path);
+      }
+    };
+    decoder = new TextDecoder("utf-8", {
+      fatal: true
+    });
+    ORIGIN = "https://archive.invalid/";
+  }
+});
 
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/hash-wasm/4.12.0/dist/index.esm.js
 var index_esm_exports = {};
@@ -264,7 +3129,7 @@ function WASMInterface(binary2, hashLength) {
       const memoryBuffer = wasmInstance.exports.memory.buffer;
       memoryView = new Uint8Array(memoryBuffer, arrayOffset, MAX_HEAP);
     });
-    const init = (bits = null) => {
+    const init2 = (bits = null) => {
       initialized = true;
       wasmInstance.exports.Hash_Init(bits);
     };
@@ -355,7 +3220,7 @@ function WASMInterface(binary2, hashLength) {
     }
     const calculate = (data2, initParam = null, digestParam = null) => {
       if (!canSimplify(data2, initParam)) {
-        init(initParam);
+        init2(initParam);
         update2(data2);
         return digest("hex", digestParam);
       }
@@ -370,7 +3235,7 @@ function WASMInterface(binary2, hashLength) {
       writeMemory,
       getExports,
       setMemorySize,
-      init,
+      init: init2,
       update: update2,
       digest,
       save: save2,
@@ -2417,9 +5282,9 @@ var require_nacl_fast = __commonJS({
   "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/tweetnacl/1.0.3/nacl-fast.js"(exports, module) {
     (function(nacl) {
       "use strict";
-      var gf = function(init) {
+      var gf = function(init2) {
         var i, r = new Float64Array(16);
-        if (init) for (i = 0; i < init.length; i++) r[i] = init[i];
+        if (init2) for (i = 0; i < init2.length; i++) r[i] = init2[i];
         return r;
       };
       var randombytes = function() {
@@ -4804,6 +7669,2664 @@ var require_nacl_fast = __commonJS({
   }
 });
 
+// core/keys.js
+function randomBytes(n) {
+  return crypto.getRandomValues(new Uint8Array(n));
+}
+async function newKey() {
+  return Key.fromSeed(randomBytes(32));
+}
+function base64(bytes) {
+  let binary2 = "";
+  for (const b of bytes) binary2 += String.fromCharCode(b);
+  return btoa(binary2);
+}
+function unbase32(text3) {
+  const t = text3.toUpperCase();
+  if (!/^[A-Z2-7]*$/.test(t) || [
+    1,
+    3,
+    6
+  ].includes(t.length % 8)) throw new KeyError(`not base32: ${text3}`);
+  const out = [];
+  let bits = 0, value = 0;
+  for (const c of t) {
+    value = value << 5 | "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(c);
+    bits += 5;
+    if (bits >= 8) {
+      out.push(value >>> bits - 8 & 255);
+      bits -= 8;
+    }
+    value &= (1 << bits) - 1;
+  }
+  return new Uint8Array(out);
+}
+function strictBase64(text3) {
+  try {
+    return unbase64(text3);
+  } catch {
+    throw new KeyError("not base64");
+  }
+}
+function concat(...parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let k = 0;
+  for (const p of parts) {
+    out.set(p, k);
+    k += p.length;
+  }
+  return out;
+}
+async function argon2id2(passphrase, salt, opslimit, memlimit) {
+  const ops = /^[0-9]+$/.test(String(opslimit)) ? Number(opslimit) : NaN;
+  const mem = /^[0-9]+$/.test(String(memlimit)) ? Number(memlimit) : NaN;
+  if (Number.isNaN(ops) || Number.isNaN(mem)) throw new KeyError("the encryption of the key is damaged");
+  if (!(ARGON2ID.opsMin <= ops && ops <= ARGON2ID.opsMax && ARGON2ID.memMin <= mem && mem <= ARGON2ID.memMax)) {
+    throw new KeyError(`the key asks for an Argon2id cost out of bounds (opslimit=${ops}, memlimit=${mem}): at most ${ARGON2ID.opsMax} and ${ARGON2ID.memMax}`);
+  }
+  if (salt.length !== ARGON2ID.saltBytes) throw new KeyError("the encryption of the key is damaged");
+  const hashWasm = await Promise.resolve().then(() => (init_index_esm(), index_esm_exports));
+  return hashWasm.argon2id({
+    password: utf8(passphrase),
+    salt,
+    parallelism: 1,
+    iterations: ops,
+    memorySize: Math.floor(mem / 1024),
+    hashLength: 32,
+    outputType: "binary"
+  });
+}
+async function secretbox() {
+  const nacl = await Promise.resolve().then(() => __toESM(require_nacl_fast()));
+  return (nacl.default || nacl).secretbox;
+}
+async function seal(data2, key) {
+  const box = await secretbox();
+  const nonce = randomBytes(24);
+  return concat(nonce, box(data2, nonce, key));
+}
+async function unseal(data2, key) {
+  const box = await secretbox();
+  if (data2.length < 24 + 16) return null;
+  return box.open(data2.subarray(24), data2.subarray(0, 24), key);
+}
+async function encryptSeed(seed, passphrase, { opslimit = OPSLIMIT, memlimit = MEMLIMIT } = {}) {
+  if (passphrase === null || passphrase === void 0) return [
+    "none",
+    seed
+  ];
+  const salt = randomBytes(ARGON2ID.saltBytes);
+  const box = await seal(seed, await argon2id2(passphrase, salt, opslimit, memlimit));
+  return [
+    `argon2id-secretbox opslimit=${opslimit} memlimit=${memlimit} salt=${base64(salt)}`,
+    box
+  ];
+}
+function parameters(words2) {
+  const out = {};
+  for (const w of words2) {
+    const k = w.indexOf("=");
+    out[k < 0 ? w : w.slice(0, k)] = k < 0 ? "" : w.slice(k + 1);
+  }
+  return out;
+}
+async function decryptSeed(encryption, data2, passphrase) {
+  const words2 = encryption.split(/\s+/).filter(Boolean);
+  if (words2.length === 1 && words2[0] === "none") return data2;
+  if (!words2.length || words2[0] !== "argon2id-secretbox") {
+    throw new KeyError(`unknown encryption: '${words2.join(" ")}'`);
+  }
+  if (passphrase === null || passphrase === void 0) {
+    throw new PassphraseNeeded("this key is encrypted: a passphrase is needed");
+  }
+  const p = parameters(words2.slice(1));
+  if (!("salt" in p) || !("opslimit" in p) || !("memlimit" in p)) throw new KeyError("the encryption of the key is damaged");
+  let salt;
+  try {
+    salt = strictBase64(p.salt);
+  } catch {
+    throw new KeyError("the encryption of the key is damaged");
+  }
+  const seed = await unseal(data2, await argon2id2(passphrase, salt, p.opslimit, p.memlimit));
+  if (!seed) throw new KeyError("wrong passphrase, or a damaged key");
+  return seed;
+}
+function rotationFileName(owner, key) {
+  return `rotation-${owner.slice(0, 16)}-${key.id}.txt`;
+}
+async function rotationKeyText(key, owner, version, passphrase = null, cost = {}) {
+  return fileText([
+    ROTATION_FORMAT
+  ], key, owner, version, passphrase, cost);
+}
+async function fileText(head, key, owner, version, passphrase, cost) {
+  const [encryption, data2] = await encryptSeed(key.seed, passphrase, cost);
+  const lines2 = [
+    ...head,
+    `owner ${owner}`,
+    ...version ? [
+      `version v${version}`
+    ] : []
+  ];
+  lines2.push(`key ${key.did}`, `digest ${key.digest}`, `encryption ${encryption}`, `seed ${base64(data2)}`);
+  return lines2.join("\n") + "\n";
+}
+async function sheetCheck(seed) {
+  return base32(await sha256(concat(utf8("opensheaf-rotation-key-check\n"), seed))).slice(0, 4).toUpperCase();
+}
+async function rotationKeySheet(key, owner, version) {
+  const groups = base32(key.seed).toUpperCase().match(/.{1,4}/g).join(" ");
+  return [
+    `${SHEET_TITLE} (${ROTATION_FORMAT})`,
+    "Keep this sheet offline, apart from the owner's devices and its other rotation keys:",
+    "with enough of them, whoever holds it can change the owner's keys.",
+    "",
+    `owner    ${owner}`,
+    `version  v${version}`,
+    `key      ${key.did}`,
+    `digest   ${key.digest}`,
+    `seed     ${groups}`,
+    `check    ${await sheetCheck(key.seed)}`
+  ].join("\n") + "\n";
+}
+async function hmacSha256(key, data2) {
+  const k = await crypto.subtle.importKey("raw", key, {
+    name: "HMAC",
+    hash: "SHA-256"
+  }, false, [
+    "sign"
+  ]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", k, data2));
+}
+async function hkdf(ikm, salt, info, length) {
+  const prk = await hmacSha256(salt.length ? salt : new Uint8Array(32), ikm);
+  const out = [];
+  let block = new Uint8Array();
+  for (let i = 1; out.length < length; i++) {
+    block = await hmacSha256(prk, concat(block, info, new Uint8Array([
+      i
+    ])));
+    out.push(...block);
+  }
+  return new Uint8Array(out.slice(0, length));
+}
+async function passkeySalt(owner) {
+  return sha256(utf8(PASSKEY_SALT + owner));
+}
+async function passkeyKek(prfSecret) {
+  return hkdf(prfSecret, new Uint8Array(32), PASSKEY_INFO, 32);
+}
+async function wrapsFor(dataKey2, passphrase, passkeys, { opslimit = OPSLIMIT, memlimit = MEMLIMIT } = {}) {
+  const salt = randomBytes(ARGON2ID.saltBytes);
+  const box = await seal(dataKey2, await argon2id2(passphrase, salt, opslimit, memlimit));
+  const out = [
+    `wrap passphrase argon2id opslimit=${opslimit} memlimit=${memlimit} salt=${base64(salt)} ${base64(box)}`
+  ];
+  for (const p of passkeys) out.push(await p.wrap(dataKey2));
+  return out;
+}
+async function envelope(seed, passphrase, passkeys = [], cost = {}) {
+  const dataKey2 = randomBytes(32);
+  return [
+    await wrapsFor(dataKey2, passphrase, passkeys, cost),
+    await seal(seed, dataKey2)
+  ];
+}
+function parseWrap(line) {
+  const parts = line.split(/\s+/).filter(Boolean);
+  if (parts.length < 4 || parts[0] !== "wrap") throw new KeyError(`a damaged lock of the key: '${line}'`);
+  const out = parameters(parts.slice(3, -1));
+  try {
+    out.method = parts[1];
+    out.kind = parts[2];
+    out.box = strictBase64(parts[parts.length - 1]);
+    if ("salt" in out) out.salt = strictBase64(out.salt);
+  } catch {
+    throw new KeyError("a lock of the key is damaged");
+  }
+  return out;
+}
+function wrapsOf(text3) {
+  return text3.split(/\r\n|\r|\n/).map((l) => l.trim()).filter((l) => l.startsWith("wrap "));
+}
+function passkeyOfWrap(w) {
+  return new Passkey(w.cred, w.salt || new Uint8Array(), {
+    rp: w.rp || PASSKEY_RP,
+    box: w.box
+  });
+}
+function passkeysOf(text3) {
+  return wrapsOf(text3).map(parseWrap).filter((w) => w.method === "passkey" && w.kind === "prf" && w.cred).map(passkeyOfWrap);
+}
+async function dataKey(wraps, passphrase = null, keks = null) {
+  const parsed = wraps.map(parseWrap);
+  for (const w of parsed) {
+    if (w.method === "passkey" && keks && w.cred in keks) {
+      const opened = await unseal(w.box, keks[w.cred]);
+      if (opened) return opened;
+    }
+  }
+  if (passphrase === null || passphrase === void 0) {
+    throw new PassphraseNeeded("this key is encrypted: a passphrase is needed", parsed.filter((w) => w.method === "passkey" && w.cred).map(passkeyOfWrap));
+  }
+  for (const w of parsed) {
+    if (w.method !== "passphrase" || w.kind !== "argon2id") continue;
+    if (!("salt" in w) || !("opslimit" in w) || !("memlimit" in w)) throw new KeyError("the encryption of the key is damaged");
+    const opened = await unseal(w.box, await argon2id2(passphrase, w.salt, w.opslimit, w.memlimit));
+    if (opened) return opened;
+  }
+  throw new KeyError("wrong passphrase, or a damaged key");
+}
+async function openEnvelope(wraps, data2, passphrase = null, keks = null) {
+  const seed = await unseal(data2, await dataKey(wraps, passphrase, keks));
+  if (!seed) throw new KeyError("the seed of the key is damaged");
+  return seed;
+}
+async function addPasskey(text3, passphrase, passkey, cost = {}) {
+  const lines2 = text3.split(/\r\n|\r|\n/);
+  if (lines2[lines2.length - 1] === "") lines2.pop();
+  const enc = lines2.findIndex((x) => x.startsWith("encryption "));
+  const seedAt = lines2.findIndex((x) => x.startsWith("seed "));
+  if (enc < 0 || seedAt < 0 || seedAt < enc) throw new KeyError("not a key file");
+  const method = lines2[enc].split(/\s+/).filter(Boolean)[1];
+  if (method === ENVELOPE) {
+    const key = await dataKey(wrapsOf(text3), passphrase);
+    let last = -1;
+    lines2.forEach((x, k) => {
+      if (x.startsWith("wrap ")) last = k;
+    });
+    lines2.splice(last + 1, 0, await passkey.wrap(key));
+  } else if (method === "none") {
+    throw new KeyError("this key is kept unencrypted: there is nothing to unlock");
+  } else {
+    let data2;
+    try {
+      data2 = strictBase64(lines2[seedAt].slice(5).trim());
+    } catch {
+      throw new KeyError("the seed of the key is damaged");
+    }
+    const seed = await decryptSeed(lines2[enc].slice("encryption ".length), data2, passphrase);
+    const [wraps, sealed] = await envelope(seed, passphrase, [
+      passkey
+    ], cost);
+    lines2.splice(enc, seedAt + 1 - enc, `encryption ${ENVELOPE}`, ...wraps, "seed " + base64(sealed));
+  }
+  return lines2.join("\n") + "\n";
+}
+async function keyFileText(key, owner, kind, version = null, passphrase = null, { passkeys = [], cost = {} } = {}) {
+  if (!KINDS2.includes(kind)) throw new KeyError(`a key is ${KINDS2.join(" or ")}`);
+  const head = [
+    KEY_FORMAT,
+    `kind ${kind}`
+  ];
+  if (passphrase === null || passphrase === void 0) return fileText(head, key, owner, version, null, cost);
+  const [wraps, data2] = await envelope(key.seed, passphrase, passkeys, cost);
+  const lines2 = [
+    ...head,
+    `owner ${owner}`,
+    ...version ? [
+      `version v${version}`
+    ] : []
+  ];
+  lines2.push(`key ${key.did}`, `digest ${key.digest}`, `encryption ${ENVELOPE}`, ...wraps, "seed " + base64(data2));
+  return lines2.join("\n") + "\n";
+}
+async function readKey(text3, passphrase = null, keks = null) {
+  const lines2 = text3.split(/\r\n|\r|\n/);
+  if (lines2[lines2.length - 1] === "") lines2.pop();
+  const formats = [
+    ROTATION_FORMAT,
+    KEY_FORMAT,
+    TEXT_FORMAT
+  ];
+  const start = lines2.findIndex((line) => formats.includes(line.trim()));
+  const format = start < 0 ? null : lines2[start].trim();
+  const fields = {};
+  for (const line of lines2.slice(start + 1)) {
+    const t = line.trim();
+    const k = t.indexOf(" ");
+    const name2 = k < 0 ? t : t.slice(0, k);
+    if (name2 && !(name2 in fields)) fields[name2] = k < 0 ? "" : t.slice(k + 1).trim();
+  }
+  let data2;
+  if (format === ROTATION_FORMAT || format === KEY_FORMAT) {
+    try {
+      data2 = strictBase64(fields.seed ?? "");
+    } catch {
+      throw new KeyError("the seed of the file is not base64");
+    }
+  } else {
+    try {
+      data2 = unbase32((fields.seed ?? "").replaceAll(" ", ""));
+    } catch {
+      data2 = new Uint8Array();
+    }
+    if (!data2.length || (fields.check ?? "").toUpperCase() !== await sheetCheck(data2)) {
+      throw new KeyError("the seed does not match its check: a character is mistyped");
+    }
+  }
+  let seed;
+  if ((fields.encryption ?? "").split(" ")[0] === ENVELOPE) {
+    const wraps = lines2.slice(Math.max(start, 0)).map((l) => l.trim()).filter((l) => l.startsWith("wrap "));
+    seed = await openEnvelope(wraps, data2, passphrase, keks);
+  } else {
+    seed = await decryptSeed(fields.encryption ?? "none", data2, passphrase);
+  }
+  if (seed.length !== 32) throw new KeyError("not the seed of an Ed25519 key");
+  const key = await Key.fromSeed(seed);
+  if ((fields.key ?? key.did) !== key.did || (fields.digest ?? key.digest) !== key.digest) {
+    throw new KeyError("the seed is not that of the key the file or sheet names");
+  }
+  const kind = fields.kind ?? ROTATION;
+  if (!KINDS2.includes(kind)) throw new KeyError(`unknown kind of key: '${kind}'`);
+  const version = (fields.version ?? "").split(" ")[0];
+  return {
+    key,
+    owner: fields.owner ?? null,
+    kind,
+    version: /^v[0-9]+$/.test(version) ? Number(version.slice(1)) : null
+  };
+}
+async function readRotationKey(text3, passphrase = null) {
+  const found2 = await readKey(text3, passphrase);
+  if (found2.kind !== ROTATION) throw new KeyError(`${found2.key.did} is a ${found2.kind} key, not a rotation key`);
+  return found2;
+}
+var KeyError, PassphraseNeeded, PKCS8_ED25519, Key, OPSLIMIT, MEMLIMIT, ARGON2ID, ROTATION_FORMAT, KEY_FORMAT, TEXT_FORMAT, ENVELOPE, CURRENT, ROTATION, KINDS2, SHEET_TITLE, PASSKEY_RP, PASSKEY_INFO, PASSKEY_SALT, Passkey;
+var init_keys = __esm({
+  "core/keys.js"() {
+    init_crypto();
+    init_names();
+    KeyError = class extends Error {
+    };
+    PassphraseNeeded = class extends KeyError {
+      constructor(message2, passkeys = []) {
+        super(message2);
+        this.passkeys = passkeys;
+      }
+    };
+    PKCS8_ED25519 = [
+      48,
+      46,
+      2,
+      1,
+      0,
+      48,
+      5,
+      6,
+      3,
+      43,
+      101,
+      112,
+      4,
+      34,
+      4,
+      32
+    ];
+    Key = class _Key {
+      static async fromSeed(seed) {
+        if (!(seed instanceof Uint8Array) || seed.length !== 32) {
+          throw new KeyError("the seed of an Ed25519 key has 32 bytes");
+        }
+        const own2 = Uint8Array.from(seed);
+        const signing2 = await crypto.subtle.importKey("pkcs8", new Uint8Array([
+          ...PKCS8_ED25519,
+          ...own2
+        ]), {
+          name: "Ed25519"
+        }, true, [
+          "sign"
+        ]);
+        const jwk = await crypto.subtle.exportKey("jwk", signing2);
+        const publicKey = unbase64(jwk.x.replaceAll("-", "+").replaceAll("_", "/") + "=");
+        const did = didKey(publicKey);
+        return new _Key(own2, signing2, publicKey, did, await keyDigest(did));
+      }
+      constructor(seed, signing2, publicKey, did, digest) {
+        Object.assign(this, {
+          seed,
+          signing: signing2,
+          publicKey,
+          did,
+          digest,
+          id: digest.slice(0, 16)
+        });
+      }
+      async sign(message2) {
+        return new Uint8Array(await crypto.subtle.sign({
+          name: "Ed25519"
+        }, this.signing, message2));
+      }
+      toString() {
+        return `Key(${this.did})`;
+      }
+    };
+    OPSLIMIT = 3;
+    MEMLIMIT = 268435456;
+    ARGON2ID = {
+      opsMin: 1,
+      opsMax: 4,
+      memMin: 8192,
+      memMax: 1073741824,
+      saltBytes: 16
+    };
+    ROTATION_FORMAT = "opensheaf-rotation-key/0.2";
+    KEY_FORMAT = "opensheaf-key/0.2";
+    TEXT_FORMAT = "opensheaf-key-text/0.2";
+    ENVELOPE = "envelope-secretbox";
+    CURRENT = "current";
+    ROTATION = "rotation";
+    KINDS2 = [
+      CURRENT,
+      ROTATION
+    ];
+    SHEET_TITLE = "OpenSheaf rotation key";
+    PASSKEY_RP = "unlock.opensheaf.org";
+    PASSKEY_INFO = utf8("opensheaf wallet passkey v1");
+    PASSKEY_SALT = "opensheaf wallet unlock v1 ";
+    Passkey = class {
+      constructor(cred, salt, { rp = PASSKEY_RP, kek = null, box = null } = {}) {
+        Object.assign(this, {
+          cred,
+          salt: Uint8Array.from(salt),
+          rp,
+          kek,
+          box
+        });
+      }
+      async opens(kek) {
+        return this.box !== null && await unseal(this.box, kek) !== null;
+      }
+      async wrap(dataKey2) {
+        return `wrap passkey prf rp=${this.rp} cred=${this.cred} salt=${base64(this.salt)} ` + base64(await seal(dataKey2, this.kek));
+      }
+      toString() {
+        return `Passkey(${this.rp} ${this.cred})`;
+      }
+    };
+  }
+});
+
+// core/write.js
+function jsonText(value) {
+  return JSON.stringify(value, null, 2) + "\n";
+}
+function jsonBytes(value) {
+  return utf8(jsonText(value));
+}
+function utcNow() {
+  return (/* @__PURE__ */ new Date()).toISOString().replace(/\.[0-9]{3}Z$/, "Z");
+}
+function today() {
+  const d = /* @__PURE__ */ new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function newNonce() {
+  return hex(randomBytes(16));
+}
+async function genesisRecord(kind, { originator = null, keys = null, threshold = null, next = null, nextThreshold = null, keeper = null, extensions = null, created = null, nonce = null } = {}) {
+  if (!KINDS.includes(kind)) throw new Error(`unknown kind '${kind}'`);
+  nonce = nonce || newNonce();
+  created = created || utcNow();
+  if (!NONCE.test(nonce) || !CREATED.test(created)) {
+    throw new Error("a nonce of at least 128 bits in hexadecimal, and a date in UTC, are needed");
+  }
+  const rec = {
+    format: GENESIS_FORMAT,
+    kind,
+    created
+  };
+  if (kind === "owner") {
+    if (originator !== null) throw new Error("an owner is its own originator: its genesis record names none");
+    Object.assign(rec, {
+      nonce,
+      keys: [
+        ...keys || []
+      ],
+      threshold,
+      next: [
+        ...next || []
+      ],
+      nextThreshold
+    });
+    const problems = await keyRulesOfRecord(rec);
+    if (problems.length) throw new Error(problems.join("; "));
+    if (keeper !== null) {
+      rec.keeper = typeof keeper === "string" ? [
+        keeper
+      ] : [
+        ...keeper
+      ];
+      if (rec.keeper.length !== 1 || !keeperValid(rec.keeper[0])) {
+        throw new Error(`a keeper is one ORCID iD or https://<domain>/: '${keeper}'`);
+      }
+    }
+    if (extensions) rec.extensions = extensions;
+  } else {
+    if (typeof originator !== "string" || !OWNER_NAME.test(originator)) {
+      throw new Error(`the originator must be an owner name: '${originator}'`);
+    }
+    if ([
+      keys,
+      threshold,
+      next,
+      nextThreshold,
+      keeper,
+      extensions
+    ].some((v) => v !== null)) {
+      throw new Error("keys, thresholds, keeper and extensions are only for an owner");
+    }
+    Object.assign(rec, {
+      originator,
+      nonce
+    });
+  }
+  return jsonBytes(rec);
+}
+function place(contentPath3) {
+  const k = contentPath3.indexOf("/");
+  const ver = k < 0 ? contentPath3 : contentPath3.slice(0, k);
+  const rest = k < 0 ? "" : contentPath3.slice(k + 1);
+  return [
+    /^[0-9]+$/.test(ver.slice(1)) ? Number(ver.slice(1)) : 0,
+    rest
+  ];
+}
+function comparePlace(a, b) {
+  return a[0] - b[0] || compareText(a[1], b[1]);
+}
+function smallest(list2, compare) {
+  return list2.reduce((best, x) => compare(x, best) < 0 ? x : best);
+}
+function orderedVersion(e) {
+  const out = {};
+  for (const k of [
+    "created",
+    "state",
+    "message",
+    "user"
+  ]) if (k in e) out[k] = e[k];
+  out.state = Object.fromEntries(Object.entries(e.state).map(([d, paths]) => [
+    d,
+    paths,
+    smallest(paths, compareText)
+  ]).sort((x, y) => compareText(x[2], y[2])).map(([d, paths]) => [
+    d,
+    paths
+  ]));
+  for (const k of sortedKeys(e)) if (!(k in out)) out[k] = e[k];
+  return out;
+}
+function orderedInventory(inv) {
+  const out = {};
+  for (const k of sortedKeys(inv)) out[k] = inv[k];
+  out.manifest = Object.fromEntries(Object.entries(inv.manifest).map(([d, paths]) => [
+    d,
+    paths,
+    place(smallest(paths, (a, b) => comparePlace(place(a), place(b))))
+  ]).sort((x, y) => comparePlace(x[2], y[2])).map(([d, paths]) => [
+    d,
+    paths
+  ]));
+  out.versions = {};
+  for (const k of Object.keys(inv.versions).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))) {
+    out.versions[k] = orderedVersion(inv.versions[k]);
+  }
+  return out;
+}
+function inventoryFile(inv) {
+  return jsonBytes(inv);
+}
+async function sha512hex(bytes) {
+  return hex(await sha512bytes(bytes));
+}
+async function sidecar(inventoryBytes) {
+  return utf8(`${await sha512hex(inventoryBytes)}  inventory.json
+`);
+}
+async function sha256hex(bytes) {
+  return hex(await sha256(bytes));
+}
+async function md5hex(bytes) {
+  const hashWasm = await Promise.resolve().then(() => (init_index_esm(), index_esm_exports));
+  return hashWasm.md5(bytes);
+}
+async function signatureFile(key, objectId2, version, inventory, signer, keyLog) {
+  const signature = await key.sign(message(objectId2, version, inventory, keyLog));
+  return jsonBytes({
+    format: SIGNATURE_FORMAT,
+    object: objectId2,
+    version,
+    inventorySha512: inventory,
+    signer,
+    key: key.did,
+    keyLog,
+    signature: base64(signature)
+  });
+}
+async function newOwner(current, rotation, { threshold = 1, nextThreshold = null, keeper = null, extensions = null, created = null, nonce = null } = {}) {
+  const genesis = await genesisRecord("owner", {
+    keys: current.map((k) => typeof k === "string" ? k : k.did),
+    threshold,
+    next: rotation.map((k) => typeof k === "string" ? k : k.digest),
+    nextThreshold: nextThreshold || Math.floor(rotation.length / 2) + 1,
+    keeper,
+    extensions,
+    created,
+    nonce
+  });
+  return KeyLog.of(genesis);
+}
+async function writeKeyLog(storage, dir, log) {
+  const namaste = joinPath(dir, "0=ocfl_object_1.1");
+  if (await storage.kind(namaste) !== "file") await storage.write(namaste, utf8("ocfl_object_1.1\n"));
+  let held2 = 0;
+  const root = await storage.read(joinPath(dir, "inventory.json"));
+  if (root) held2 = Number(JSON.parse(new TextDecoder().decode(root)).head.slice(1));
+  for (const v of log.versions.slice(0, held2)) {
+    const bytes = await storage.read(joinPath(dir, `v${v.number}`, "inventory.json"));
+    if (!bytes || bytes.length !== v.inventory.length || bytes.some((b, k) => b !== v.inventory[k])) {
+      throw new StorageError(`${dir}: v${v.number} differs from that of the key log of ${log.owner}`);
+    }
+  }
+  for (const v of log.versions.slice(held2)) {
+    const inv = JSON.parse(new TextDecoder().decode(v.inventory));
+    const byDigest = /* @__PURE__ */ new Map();
+    for (const bytes of v.files.values()) byDigest.set(await sha512hex(bytes), bytes);
+    for (const [d, paths] of Object.entries(inv.manifest)) {
+      for (const cp of paths) {
+        if (cp.startsWith(`v${v.number}/`)) await storage.write(joinPath(dir, cp), byDigest.get(d));
+      }
+    }
+    await storage.write(joinPath(dir, `v${v.number}`, "inventory.json"), v.inventory);
+    await storage.write(joinPath(dir, `v${v.number}`, "inventory.json.sha512"), v.sidecar?.length ? v.sidecar : await sidecar(v.inventory));
+  }
+  for (const v of log.versions) {
+    for (const [name2, bytes] of v.witnesses || []) {
+      const path = joinPath(dir, WITNESSES, `v${v.number}`, name2);
+      if (!await storage.kind(path)) await storage.write(path, bytes, {
+        exclusive: true
+      });
+    }
+  }
+  if (log.versions.length > held2) {
+    const head = log.versions[log.versions.length - 1];
+    await storage.write(joinPath(dir, "inventory.json.tmp"), head.inventory);
+    await storage.rename(joinPath(dir, "inventory.json.tmp"), joinPath(dir, "inventory.json"));
+    await storage.write(joinPath(dir, "inventory.json.sha512"), head.sidecar?.length ? head.sidecar : await sidecar(head.inventory));
+  }
+}
+var sortedKeys;
+var init_write = __esm({
+  "core/write.js"() {
+    init_crypto();
+    init_names();
+    init_owners();
+    init_signatures();
+    init_storage();
+    init_keys();
+    sortedKeys = (o) => Object.keys(o).sort(compareText);
+  }
+});
+
+// core/folder.js
+function sentence(text3) {
+  const m = /^([a-z][a-z']{0,14})(?=[ ,;])/.exec(text3);
+  if (m && !LOWER_NAMES.includes(m[1])) text3 = text3[0].toUpperCase() + text3.slice(1);
+  return /[.?!:…]$/.test(text3) ? text3 : text3 + ".";
+}
+function stop(text3) {
+  throw new Stop(sentence(text3));
+}
+function exit(text3) {
+  throw new Stop(text3);
+}
+function short(name2) {
+  if (name2.startsWith("did:key:")) name2 = name2.slice("did:key:".length);
+  return [
+    ...name2
+  ].length <= 14 ? name2 : `${name2.slice(0, 8)}\u2026${name2.slice(-4)}`;
+}
+function plural(n, noun) {
+  return n === 1 ? `${n} ${noun}` : `${n} ${noun}s`;
+}
+function environment(given = {}) {
+  return {
+    out: (line) => console.log(line),
+    err: (line) => console.error(line),
+    warn(text3) {
+      this.err("Warning: " + sentence(text3));
+    },
+    newKey,
+    now: utcNow,
+    today,
+    fetch: globalThis.fetch?.bind(globalThis),
+    fetchJson: null,
+    template: null,
+    ...given
+  };
+}
+async function readConfig(storage) {
+  const cfg = await readJson(storage, CONFIG_NAME);
+  if (cfg !== null) return cfg;
+  for (const n of CONFIG_NAMES.slice(1)) {
+    if (await storage.kind(n)) exit(`${n}: opensheaf-js reads osheaf.json only (opensheaf-py also reads YAML)`);
+  }
+  exit(`no ${CONFIG_NAME} or osheaf.yaml in the archive folder`);
+}
+async function removeTree(storage, path) {
+  if (!/^\.staging-[0-9a-f]+$/.test(path.split("/")[0])) throw new Error(`not a staging folder: ${path}`);
+  const kind = await storage.kind(path);
+  if (kind === "dir") {
+    for (const entry of await storage.list(path) || []) await removeTree(storage, joinPath(path, entry.name));
+    await storage.remove(path);
+  } else if (kind) {
+    await storage.remove(path);
+  }
+}
+async function removeStage(storage, path) {
+  if (!/^zenodo-staging\/./.test(path)) throw new Error(`not a staging folder of Zenodo: ${path}`);
+  const walk = async (p) => {
+    const kind = await storage.kind(p);
+    if (kind === "dir") for (const entry of await storage.list(p) || []) await walk(joinPath(p, entry.name));
+    if (kind) await storage.remove(p);
+  };
+  await walk(path);
+  for (let p = path.slice(0, path.lastIndexOf("/")); p; p = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") {
+    if (await storage.kind(p) !== "dir" || (await storage.list(p) || []).length) break;
+    await storage.remove(p);
+  }
+}
+var Stop, LOWER_NAMES, CONFIG_NAME, CONFIG_NAMES, SPEC, OBJ2, OBJ_FORMAT, GENESIS2, LAYOUTS, LAYOUT_TEXT, REQUIRED, REBUILD, ArchiveFolder;
+var init_folder = __esm({
+  "core/folder.js"() {
+    init_paths();
+    init_names();
+    init_owners();
+    init_http();
+    init_archive();
+    init_signatures();
+    init_crypto();
+    init_storage();
+    init_write();
+    init_keys();
+    Stop = class extends Error {
+    };
+    LOWER_NAMES = [
+      "gh",
+      "osheaf",
+      "command"
+    ];
+    CONFIG_NAME = "osheaf.json";
+    CONFIG_NAMES = [
+      "osheaf.json",
+      "osheaf.yaml",
+      "osheaf.yml"
+    ];
+    SPEC = "0.2";
+    OBJ2 = "object.json";
+    OBJ_FORMAT = "opensheaf-object/0.2";
+    GENESIS2 = "genesis.json";
+    LAYOUTS = {
+      "owner-name": OWNER_NAME_LAYOUT,
+      hashed: HASHED_LAYOUT
+    };
+    LAYOUT_TEXT = "Lines at <owner>/<name>/, drafts at draft/<id>/: the owner-name layout of the OpenSheaf specification 0.2, section 3.2\n";
+    REQUIRED = [
+      "owner",
+      "name",
+      "baseUrl",
+      "mainCollection",
+      "curator",
+      "depositor"
+    ];
+    REBUILD = "this archive is of specification 0.1, which these tools no longer read: rebuild it under specification 0.2 (section 16.1)";
+    ArchiveFolder = class _ArchiveFolder {
+      static async open(storage, env = environment()) {
+        const folder = new _ArchiveFolder(storage, env);
+        await folder.configure();
+        return folder;
+      }
+      constructor(storage, env = environment()) {
+        this.storage = storage;
+        this.env = env;
+        this.archive = {};
+        this.index = {};
+        this.labels = /* @__PURE__ */ new Map();
+        this.tombstones = [];
+        this.layout = OWNER_NAME_LAYOUT;
+        this.old = false;
+        this.cached = null;
+      }
+      async configure() {
+        const cfg = await readConfig(this.storage);
+        const disc = await readJson(this.storage, "opensheaf.json") || {};
+        this.old = "archiveId" in cfg || disc.specification === "0.1";
+        this.layout = cfg.storageLayout || OWNER_NAME_LAYOUT;
+        this.archive = Object.fromEntries(Object.entries(cfg).filter(([k]) => k !== "texmacs" && k !== "index"));
+        if (this.old) return this;
+        const missing = REQUIRED.filter((k) => !(k in cfg));
+        if (missing.length) exit(`${CONFIG_NAME} lacks ${missing.join(", ")}`);
+        if (!Object.values(LAYOUTS).includes(this.layout)) {
+          exit(`${CONFIG_NAME}: storageLayout is one of ${Object.values(LAYOUTS).join(", ")}`);
+        }
+        this.archive.profiles ??= [];
+        this.archive.contact ??= this.archive.baseUrl;
+        this.index = cfg.index || {};
+        this.labels = new Map((disc.objects || []).filter((o) => o.label).map((o) => [
+          o.label,
+          o.id
+        ]));
+        this.tombstones = [
+          ...disc.tombstones || []
+        ];
+        return this;
+      }
+      archiveOwners() {
+        const out = [
+          this.archive.owner
+        ];
+        return out.concat((this.archive.owners || []).filter((o) => !out.includes(o)));
+      }
+      labelOf(id) {
+        for (const [label, i] of this.labels) if (i === id) return label;
+        return null;
+      }
+      depositor() {
+        return {
+          name: this.archive.depositor.name,
+          address: this.archive.depositor.address
+        };
+      }
+      async dirOf(id) {
+        return joinPath("ocfl", ...await pathOf(id, this.layout));
+      }
+      async initStorageRoot() {
+        const s = this.storage;
+        await writeText(s, "ocfl/0=ocfl_1.1", "ocfl_1.1\n");
+        if (this.layout === HASHED_LAYOUT) {
+          await s.write("ocfl/ocfl_layout.json", jsonBytes({
+            extension: HASHED_LAYOUT,
+            description: "Hashed n-tuple storage layout with its default parameters (OpenSheaf 0.2, section 3.2)"
+          }));
+        } else if (!await s.kind(`ocfl/${LAYOUT_FILE}`)) {
+          await writeText(s, `ocfl/${LAYOUT_FILE}`, LAYOUT_TEXT);
+        }
+      }
+      async inventory(dir) {
+        try {
+          return await readJson(this.storage, joinPath(dir, "inventory.json"));
+        } catch {
+          return null;
+        }
+      }
+      contentPath(inv, version, logical) {
+        for (const [d, paths] of Object.entries(inv.versions[version].state)) {
+          if (paths.includes(logical)) return inv.manifest[d][0];
+        }
+        return null;
+      }
+      async readLogical(dir, inv, logical, version = null) {
+        const cp = this.contentPath(inv, version || inv.head, logical);
+        return cp ? this.storage.read(joinPath(dir, cp)) : null;
+      }
+      async readObjectJson(dir, inv, logical, version = null) {
+        const bytes = await this.readLogical(dir, inv, logical, version);
+        return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
+      }
+      async objects() {
+        const out = [];
+        const walk = async (dir) => {
+          for (const entry of await this.storage.list(dir) || []) {
+            if (entry.kind !== "dir") continue;
+            const child = joinPath(dir, entry.name);
+            if (await this.storage.kind(joinPath(child, "0=ocfl_object_1.1")) === "file") {
+              const inv = await this.inventory(child);
+              out.push({
+                id: inv?.id ?? null,
+                dir: child,
+                inv
+              });
+            } else if (!(dir === "ocfl" && entry.name === "extensions")) {
+              await walk(child);
+            }
+          }
+        };
+        if (await this.storage.kind("ocfl") === "dir") await walk("ocfl");
+        const idOf = (o) => typeof o.id === "string" ? o.id : "None";
+        return out.sort((a, b) => compareText(idOf(a), idOf(b)) || compareText(a.dir, b.dir));
+      }
+      reader() {
+        if (!this.cached) {
+          const base = /^https?:\/\/[^/]+\/(.*\/)?$/.test(this.archive.baseUrl || "") ? this.archive.baseUrl : ORIGIN;
+          const http = new Http({
+            fetch: storageFetch(this.storage, base),
+            budget: null
+          });
+          this.cached = new Archive(http, base, {
+            specification: SPEC,
+            storageRoot: "ocfl/",
+            storageLayout: this.layout
+          });
+          this.cached.lister = storageLister(this.storage, base);
+        }
+        return this.cached;
+      }
+      changed() {
+        this.cached = null;
+      }
+      async keyLog(owner) {
+        return this.reader().keyLog(owner);
+      }
+      async line(id) {
+        await this.reader().locate(id);
+        return this.reader().line(id);
+      }
+      async latestSigned(id) {
+        return (await this.line(id)).latest;
+      }
+      async signingKeys(owner) {
+        const who = short(owner);
+        const log = await this.keyLog(owner);
+        if (!log) stop(`the key log of ${who} is not in the storage root (section 6.5)`);
+        const { errors } = await log.check();
+        if (errors.length) stop(`the key log of ${who} has errors: ` + errors.join("; "));
+        const latest = log.latest();
+        if (!latest) stop(`the owner ${who} has ended (section 6.3): nothing is signed for it`);
+        let found2 = await this.env.keyStore.current(owner, latest.keys.keys);
+        const need = latest.keys.threshold;
+        if (found2.length < need && !this.env.signingKeyGiven && this.env.pullFromWallet) {
+          found2 = await this.env.pullFromWallet(this, owner, latest, found2);
+        }
+        if (found2.length < need) {
+          const hint = this.env.keyStore.keptOnDevice() ? "osheaf key new makes one for this computer" : "configure a key wallet, from which each command opens them";
+          stop(`this computer holds ${found2.length} of the current keys of ${who}, and v${latest.number} of its key log needs ${need} to sign (${hint})`);
+        }
+        return {
+          log,
+          latest,
+          signers: found2
+        };
+      }
+      async checkBeforeExtending(id, acknowledged = false) {
+        const { statuses } = await this.line(id);
+        const doubtful = statuses.map((s, k) => [
+          `v${k + 1}`,
+          s
+        ]).filter(([, s]) => s !== SIGNED && s !== VOUCHED);
+        if (!doubtful.length) return;
+        const lines2 = doubtful.map(([v, s]) => `  ${v}: ${s}`).join("\n");
+        if (!acknowledged) {
+          exit(`${id}: the new version would extend versions that are not signed, or are contested (section 7.3):
+${lines2}
+look at them; give --i-know to extend them anyway`);
+        }
+        this.env.err(`warning: ${id}: extending versions that are not signed, or are contested:
+${lines2}`);
+      }
+      async zenodoPending(id) {
+        try {
+          const state = await readJson(this.storage, joinPath("zenodo-staging", ...await pathOf(id, this.layout), "state.json"));
+          return state?.phase === "published";
+        } catch {
+          return false;
+        }
+      }
+      async addVersion(id, files, obj, message2, { acknowledged = false, stageIn = null } = {}) {
+        const s = this.storage;
+        const dir = await this.dirOf(id);
+        let inv = await this.inventory(dir);
+        if (stageIn === null && await this.zenodoPending(id)) {
+          const name2 = this.labelOf(id) || id;
+          exit(`${name2}: a Zenodo deposit was published and its version is not added yet: osheaf zenodo ${name2} completes it first (appendix A.1)`);
+        }
+        const draft = id.startsWith("sheaf:draft:");
+        const { log, latest, signers: signers2 } = draft ? {
+          log: null,
+          latest: null,
+          signers: []
+        } : await this.signingKeys(obj.owner);
+        obj = Object.fromEntries(Object.entries(obj).filter(([k]) => k !== "previous"));
+        if (inv === null) {
+          if (await s.kind(dir)) exit(`${dir} exists, and is not an object`);
+          inv = {
+            id,
+            type: INVENTORY_TYPE,
+            digestAlgorithm: "sha512",
+            head: "v0",
+            manifest: {},
+            versions: {},
+            fixity: {
+              md5: {},
+              sha256: {}
+            }
+          };
+        } else if (!draft) {
+          await this.checkBeforeExtending(id, acknowledged);
+          obj.previous = sidecarDigest(await s.read(joinPath(dir, inv.head, "inventory.json.sha512")));
+        }
+        const ver = `v${Number(inv.head.slice(1)) + 1}`;
+        if (stageIn !== null && await s.kind(stageIn)) exit(`${stageIn} exists`);
+        const stage = stageIn ?? `.staging-${hex(randomBytes(6))}`;
+        try {
+          const content = new Map(files);
+          content.set(OBJ2, jsonBytes(obj));
+          const state = {};
+          for (const logical of [
+            ...content.keys()
+          ].sort(compareText)) {
+            const data3 = content.get(logical);
+            const d = await sha512hex(data3);
+            (state[d] ||= []).push(logical);
+            if (!Object.hasOwn(inv.manifest, d)) {
+              const cp = `${ver}/content/${logical}`;
+              await s.write(joinPath(stage, cp), data3);
+              inv.manifest[d] = [
+                cp
+              ];
+              inv.fixity ??= {};
+              inv.fixity.md5 ??= {};
+              (inv.fixity.md5[await md5hex(data3)] ||= []).push(cp);
+              inv.fixity.sha256 ??= {};
+              (inv.fixity.sha256[await sha256hex(data3)] ||= []).push(cp);
+            }
+          }
+          inv.head = ver;
+          inv.versions[ver] = {
+            created: this.env.now(),
+            message: message2,
+            user: this.depositor(),
+            state
+          };
+          inv = orderedInventory(inv);
+          const data2 = inventoryFile(inv);
+          await s.write(joinPath(stage, ver, "inventory.json"), data2);
+          await s.write(joinPath(stage, ver, "inventory.json.sha512"), await sidecar(data2));
+          const pin = log ? log.pin(latest.number) : null, digest = await sha512hex(data2);
+          for (const key of signers2) {
+            await s.write(joinPath(stage, "witnesses", await fileName(key.did)), await signatureFile(key, id, ver, digest, obj.owner, pin));
+          }
+          if (stageIn === null) await this.moveStaged(dir, stage, ver, draft);
+        } finally {
+          if (stageIn === null) await removeTree(s, stage);
+          this.changed();
+        }
+        return inv;
+      }
+      async moveStaged(dir, stage, ver, draft = false) {
+        const s = this.storage;
+        const data2 = await s.read(joinPath(stage, ver, "inventory.json"));
+        const sc = await s.read(joinPath(stage, ver, "inventory.json.sha512"));
+        if (ver === "v1") {
+          const obj = joinPath(stage, "object");
+          await writeText(s, joinPath(obj, "0=ocfl_object_1.1"), "ocfl_object_1.1\n");
+          await s.rename(joinPath(stage, ver), joinPath(obj, ver));
+          if (!draft) await s.rename(joinPath(stage, "witnesses"), joinPath(obj, WITNESSES, ver));
+          await s.write(joinPath(obj, "inventory.json"), data2);
+          await s.write(joinPath(obj, "inventory.json.sha512"), sc);
+          await s.rename(obj, dir);
+        } else {
+          await s.rename(joinPath(stage, ver), joinPath(dir, ver));
+          if (!draft) await s.rename(joinPath(stage, "witnesses"), joinPath(dir, WITNESSES, ver));
+          for (const [name2, bytes] of [
+            [
+              "inventory.json",
+              data2
+            ],
+            [
+              "inventory.json.sha512",
+              sc
+            ]
+          ]) {
+            await s.write(joinPath(stage, name2), bytes);
+            await s.rename(joinPath(stage, name2), joinPath(dir, name2));
+          }
+        }
+      }
+      async installVersion(id, stage) {
+        const s = this.storage;
+        const ver = (await s.list(stage) || []).find((e) => e.kind === "dir" && /^v[1-9][0-9]*$/.test(e.name))?.name;
+        if (!ver) exit(`${stage} holds no version`);
+        const inv = JSON.parse(new TextDecoder().decode(await s.read(joinPath(stage, ver, "inventory.json"))));
+        const dir = await this.dirOf(id);
+        const before = await this.inventory(dir);
+        if ((before ? before.head : "v0") !== `v${Number(ver.slice(1)) - 1}`) {
+          exit(`${id}: the line has moved since ${ver} was built in ${stage}: it cannot be added`);
+        }
+        await this.moveStaged(dir, stage, ver, id.startsWith("sheaf:draft:"));
+        await removeStage(s, stage);
+        this.changed();
+        return inv;
+      }
+      async seal(kind, owner) {
+        const taken = /* @__PURE__ */ new Set();
+        for (const { id } of await this.objects()) {
+          const name2 = (id || "").split(":")[1];
+          if (name2 !== void 0) taken.add(name2);
+        }
+        for (const t of this.tombstones) {
+          taken.add(t.genesisName);
+          taken.add(t.name);
+        }
+        for (; ; ) {
+          const genesis = await genesisRecord(kind, {
+            originator: owner
+          });
+          const name2 = await nameOf(genesis);
+          if (!taken.has(name2)) return {
+            genesis,
+            id: objectId(name2, owner)
+          };
+        }
+      }
+    };
+  }
+});
+
+// core/discovery.js
+async function lineStatus(f, id, dir, inv, head) {
+  if (head?.kind === "owner") return "active";
+  const signed = await f.latestSigned(id);
+  const obj = signed ? await f.readObjectJson(dir, inv, OBJ2, signed) : head;
+  return obj?.status ?? "active";
+}
+async function discovery(f) {
+  const objs = [], drafts = [], used = /* @__PURE__ */ new Set();
+  for (const { id, dir, inv } of await f.objects()) {
+    if (!inv || typeof id !== "string") continue;
+    const head = await f.readObjectJson(dir, inv, OBJ2) || {};
+    for (const k of Object.keys(head.extensions || {})) used.add(k);
+    if (id.startsWith("sheaf:draft:")) {
+      drafts.push({
+        id,
+        kind: head.kind ?? null,
+        head: inv.head
+      });
+      continue;
+    }
+    if (head.kind === "owner") {
+      try {
+        const log = await f.keyLog(id.split(":")[2]);
+        for (const k of Object.keys(log && log.extensions() || {})) used.add(k);
+      } catch {
+      }
+    }
+    const entry = {
+      id,
+      kind: head.kind ?? null,
+      name: head.name ?? null,
+      owner: head.owner ?? null,
+      head: inv.head,
+      inventorySha512: sidecarDigest(await f.storage.read(joinPath(dir, "inventory.json.sha512"))),
+      status: await lineStatus(f, id, dir, inv, head)
+    };
+    const label = f.labelOf(id);
+    if (label) entry.label = label;
+    objs.push(entry);
+  }
+  const a = f.archive;
+  const doc = {
+    format: "opensheaf-archive/0.2",
+    specification: SPEC,
+    name: a.name,
+    contact: a.contact,
+    storageRoot: "ocfl/",
+    storageLayout: f.layout
+  };
+  if (f.labels.has(a.mainCollection)) doc.mainCollection = f.labels.get(a.mainCollection);
+  Object.assign(doc, {
+    profiles: a.profiles,
+    extensions: [
+      ...used
+    ].sort(compareText),
+    owners: f.archiveOwners(),
+    indexes: {
+      ...INDEXES
+    },
+    objects: objs
+  });
+  if (drafts.length) doc.drafts = drafts;
+  if (f.tombstones.length) doc.tombstones = f.tombstones;
+  return doc;
+}
+async function indexEntries(f) {
+  const out = {
+    names: [],
+    owners: [],
+    sha512: []
+  };
+  const lines2 = /* @__PURE__ */ new Map();
+  for (const { id, dir, inv } of await f.objects()) {
+    if (!inv || typeof id !== "string" || id.startsWith("sheaf:draft:")) continue;
+    const head = await f.readObjectJson(dir, inv, OBJ2) || {};
+    const genesis = await f.readLogical(dir, inv, GENESIS2);
+    if (!genesis || id.split(":").length !== 3) continue;
+    let rec;
+    try {
+      rec = await readGenesis(genesis);
+    } catch {
+      continue;
+    }
+    const [, name2, owner] = id.split(":");
+    const status = await lineStatus(f, id, dir, inv, head);
+    const entry = {
+      name: name2,
+      owner,
+      id,
+      status,
+      originator: rec.kind === "owner" ? owner : rec.originator ?? null,
+      genesis: new TextDecoder().decode(genesis)
+    };
+    const label = f.labelOf(id);
+    if (label) entry.label = label;
+    out.names.push(entry);
+    if (!lines2.has(owner)) lines2.set(owner, []);
+    lines2.get(owner).push(name2);
+    for (let n = 1; n <= Number(inv.head.slice(1)); n++) {
+      const sc = await f.storage.read(joinPath(dir, `v${n}`, "inventory.json.sha512"));
+      if (sc) out.sha512.push({
+        inventorySha512: sidecarDigest(sc),
+        id,
+        version: `v${n}`,
+        status
+      });
+    }
+    if (head.kind === "owner") {
+      let log = null;
+      try {
+        log = await f.keyLog(owner);
+      } catch {
+        continue;
+      }
+      for (const v of log?.versions || []) {
+        for (const c of v.forkRecord ? v.carried : []) {
+          out.sha512.push({
+            inventorySha512: c.digest,
+            id,
+            version: `v${c.number}`,
+            status: "active"
+          });
+        }
+      }
+    }
+  }
+  out.owners = [
+    ...lines2.keys()
+  ].sort(compareText).map((o) => ({
+    owner: o,
+    names: lines2.get(o).sort(compareText)
+  }));
+  out.names.push(...await removedEntries(f, "names"));
+  out.sha512.push(...await removedEntries(f, "sha512"));
+  return out;
+}
+async function readIndex(f, index) {
+  const out = [];
+  for (const entry of await f.storage.list(index) || []) {
+    if (entry.kind !== "file" || !entry.name.endsWith(".json")) continue;
+    try {
+      const data2 = await readJson(f.storage, `${index}/${entry.name}`);
+      out.push(...Array.isArray(data2?.entries) ? data2.entries : []);
+    } catch {
+    }
+  }
+  return out;
+}
+async function removedEntries(f, index) {
+  const gone = new Map(f.tombstones.map((t) => [
+    t.id,
+    t
+  ]));
+  const kept = (await readIndex(f, index)).filter((e) => gone.has(e.id)).map((e) => ({
+    ...e,
+    status: "removed"
+  }));
+  for (const t of gone.values()) {
+    if (index === "names" && !kept.some((e) => e.id === t.id)) {
+      kept.push({
+        name: t.name,
+        owner: t.owner,
+        id: t.id,
+        status: "removed"
+      });
+    }
+    if (index === "sha512" && !kept.some((e) => e.id === t.id && e.version === t.lastVersion)) {
+      kept.push({
+        inventorySha512: t.inventorySha512,
+        id: t.id,
+        version: t.lastVersion,
+        status: "removed"
+      });
+    }
+  }
+  return kept;
+}
+function indexFiles(entries) {
+  const out = {};
+  for (const [index, list2] of Object.entries(entries)) {
+    const files = out[index] = {};
+    const key = INDEX_KEY[index];
+    const number = (e) => Number((e.version ?? "v0").slice(1));
+    const sorted = [
+      ...list2
+    ].sort((a, b) => compareText(a[key], b[key]) || compareText(a.id ?? "", b.id ?? "") || number(a) - number(b));
+    for (const e of sorted) {
+      const p = e[key].slice(0, INDEXES[index]);
+      (files[p] ||= {
+        format: INDEX_FORMAT,
+        index,
+        entries: []
+      }).entries.push(e);
+    }
+  }
+  return out;
+}
+async function writeIndexes(f) {
+  const files = indexFiles(await indexEntries(f));
+  for (const index of Object.keys(INDEXES)) {
+    const want = files[index] || {};
+    for (const entry of await f.storage.list(index) || []) {
+      if (entry.kind === "file" && entry.name.endsWith(".json") && !Object.hasOwn(want, entry.name.slice(0, -5))) {
+        await f.storage.remove(`${index}/${entry.name}`);
+      }
+    }
+    for (const [prefix, data2] of Object.entries(want)) await f.storage.write(`${index}/${prefix}.json`, jsonBytes(data2));
+  }
+}
+async function writeDiscovery(f) {
+  await writeIndexes(f);
+  await f.storage.write("opensheaf.json", jsonBytes(await discovery(f)));
+}
+var INDEXES, INDEX_FORMAT, INDEX_KEY;
+var init_discovery = __esm({
+  "core/discovery.js"() {
+    init_names();
+    init_owners();
+    init_storage();
+    init_write();
+    init_folder();
+    INDEXES = {
+      names: 2,
+      owners: 2,
+      sha512: 2
+    };
+    INDEX_FORMAT = "opensheaf-index/0.2";
+    INDEX_KEY = {
+      names: "name",
+      owners: "owner",
+      sha512: "inventorySha512"
+    };
+  }
+});
+
+// core/deposit.js
+function rightsList(rights, prevDc = null) {
+  if (rights) return [
+    Object.hasOwn(RIGHTS, rights) ? {
+      ...RIGHTS[rights]
+    } : {
+      rights
+    }
+  ];
+  if (prevDc?.rightsList?.length) return prevDc.rightsList;
+  return [
+    {
+      rights: "All rights reserved"
+    }
+  ];
+}
+function checkRights(rights) {
+  const known = Object.keys(RIGHTS).sort().join(", ");
+  if (typeof rights !== "string" || !rights.trim() || rights.length > 1e3 || /[\u0000-\u001f\u007f]/.test(rights)) {
+    throw new Error(`--rights is one of ${known}, or a statement on one line`);
+  }
+  if (!Object.hasOwn(RIGHTS, rights) && /^[a-z0-9][a-z0-9.+-]*$/.test(rights)) {
+    throw new Error(`--rights ${rights}: not a licence known by its SPDX key (${known}); give one of them, or the licence as a statement, by its name or its address`);
+  }
+  return rights;
+}
+function partition(text3, sep) {
+  const k = text3.indexOf(sep);
+  return k < 0 ? [
+    text3,
+    ""
+  ] : [
+    text3.slice(0, k),
+    text3.slice(k + sep.length)
+  ];
+}
+function creator(spec) {
+  const [name2, aff] = partition(spec, "|");
+  let [family, given] = partition(name2, ",");
+  family = family.trim();
+  given = given.trim();
+  const c = {
+    name: given ? `${family}, ${given}` : family,
+    nameType: "Personal",
+    familyName: family
+  };
+  if (given) c.givenName = given;
+  if (aff.trim()) c.affiliation = [
+    {
+      name: aff.trim()
+    }
+  ];
+  return c;
+}
+function displayName(c) {
+  return "familyName" in c ? `${c.givenName ?? ""} ${c.familyName}`.trim() : c.name;
+}
+function relatedFromArgs(specs) {
+  const related = [];
+  for (const kv of specs || []) {
+    const [k, v] = partition(kv, "=");
+    if (k === "arxiv" && v) {
+      related.push({
+        relatedIdentifier: `arXiv:${v}`,
+        relatedIdentifierType: "arXiv",
+        relationType: "IsVariantFormOf"
+      });
+      continue;
+    }
+    const [rel, rest] = partition(kv, ":");
+    const [type, value] = partition(rest, ":");
+    if (!(rel && [
+      "doi",
+      "arxiv"
+    ].includes(type) && value)) {
+      exit(`--related ${kv}: use arxiv=ID or RELATION:doi:DOI or RELATION:arxiv:ID`);
+    }
+    related.push({
+      relatedIdentifier: type === "arxiv" ? `arXiv:${value}` : value,
+      relatedIdentifierType: type === "arxiv" ? "arXiv" : "DOI",
+      relationType: rel
+    });
+  }
+  return related;
+}
+function suffixOf(name2) {
+  const base = name2.slice(name2.lastIndexOf("/") + 1);
+  const k = base.lastIndexOf(".");
+  return k > 0 && k < base.length - 1 ? base.slice(k) : "";
+}
+function setDate(dc, dateType, date2, info = null) {
+  const entry = {
+    date: date2,
+    dateType
+  };
+  if (info) entry.dateInformation = info;
+  dc.dates = [
+    ...(dc.dates || []).filter((d) => d.dateType !== dateType),
+    entry
+  ];
+}
+function landingUrl(f, label) {
+  if (f.index.html || f.index.template) return `${f.archive.baseUrl}paper/${label}/`;
+  return `${f.archive.baseUrl}site/${label}/${label}.html`;
+}
+async function docVersionOf(f, dir, inv, ver) {
+  return (await f.readObjectJson(dir, inv, OBJ2, ver)).documentVersion;
+}
+async function defaultHistory2(f, dir, inv) {
+  const last = /* @__PURE__ */ new Map();
+  for (const ver of Object.keys(inv.versions)) last.set(await docVersionOf(f, dir, inv, ver), ver);
+  return [
+    ...last.keys()
+  ].sort((a, b) => a - b).map((n) => last.get(n));
+}
+async function carryForward(f, prev, obj, dir, inv, newVer, afterDoc = null) {
+  if (prev === null) {
+    if (afterDoc !== null && afterDoc !== void 0) exit("--after needs an existing document");
+    return;
+  }
+  if (prev.notices?.length) {
+    const kept = [
+      ...prev.notices
+    ];
+    obj.notices = [
+      ...kept,
+      ...(obj.notices || []).filter((n2) => !kept.some((k) => same(k, n2)))
+    ];
+  }
+  if ((prev.history === void 0 || prev.history === null) && (afterDoc === null || afterDoc === void 0)) return;
+  const hist = [
+    ...prev.history?.length ? prev.history : await defaultHistory2(f, dir, inv)
+  ];
+  const docs = /* @__PURE__ */ new Map();
+  for (const v of hist) docs.set(await docVersionOf(f, dir, inv, v), v);
+  const n = obj.documentVersion;
+  if (docs.has(n)) {
+    hist[hist.indexOf(docs.get(n))] = newVer;
+  } else if (afterDoc === null || afterDoc === void 0) {
+    hist.push(newVer);
+  } else {
+    if (!docs.has(afterDoc)) exit(`--after: no document version ${afterDoc}`);
+    hist.splice(hist.indexOf(docs.get(afterDoc)) + 1, 0, newVer);
+  }
+  obj.history = hist;
+}
+async function carriedFiles(f, dir, inv) {
+  const out = /* @__PURE__ */ new Map();
+  if (!inv) return out;
+  const head = await f.readObjectJson(dir, inv, OBJ2);
+  for (const n of head.notices || []) if (n.path) out.set(n.path, await f.readLogical(dir, inv, n.path));
+  return out;
+}
+async function deposit(f, a) {
+  const label = a.label;
+  const draft = Boolean(a.draft);
+  let id = null, owner = null;
+  if (draft) {
+    if (!label || !LABEL.test(label) || label.length > 64) {
+      exit("the identifier of a draft matches ^[a-z0-9]+(-[a-z0-9]+)*$ and has at most 64 characters (section 10.1)");
+    }
+    id = `sheaf:draft:${label}`;
+    const held2 = await f.storage.kind(joinPath(await f.dirOf(id), "inventory.json")) === "file";
+    if (a.new && held2) exit(`the draft ${label} exists: osheaf draft deposit ${label} adds a version to it`);
+    if (!a.new && !held2) exit(`no draft ${label} in this archive (osheaf draft new ${label} makes one)`);
+  } else if (f.labels.has(label)) {
+    if (a.new) exit(`${label} is the label of a line already: deposit a new version without --new, or choose another label for a new work`);
+    id = f.labels.get(label);
+  } else if (!a.new) {
+    exit(`no line labelled ${label} in this archive: give --new to seal a new work (section 10.2), or check the label (osheaf verify lists them)`);
+  } else {
+    if (!LABEL.test(label || "") || label.length > 64) {
+      exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters");
+    }
+    if (label.length > 32) f.env.err(`warning: ${label} is longer than 32 characters (it appears in every URL of the website)`);
+    owner = a.owner || f.archive.owner;
+    if (!f.archiveOwners().includes(owner)) exit(`${owner} is not an owner this archive hosts`);
+  }
+  await f.initStorageRoot();
+  const dir = id ? await f.dirOf(id) : null;
+  const inv = dir ? await f.inventory(dir) : null;
+  let prevObj = null, prevDc = null, docVersion = 1;
+  if (inv) {
+    prevObj = await f.readObjectJson(dir, inv, OBJ2);
+    prevDc = await f.readObjectJson(dir, inv, "datacite.json");
+    if (prevObj.kind !== "document") exit(`${label} is not a document`);
+    if (prevObj.status === "withdrawn") exit(`${label} is withdrawn (section 13.1): a withdrawn document gets no new versions`);
+    let most = 0;
+    for (const v of Object.keys(inv.versions)) most = Math.max(most, await docVersionOf(f, dir, inv, v));
+    docVersion = most + 1;
+    owner = prevObj.owner;
+  }
+  if (a.created && a.available) exit("give --created (a version not public at the time) or --available, not both");
+  const available = a.created ? null : a.available || f.env.today();
+  const issued = a.issued || (prevDc ? dateOf(prevDc, "Issued") : null) || available;
+  const source = a.source || null;
+  if (source && suffixOf(source.name) === ".tm" && !a.pdf) {
+    exit("TeXmacs sources are typeset by opensheaf-py (osheaf deposit of opensheaf-py); with opensheaf-js, give the PDF with --pdf");
+  }
+  if (!a.pdf) exit("give the PDF of this version with --pdf (only TeXmacs sources are typeset by the archive)");
+  if (!source && !a.noSource) exit("a deposit without sources needs --no-source REASON (section 4.3: sourcesMissing)");
+  if (!a.title || !a.author?.length) exit("give the title (--title) and the authors (--author) of this version");
+  const files = /* @__PURE__ */ new Map(), formats = [];
+  let main = null, format = null;
+  if (source) {
+    main = source.name.slice(source.name.lastIndexOf("/") + 1);
+    format = a.sourceFormat || SOURCE_FORMATS[suffixOf(main).toLowerCase()] || "application/octet-stream";
+    files.set(main, source.bytes);
+    formats.push(format);
+  }
+  formats.push("application/pdf");
+  for (const extra of a.extraSource || []) {
+    const logical = extra.logical || extra.name.slice(extra.name.lastIndexOf("/") + 1);
+    const parts = logical.split("/");
+    if (logical.startsWith("/") || parts.includes("..") || parts.includes(".")) exit(`bad logical path ${logical}`);
+    files.set(logical, extra.bytes);
+    if (logical.endsWith(".bib") && !formats.includes("application/x-bibtex")) formats.push("application/x-bibtex");
+  }
+  const pdf = a.pdf.bytes;
+  if (!(pdf[0] === 37 && pdf[1] === 80 && pdf[2] === 68 && pdf[3] === 70)) exit(`${a.pdf.name} is not a PDF`);
+  files.set("paper.pdf", pdf);
+  let abstract = null;
+  if (a.abstractFile !== void 0 && a.abstractFile !== null) abstract = a.abstractFile.trim();
+  else if (a.abstract) abstract = a.abstract.trim();
+  if (abstract === null && prevDc) {
+    abstract = (prevDc.descriptions || []).find((x) => x.descriptionType === "Abstract")?.description ?? null;
+  }
+  const datacite = {
+    titles: [
+      {
+        title: a.title
+      }
+    ],
+    creators: a.author.map(creator),
+    publisher: {
+      name: f.archive.name
+    },
+    publicationYear: Number((issued || a.created).slice(0, 4)),
+    types: {
+      resourceTypeGeneral: a.type || "Preprint"
+    },
+    version: String(docVersion),
+    url: landingUrl(f, label),
+    dates: [],
+    language: a.language || "en",
+    formats,
+    rightsList: rightsList(a.rights, prevDc)
+  };
+  if (a.keyword?.length) datacite.subjects = a.keyword.map((k) => ({
+    subject: k
+  }));
+  else if (prevDc?.subjects?.length) datacite.subjects = prevDc.subjects;
+  if (issued) setDate(datacite, "Issued", issued);
+  if (available) setDate(datacite, "Available", available, a.dateInfo);
+  else setDate(datacite, "Created", a.created, a.dateInfo);
+  if (abstract) datacite.descriptions = [
+    {
+      description: abstract,
+      descriptionType: "Abstract"
+    }
+  ];
+  const related = relatedFromArgs(a.related);
+  if (related.length) datacite.relatedIdentifiers = related;
+  if (draft) delete datacite.url;
+  const obj = {
+    format: OBJ_FORMAT,
+    specification: SPEC,
+    kind: "document",
+    name: null,
+    owner,
+    documentVersion: docVersion
+  };
+  if (source) Object.assign(obj, {
+    mainSource: main,
+    sourceFormat: format
+  });
+  else obj.sourcesMissing = {
+    text: a.noSource
+  };
+  obj.renditions = [
+    {
+      path: "paper.pdf",
+      mediaType: "application/pdf"
+    }
+  ];
+  if (a.toolchain?.length) obj.toolchain = a.toolchain.map((t) => partition(t, "=")).map(([name2, version]) => ({
+    name: name2,
+    version
+  }));
+  obj.status = "active";
+  if (a.changes) obj.changes = {
+    text: a.changes
+  };
+  if (a.agreement) {
+    obj.agreement = {
+      by: datacite.creators.map((c) => c.name),
+      date: available || a.created || f.env.today(),
+      method: a.agreement
+    };
+  }
+  if (a.stage) obj.stage = {
+    scheme: "NISO-JAV",
+    value: a.stage
+  };
+  if (a.licenceFile) {
+    if (!files.has(a.licenceFile)) {
+      exit(`--licence-file ${a.licenceFile} is not a file of the deposit (give it as the main source or with --extra-source; files: ${[
+        ...files.keys()
+      ].sort().join(", ")})`);
+    }
+    obj.licence = {
+      path: a.licenceFile,
+      mediaType: {
+        ".pdf": "application/pdf",
+        ".md": "text/markdown",
+        ".txt": "text/plain",
+        ".html": "text/html"
+      }[suffixOf(a.licenceFile).toLowerCase()] || "text/plain"
+    };
+  }
+  if (draft) {
+    delete obj.name;
+    delete obj.owner;
+  } else if (id === null) {
+    const sealed = await f.seal("document", owner);
+    id = sealed.id;
+    files.set(GENESIS2, sealed.genesis);
+  } else {
+    files.set(GENESIS2, await f.readLogical(dir, inv, GENESIS2));
+  }
+  if (!draft) obj.name = id.split(":")[1];
+  if (prevObj?.parent) {
+    obj.parent = prevObj.parent;
+    const state = inv.versions[inv.head].state;
+    for (const lp of Object.values(state).flat().filter(isEvidence).sort()) files.set(lp, await f.readLogical(dir, inv, lp));
+  }
+  const next = inv ? `v${Number(inv.head.slice(1)) + 1}` : "v1";
+  await carryForward(f, prevObj, obj, dir, inv, next, a.after ?? null);
+  for (const [lp, bytes] of await carriedFiles(f, dir, inv)) if (!files.has(lp)) files.set(lp, bytes);
+  files.set("datacite.json", jsonBytes(datacite));
+  const done = await f.addVersion(id, files, obj, a.message || `Deposit: document version ${docVersion}`, {
+    acknowledged: Boolean(a.iKnow)
+  });
+  if (!draft) f.labels.set(label, id);
+  await writeDiscovery(f);
+  f.env.out(`${label}: ${done.head} (document version ${docVersion}) ${id}`);
+  return {
+    id,
+    head: done.head,
+    documentVersion: docVersion
+  };
+}
+var RIGHTS, SOURCE_FORMATS;
+var init_deposit = __esm({
+  "core/deposit.js"() {
+    init_names();
+    init_schema();
+    init_versions();
+    init_write();
+    init_discovery();
+    init_folder();
+    init_storage();
+    RIGHTS = {
+      "cc-by-4.0": {
+        rights: "Creative Commons Attribution 4.0 International",
+        rightsUri: "https://creativecommons.org/licenses/by/4.0/",
+        rightsIdentifier: "cc-by-4.0",
+        rightsIdentifierScheme: "SPDX"
+      },
+      "cc0-1.0": {
+        rights: "Creative Commons Zero v1.0 Universal",
+        rightsUri: "https://creativecommons.org/publicdomain/zero/1.0/",
+        rightsIdentifier: "cc0-1.0",
+        rightsIdentifierScheme: "SPDX"
+      },
+      "cc-by-sa-4.0": {
+        rights: "Creative Commons Attribution Share Alike 4.0 International",
+        rightsUri: "https://creativecommons.org/licenses/by-sa/4.0/",
+        rightsIdentifier: "cc-by-sa-4.0",
+        rightsIdentifierScheme: "SPDX"
+      },
+      "gpl-3.0-only": {
+        rights: "GNU General Public License v3.0 only",
+        rightsUri: "https://www.gnu.org/licenses/gpl-3.0.html",
+        rightsIdentifier: "gpl-3.0-only",
+        rightsIdentifierScheme: "SPDX"
+      },
+      "gpl-3.0-or-later": {
+        rights: "GNU General Public License v3.0 or later",
+        rightsUri: "https://www.gnu.org/licenses/gpl-3.0.html",
+        rightsIdentifier: "gpl-3.0-or-later",
+        rightsIdentifierScheme: "SPDX"
+      }
+    };
+    SOURCE_FORMATS = {
+      ".tex": "application/x-tex",
+      ".ltx": "application/x-tex",
+      ".tm": "application/x-texmacs",
+      ".md": "text/markdown",
+      ".txt": "text/plain",
+      ".html": "text/html",
+      ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ".odt": "application/vnd.oasis.opendocument.text",
+      ".zip": "application/zip"
+    };
+  }
+});
+
+// core/collect.js
+async function documents(f) {
+  const out = [], mine = f.archiveOwners();
+  for (const { id, dir, inv } of await f.objects()) {
+    if (!inv || typeof id !== "string" || id.startsWith("sheaf:draft:")) continue;
+    const head = await f.readObjectJson(dir, inv, OBJ2);
+    if (head?.kind !== "document" || !mine.includes(head.owner)) continue;
+    const line = await f.line(id);
+    const signed = line.latest;
+    if (!signed) {
+      f.env.err(`warning: ${f.labelOf(id) || id} has no signed version (section 7.3): left out`);
+      continue;
+    }
+    const cur = currentVersion(inv, (v) => line.objs.get(v) ?? null, signed);
+    out.push({
+      id,
+      dir,
+      inv,
+      signed,
+      cur,
+      obj: await f.readObjectJson(dir, inv, OBJ2, cur),
+      dc: await f.readObjectJson(dir, inv, "datacite.json", cur)
+    });
+  }
+  return out;
+}
+function compareTuples(a, b) {
+  for (let k = 0; k < a.length; k++) {
+    if (a[k] < b[k]) return -1;
+    if (a[k] > b[k]) return 1;
+  }
+  return 0;
+}
+function memberOrder(members, order = ORDER) {
+  const key = (m) => [
+    m.cite?.issued || "",
+    m.cite?.available || ""
+  ];
+  const line = (a, b) => compareTuples([
+    a.name ?? "",
+    a.owner ?? ""
+  ], [
+    b.name ?? "",
+    b.owner ?? ""
+  ]);
+  const dated = members.filter((m) => key(m).some(Boolean)).sort(line);
+  dated.sort((a, b) => order === "issued-desc" ? compareTuples(key(b), key(a)) : compareTuples(key(a), key(b)));
+  return [
+    ...dated,
+    ...members.filter((m) => !key(m).some(Boolean)).sort(line)
+  ];
+}
+async function collect2(f, { curated = false, iKnow = false } = {}) {
+  await f.initStorageRoot();
+  const label = f.archive.mainCollection;
+  const collId = f.labels.get(label) ?? null;
+  const collDir = collId ? await f.dirOf(collId) : null;
+  const cinv = collDir ? await f.inventory(collDir) : null;
+  if (cinv && (await f.readObjectJson(collDir, cinv, "members.json"))?.order === "manual") {
+    f.env.out(`${label} is curated (order manual): use osheaf collection add|sync|update`);
+    return null;
+  }
+  const isCurated2 = cinv === null && Boolean(curated);
+  const order = isCurated2 ? "manual" : ORDER;
+  let members = [];
+  for (const { dir, signed, obj: obj2, dc } of await documents(f)) {
+    const cite2 = {
+      title: dc.titles[0].title,
+      creators: dc.creators.map(displayName),
+      year: dc.publicationYear
+    };
+    if (dateOf(dc, "Issued")) cite2.issued = dateOf(dc, "Issued");
+    const m = {
+      kind: "document",
+      name: obj2.name,
+      owner: obj2.owner,
+      at: [
+        f.archive.baseUrl
+      ],
+      version: signed,
+      inventorySha512: await sha512hex(await f.storage.read(joinPath(dir, signed, "inventory.json"))),
+      follow: "latest",
+      cite: cite2
+    };
+    m.cite.available = dateOf(dc, "Available", "Created");
+    members.push(m);
+  }
+  members = isCurated2 ? [] : memberOrder(members);
+  for (const m of members) delete m.cite.available;
+  const today2 = f.env.today();
+  let version = 1, issued = today2;
+  if (cinv) {
+    const old = await f.readObjectJson(collDir, cinv, "members.json");
+    if (same(old.members, members) && old.type === "catalogue") {
+      f.env.out(`${label}: unchanged (${cinv.head})`);
+      return null;
+    }
+    version = (await f.readObjectJson(collDir, cinv, OBJ2)).documentVersion + 1;
+    issued = dateOf(await f.readObjectJson(collDir, cinv, "datacite.json"), "Issued") || today2;
+  }
+  const owner = f.archive.owner;
+  let genesis, id = collId;
+  if (id === null) {
+    ({ genesis, id } = await f.seal("collection", owner));
+  } else {
+    genesis = await f.readLogical(collDir, cinv, GENESIS2);
+  }
+  const cur = f.archive.curator;
+  const creator2 = {
+    name: cur.name,
+    nameType: "Personal",
+    familyName: cur.familyName
+  };
+  if (cur.givenName) creator2.givenName = cur.givenName;
+  if (cur.affiliation) creator2.affiliation = [
+    {
+      name: cur.affiliation
+    }
+  ];
+  const files = /* @__PURE__ */ new Map([
+    [
+      "members.json",
+      jsonBytes({
+        format: "opensheaf-collection/0.2",
+        type: "catalogue",
+        order,
+        members
+      })
+    ],
+    [
+      "datacite.json",
+      jsonBytes({
+        titles: [
+          {
+            title: f.archive.name
+          }
+        ],
+        creators: [
+          creator2
+        ],
+        publisher: {
+          name: f.archive.name
+        },
+        publicationYear: Number(issued.slice(0, 4)),
+        types: {
+          resourceTypeGeneral: "Collection"
+        },
+        version: String(version),
+        url: f.archive.baseUrl,
+        dates: [
+          {
+            date: issued,
+            dateType: "Issued"
+          },
+          {
+            date: today2,
+            dateType: "Available"
+          }
+        ],
+        descriptions: [
+          {
+            description: "The documents deposited in this archive, newest first.",
+            descriptionType: "Abstract"
+          }
+        ],
+        rightsList: [
+          {
+            ...RIGHTS["cc0-1.0"]
+          }
+        ]
+      })
+    ],
+    [
+      GENESIS2,
+      genesis
+    ]
+  ]);
+  const obj = {
+    format: OBJ_FORMAT,
+    specification: SPEC,
+    kind: "collection",
+    name: id.split(":")[1],
+    owner,
+    documentVersion: version,
+    status: "active"
+  };
+  f.labels.set(label, id);
+  const inv = await f.addVersion(id, files, obj, `Collection version ${version}: ${members.length} documents`, {
+    acknowledged: iKnow
+  });
+  await writeDiscovery(f);
+  f.env.out(`Done: the main catalogue ${label} is at ${inv.head}, with ${members.length ? plural(members.length, "member") : "no members"}.`);
+  return inv;
+}
+var ORDER;
+var init_collect = __esm({
+  "core/collect.js"() {
+    init_versions();
+    init_schema();
+    init_storage();
+    init_write();
+    init_folder();
+    init_discovery();
+    init_deposit();
+    ORDER = "issued-desc";
+  }
+});
+
+// core/describe.js
+async function lineOf(f, label) {
+  if (f.labels.has(label)) return f.labels.get(label);
+  if (typeof label === "string" && label.startsWith("sheaf:")) {
+    try {
+      if (await f.storage.kind(joinPath(await f.dirOf(label), "inventory.json")) === "file") return label;
+    } catch {
+    }
+  }
+  exit(`no line labelled ${label} in this archive (osheaf deposit --new ${label} seals a new work)`);
+}
+async function headOf(f, label) {
+  const id = await lineOf(f, label);
+  const dir = await f.dirOf(id);
+  const inv = await f.inventory(dir);
+  if (inv === null) exit(`no object ${label}`);
+  return {
+    id,
+    dir,
+    inv
+  };
+}
+async function headFiles(f, dir, inv, ver = inv.head) {
+  const out = /* @__PURE__ */ new Map();
+  for (const paths of Object.values(inv.versions[ver].state)) {
+    for (const p of paths) if (p !== "datacite.json" && p !== OBJ2) out.set(p, await f.readLogical(dir, inv, p, ver));
+  }
+  return out;
+}
+async function descriptionVersion(f, label, change, message2, addFiles = null, acknowledged = false) {
+  const { id, dir, inv } = await headOf(f, label);
+  const files = await headFiles(f, dir, inv);
+  const dc = await f.readObjectJson(dir, inv, "datacite.json");
+  const prev = await f.readObjectJson(dir, inv, OBJ2);
+  if (prev.kind !== "document") exit(`${label} is not a document`);
+  const obj = JSON.parse(JSON.stringify(prev));
+  await change(dc, obj);
+  setDate(dc, "Updated", f.env.today());
+  await carryForward(f, prev, obj, dir, inv, `v${Number(inv.head.slice(1)) + 1}`);
+  for (const [lp, bytes] of addFiles || []) {
+    if (files.has(lp)) exit(`${label} has a file ${lp} already`);
+    files.set(lp, bytes);
+  }
+  files.set("datacite.json", jsonBytes(dc));
+  const done = await f.addVersion(id, files, obj, typeof message2 === "function" ? message2() : message2, {
+    acknowledged: Boolean(acknowledged)
+  });
+  await writeDiscovery(f);
+  return done;
+}
+function noteFrom(text3, file, folder) {
+  const note = {}, add2 = /* @__PURE__ */ new Map();
+  if (text3) note.text = text3;
+  if (file) {
+    const lp = `${folder}/${file.name}`;
+    note.path = lp;
+    note.mediaType = NOTE_TYPES[suffixOf(file.name).toLowerCase()] || "application/octet-stream";
+    add2.set(lp, file.bytes);
+  }
+  if (!Object.keys(note).length) exit("a note needs a text, a file, or both");
+  return {
+    note,
+    add: add2
+  };
+}
+async function notice(f, a) {
+  const { dir, inv } = await headOf(f, a.label);
+  const numbers = /* @__PURE__ */ new Set();
+  for (const v of Object.keys(inv.versions)) numbers.add((await f.readObjectJson(dir, inv, OBJ2, v)).documentVersion);
+  if (!numbers.has(a.about)) exit(`${a.label} has no document version ${a.about}`);
+  const { note, add: add2 } = noteFrom(a.text, a.file, "notices");
+  Object.assign(note, {
+    documentVersion: a.about,
+    date: a.date || f.env.today()
+  });
+  const done = await descriptionVersion(f, a.label, (dc, obj) => {
+    obj.notices = [
+      ...obj.notices || [],
+      note
+    ];
+  }, a.message || `Notice about document version ${a.about} (description-only version)`, add2, a.iKnow);
+  f.env.out(`${a.label}: ${done.head} (notice about version ${a.about})`);
+  return done;
+}
+async function withdraw(f, a) {
+  const { note: reason, add: add2 } = noteFrom(a.reason, a.file, "withdrawal");
+  const date2 = a.date || f.env.today();
+  const done = await descriptionVersion(f, a.label, (dc, obj) => {
+    if (obj.status === "withdrawn") exit(`${a.label} is withdrawn already`);
+    obj.status = "withdrawn";
+    obj.withdrawal = {
+      date: date2,
+      reason
+    };
+    setDate(dc, "Withdrawn", date2);
+  }, a.message || "Withdrawal (description-only version)", add2, a.iKnow);
+  f.env.out(`${a.label}: ${done.head} (withdrawn)`);
+  return done;
+}
+async function relicense(f, a) {
+  const fresh = rightsList(checkRights(a.rights))[0];
+  const done = await descriptionVersion(f, a.label, (dc, obj) => {
+    if (dc.rightsList !== void 0 && same(dc.rightsList, [
+      fresh
+    ])) exit(`${a.label} already has ${a.rights}`);
+    dc.rightsList = [
+      fresh
+    ];
+    obj.agreement = {
+      by: dc.creators.map((c) => c.name),
+      date: a.date || f.env.today(),
+      method: a.method
+    };
+  }, a.message || `Licence: ${fresh.rights} (description-only version; content unchanged)`, null, a.iKnow);
+  f.env.out(`${a.label}: ${done.head} (${fresh.rights})`);
+  return done;
+}
+var NOTE_TYPES;
+var init_describe = __esm({
+  "core/describe.js"() {
+    init_write();
+    init_schema();
+    init_storage();
+    init_discovery();
+    init_folder();
+    init_deposit();
+    NOTE_TYPES = {
+      ".pdf": "application/pdf",
+      ".md": "text/markdown",
+      ".txt": "text/plain",
+      ".html": "text/html"
+    };
+  }
+});
+
+// core/resolve.js
+function found(status, copy = null, version = null, digest = null, copies = [], log = null) {
+  return {
+    status,
+    copy,
+    version,
+    digest,
+    copies,
+    log,
+    ok: status === "verified" || status === "contested"
+  };
+}
+function ipv6Groups(text3) {
+  const halves = text3.split("::");
+  if (halves.length > 2) return null;
+  const groups = (s) => s ? s.split(":").map((g) => parseInt(g, 16)) : [];
+  const head = groups(halves[0]), tail = halves.length === 2 ? groups(halves[1]) : [];
+  if (halves.length === 1 && head.length !== 8) return null;
+  const out = [
+    ...head,
+    ...new Array(8 - head.length - tail.length).fill(0),
+    ...tail
+  ];
+  return out.length === 8 && out.every((g) => Number.isInteger(g) && g >= 0 && g <= 65535) ? out : null;
+}
+function ipv4Kind([a, b]) {
+  if (a === 127) return "a loopback address";
+  if (a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168) return "a private address";
+  if (a === 169 && b === 254) return "a link-local address";
+  if (a === 0) return "an address of this network";
+  return null;
+}
+function localKind(hostname) {
+  const host = String(hostname).toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return "a loopback address";
+  if (host === "local" || host.endsWith(".local")) return "a name of the local network (.local)";
+  if (/^[0-9]+(\.[0-9]+){3}$/.test(host)) return ipv4Kind(host.split(".").map(Number));
+  if (!host.startsWith("[")) return null;
+  const g = ipv6Groups(host.slice(1, -1));
+  if (!g) return null;
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 65535) return ipv4Kind([
+    g[6] >> 8,
+    g[6] & 255
+  ]);
+  if (g.slice(0, 7).every((x) => x === 0)) return g[7] === 1 ? "a loopback address" : g[7] === 0 ? "an address of this network" : null;
+  if ((g[0] & 65024) === 64512) return "a unique local address";
+  if ((g[0] & 65472) === 65152) return "a link-local address";
+  return null;
+}
+var MEMBER_STATUS, Copy, Resolver;
+var init_resolve = __esm({
+  "core/resolve.js"() {
+    init_archive();
+    init_http();
+    init_paths();
+    init_names();
+    init_versions();
+    init_signatures();
+    MEMBER_STATUS = {
+      [SIGNED]: "verified",
+      [VOUCHED]: "verified",
+      [CONTESTED]: "contested",
+      [UNCHECKED]: "unchecked",
+      [UNSIGNED]: "not a version",
+      [INVALID]: "not a version"
+    };
+    Copy = class {
+      constructor(where2, archive, line) {
+        Object.assign(this, {
+          where: where2,
+          archive,
+          line,
+          id: line.id
+        });
+      }
+      get head() {
+        return this.line.versions.length;
+      }
+      get statuses() {
+        return this.line.statuses;
+      }
+      get latestSigned() {
+        return this.line.latest ? versionNumber(this.line.latest) : 0;
+      }
+      digest(n) {
+        return n > 0 && n <= this.line.versions.length ? this.line.versions[n - 1].digest : null;
+      }
+      status(n) {
+        return n > 0 && n <= this.statuses.length ? this.statuses[n - 1] : null;
+      }
+      find(digest) {
+        const k = this.line.versions.findIndex((v) => v.digest === digest);
+        return k < 0 ? null : k + 1;
+      }
+      obj(n) {
+        return this.line.versions[n - 1]?.obj ?? null;
+      }
+      agrees(other) {
+        const k = Math.min(this.latestSigned, other.latestSigned);
+        return k === 0 || this.digest(k) === other.digest(k);
+      }
+    };
+    Resolver = class _Resolver {
+      constructor(http, home = null, { local = false } = {}) {
+        this.http = http;
+        this.home = home;
+        this.local = local;
+        this.archives = /* @__PURE__ */ new Map();
+        this.logs = /* @__PURE__ */ new Map();
+        this.notes = [];
+        if (home) this.archives.set(home.base, Promise.resolve(home));
+      }
+      again() {
+        const fresh = new _Resolver(this.http.another(), null, {
+          local: this.local
+        });
+        if (this.home) fresh.home = this.home;
+        return fresh;
+      }
+      note(level2, message2) {
+        if (!this.notes.some((n) => n.level === level2 && n.message === message2)) this.notes.push({
+          level: level2,
+          message: message2
+        });
+      }
+      source(where2, options = {}) {
+        const base = baseOf(where2);
+        if (!this.archives.has(base)) {
+          const refused = this.refused(base);
+          if (refused) {
+            this.note("warning", `unavailable: ${where2}: ${refused}`);
+            this.archives.set(base, Promise.resolve(null));
+            return this.archives.get(base);
+          }
+          const opening = Archive.open(this.http, base, options).then((archive) => {
+            if (archive.old || archive.disc.specification !== "0.2") {
+              this.note("warning", `unavailable: ${where2}: not an archive of specification 0.2`);
+              return null;
+            }
+            return archive;
+          }, (error) => {
+            if (error?.kind === "aborted") {
+              this.archives.delete(base);
+              throw error;
+            }
+            this.note("warning", `unavailable: ${where2}: ${error.kind === "not-found" ? "no discovery document opensheaf.json" : error.kind === "json" ? "the discovery document is not JSON" : error.detail || error.message}`);
+            return null;
+          });
+          this.archives.set(base, opening);
+        }
+        return this.archives.get(base);
+      }
+      refused(base) {
+        const kind = localKind(new URL(base).hostname);
+        if (!kind || this.local) return null;
+        if (this.home && localKind(new URL(this.home.base).hostname)) return null;
+        return `not fetched: ${new URL(base).hostname} is ${kind}, which the explorer fetches only for an archive that is itself on a local or private host`;
+      }
+      places(where2) {
+        const out = this.home ? [
+          this.home.base
+        ] : [];
+        const given = [];
+        for (const w of where2) {
+          if (typeof w !== "string" || !w) continue;
+          let base;
+          try {
+            base = baseOf(w);
+          } catch {
+            continue;
+          }
+          if (!out.includes(base) && !given.includes(base)) given.push(base);
+        }
+        if (given.length > LIMITS.mirrors) {
+          this.note("warning", `${given.length - LIMITS.mirrors} more location(s) not tried (at most ${LIMITS.mirrors} are tried, section 15.2)`);
+        }
+        return [
+          ...out,
+          ...given.slice(0, LIMITS.mirrors)
+        ];
+      }
+      async archiveOf(url, options = {}) {
+        this.bases ??= /* @__PURE__ */ new Map();
+        if (this.bases.has(url)) return this.bases.get(url);
+        const out = [];
+        this.bases.set(url, out);
+        let u;
+        try {
+          u = new URL(url);
+        } catch {
+          return out;
+        }
+        if (![
+          "https:",
+          "http:"
+        ].includes(u.protocol) || !u.host) return out;
+        const origin = `${u.protocol}//${u.host}`, path = u.pathname, whole = origin + path;
+        const cuts = [];
+        for (let k = path.length - 2; k >= 0; k--) if (path[k] === "/") cuts.push(k + 1);
+        const guess = path.indexOf("/ocfl/");
+        if (guess >= 0) cuts.unshift(guess + 1);
+        for (const k of [
+          ...new Set(cuts)
+        ]) {
+          const base = origin + path.slice(0, k);
+          if (this.refused(base)) continue;
+          let archive = this.archives.has(base) ? await this.archives.get(base) : null;
+          if (!archive) {
+            try {
+              archive = await Archive.open(this.http, base, options);
+            } catch (error) {
+              if (error?.kind === "aborted") throw error;
+              continue;
+            }
+            if (archive.old || archive.disc.specification !== "0.2") continue;
+          }
+          const root = archive.disc.storageRoot ?? "ocfl/";
+          if (typeof root !== "string" || root.includes(":") || !root.endsWith("/") || root.slice(0, -1).split("/").some((x) => [
+            "",
+            ".",
+            ".."
+          ].includes(x)) || root.includes("\\")) continue;
+          if (whole.startsWith(archive.root) && whole.length > archive.root.length) {
+            this.archives.set(base, Promise.resolve(archive));
+            out.push(base);
+            break;
+          }
+        }
+        return out;
+      }
+      async keyLog(owner, where2 = [], options = {}) {
+        if (!this.logs.has(owner)) this.logs.set(owner, {
+          log: null,
+          met: /* @__PURE__ */ new Set(),
+          found: []
+        });
+        const entry = this.logs.get(owner);
+        for (const w of this.places(where2)) {
+          if (entry.met.has(w)) continue;
+          entry.met.add(w);
+          const archive = await this.source(w, options);
+          if (!archive) continue;
+          let log;
+          try {
+            log = await archive.keyLog(owner, options);
+          } catch (error) {
+            if (error?.kind === "aborted") throw error;
+            this.note("warning", `${w}: the key log of ${owner}: ${error.detail || error.message}`);
+            continue;
+          }
+          if (!log || log.owner !== owner) continue;
+          entry.found.push({
+            where: w,
+            log
+          });
+          const before = entry.log;
+          entry.log = before ? await before.meet(log) : log;
+          if (before && before.forkPoint === null && entry.log.forkPoint !== null) {
+            this.note("result", `a fork of the key log of ${owner} at v${entry.log.forkPoint}, met at ${w} (section 6.3)`);
+          }
+        }
+        return entry.log;
+      }
+      ownerNotes(owner) {
+        const log = this.logs.get(owner)?.log;
+        if (!log) return [];
+        const out = [];
+        if (log.forkPoint) out.push(`owner ${owner} ended by a fork of its key log at v${log.forkPoint}`);
+        else if (log.ended) out.push(`owner ${owner} ended`);
+        if (log.successor) out.push(`owner ${owner}: successor ${log.successor} named by its ending version`);
+        for (const did of [
+          ...log.exposedKeys()
+        ].sort()) out.push(`owner ${owner}: exposed key ${did}`);
+        return out;
+      }
+      async copies(name2, owner, where2 = [], options = {}) {
+        const id = objectId(name2, owner);
+        const held2 = [];
+        for (const w of this.places(where2)) {
+          const archive = await this.source(w, options);
+          if (!archive) continue;
+          if (archive !== this.home && !archive.objects().some((o) => o.id === id)) continue;
+          await this.keyLog(owner, archive === this.home ? [] : [
+            w
+          ], options);
+          held2.push({
+            w,
+            archive
+          });
+        }
+        const log = await this.keyLog(owner, [], options);
+        const out = [];
+        for (const { w, archive } of held2) {
+          let line;
+          try {
+            line = await archive.line(id, {
+              log,
+              signal: options.signal
+            });
+          } catch (error) {
+            if (error?.kind === "aborted") throw error;
+            if (error?.kind !== "not-found") this.note("warning", `${w}: ${id}: ${error.detail || error.message}`);
+            continue;
+          }
+          const problem = await this.identityProblem(archive, id, line, options);
+          if (problem) {
+            this.note("warning", `${w}: ${id}: not a copy of the line: ${problem}`);
+            continue;
+          }
+          out.push(new Copy(w, archive, line));
+        }
+        if (out.length && await this.tombstoned(id, where2, options)) {
+          this.note("result", `${id}: taken down in an archive read, and found elsewhere (section 12.3)`);
+        }
+        return out;
+      }
+      async identityProblem(archive, id, line, options) {
+        if (line.inv.id !== id) return "its inventory names another object";
+        const [, name2, owner] = id.split(":");
+        let genesis = null;
+        try {
+          genesis = await archive.bytes(id, line.inv, "v1", "genesis.json", options);
+        } catch (error) {
+          if (error?.kind === "aborted") throw error;
+        }
+        if (!genesis || !await isNameOf(name2, genesis)) return "the name is not a name of its genesis record (section 5.2)";
+        for (const v of line.versions) {
+          if (v.obj?.name !== name2 || v.obj?.owner !== owner) return `${v.ver}: object.json does not record the line`;
+        }
+        return null;
+      }
+      async tombstoned(id, where2 = [], options = {}) {
+        for (const w of this.places(where2)) {
+          const archive = await this.source(w, options);
+          if (archive?.tombstones().some((t) => t.id === id)) return true;
+        }
+        return false;
+      }
+      async pin(name2, owner, version, digest, where2 = [], options = {}) {
+        if (name2 === owner) {
+          const log = await this.keyLog(owner, where2, options);
+          const v = log && isVersion(version) ? log.lookup(versionNumber(version), digest) : null;
+          if (v) return found("verified", null, version, digest, [], log);
+          return found(log ? "mismatch" : "unavailable", null, version, digest, [], log);
+        }
+        const copies = await this.copies(name2, owner, where2, options);
+        const n = isVersion(version) ? versionNumber(version) : 0;
+        for (const c of copies) {
+          if (n && c.digest(n) === digest) return found(MEMBER_STATUS[c.status(n)] || "not a version", c, version, digest, copies);
+        }
+        if (copies.length) return found("mismatch", null, version, digest, copies);
+        return found(await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable", null, version, digest, copies);
+      }
+      async latest(name2, owner, where2 = [], options = {}) {
+        const copies = await this.copies(name2, owner, where2, options);
+        const signed = copies.filter((c) => c.latestSigned).sort((a, b) => b.latestSigned - a.latestSigned);
+        if (!signed.length) {
+          const status = copies.length ? "not a version" : await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable";
+          return found(status, null, null, null, copies);
+        }
+        const top = signed[0];
+        const forks = signed.filter((c) => !top.agrees(c));
+        for (const c of forks) {
+          this.note("result", `a fork of the line ${top.id}: the copy at ${c.where} (latest signed v${c.latestSigned}) does not agree with the copy at ${top.where} (latest signed v${top.latestSigned}) (section 7.4)`);
+        }
+        if (forks.length) return found("fork", null, null, null, copies);
+        return found("verified", top, `v${top.latestSigned}`, top.digest(top.latestSigned), copies);
+      }
+      async documentVersion(name2, owner, n, where2 = [], options = {}) {
+        const latest = await this.latest(name2, owner, where2, options);
+        if (!latest.copy) return latest;
+        const c = latest.copy;
+        const objOf2 = (v) => c.line.objs.get(v) ?? null;
+        for (const h of historyOf(c.line.inv, objOf2, latest.version)) {
+          if (objOf2(h)?.documentVersion === n) {
+            const k = versionNumber(h);
+            return found(MEMBER_STATUS[c.status(k)] || "not a version", c, h, c.digest(k), latest.copies);
+          }
+        }
+        this.note("warning", `${c.id}: no document version ${n} in the history of ${latest.version}`);
+        return found("unavailable", null, null, null, latest.copies);
+      }
+      async resolve(text3, where2 = [], options = {}) {
+        const u = parseSheaf(text3, {
+          short: true,
+          fold: true
+        });
+        where2 = [
+          ...u.at ? [
+            u.at
+          ] : [],
+          ...where2
+        ];
+        if (u.owner === "*") throw new Error("a work, sheaf:<name>:*, is searched for (section 12.4), which the explorer does not do");
+        const [name2, owner] = await this.expand(u, where2, options);
+        if (name2 === owner) {
+          const id2 = objectId(owner, owner);
+          const log = await this.keyLog(owner, where2, options);
+          if (!log) return {
+            id: id2,
+            found: found("unavailable")
+          };
+          const side = log.side();
+          if (u.version === null) {
+            const v = side[side.length - 1];
+            return {
+              id: id2,
+              found: found("verified", null, `v${v.number}`, v.digest, [], log)
+            };
+          }
+          if (u.sha512 === null) {
+            if (u.version > side.length) return {
+              id: id2,
+              found: found("unavailable", null, null, null, [], log)
+            };
+            return {
+              id: id2,
+              found: found("verified", null, `v${u.version}`, side[u.version - 1].digest, [], log)
+            };
+          }
+          return {
+            id: id2,
+            found: await this.pin(owner, owner, `v${u.version}`, u.sha512, where2, options)
+          };
+        }
+        const id = objectId(name2, owner);
+        if (u.version === null) return {
+          id,
+          found: await this.latest(name2, owner, where2, options)
+        };
+        if (u.sha512 === null) return {
+          id,
+          found: await this.documentVersion(name2, owner, u.version, where2, options)
+        };
+        const copies = await this.copies(name2, owner, where2, options);
+        for (const c of copies) {
+          const k = c.find(u.sha512);
+          if (k === null) continue;
+          const held2 = c.obj(k)?.documentVersion;
+          if (held2 !== u.version) {
+            this.note("warning", `${id}: the version pinned holds document version ${held2}, not ${u.version}`);
+            return {
+              id,
+              found: found("mismatch", c, `v${k}`, u.sha512)
+            };
+          }
+          return {
+            id,
+            found: found(MEMBER_STATUS[c.status(k)] || "not a version", c, `v${k}`, u.sha512)
+          };
+        }
+        const status = copies.length ? "mismatch" : await this.tombstoned(id, where2, options) ? "removed" : "unavailable";
+        return {
+          id,
+          found: found(status, null, null, u.sha512, copies)
+        };
+      }
+      async expand(u, where2, options = {}) {
+        if (u.isComplete() && u.owner !== null) return [
+          u.name,
+          u.owner
+        ];
+        const candidates = /* @__PURE__ */ new Set();
+        for (const w of this.places(where2)) {
+          const archive = await this.source(w, options);
+          if (!archive) continue;
+          for (const o of archive.objects()) {
+            const name2 = typeof o.name === "string" ? o.name : "", owner = typeof o.owner === "string" ? o.owner : "";
+            if (!u.matches(name2, owner)) continue;
+            if (u.owner === null) {
+              if (o.kind === "owner" ? name2 !== owner : await this.originator(archive, o.id, options) !== owner) continue;
+            }
+            candidates.add(`${name2} ${owner}`);
+          }
+        }
+        if (candidates.size !== 1) {
+          const listed = [
+            ...candidates
+          ].sort().map((c) => `  sheaf:${c.replace(" ", ":")}`).join("\n");
+          throw new Error(`${u}: ` + (candidates.size ? "ambiguous, the candidates are:\n" + listed : "no line of that name in the archives read"));
+        }
+        return [
+          ...candidates
+        ][0].split(" ");
+      }
+      async originator(archive, id, options = {}) {
+        try {
+          const inv = await archive.inventory(id, null, options);
+          const genesis = await archive.bytes(id, inv, "v1", "genesis.json", options);
+          return genesis ? (await readGenesis(genesis)).originator ?? null : null;
+        } catch (error) {
+          if (error?.kind === "aborted") throw error;
+          return null;
+        }
+      }
+      async describe(result, { presentCurrent = false } = {}, options = {}) {
+        const c = result.copy;
+        if (!c) return null;
+        const objOf2 = (v) => c.line.objs.get(v) ?? null;
+        const shown = presentCurrent ? historyOf(c.line.inv, objOf2, result.version).slice(-1)[0] || result.version : result.version;
+        const { obj, dc } = await c.archive.descriptions(c.id, c.line.inv, shown, options);
+        const latest = c.line.latest ? objOf2(c.line.latest) : null;
+        return {
+          version: shown,
+          title: titleOf(dc),
+          creators: creatorsOf(dc),
+          documentVersion: obj?.documentVersion ?? null,
+          status: latest?.status ?? null,
+          withdrawal: latest?.withdrawal ?? null,
+          archive: c.archive
+        };
+      }
+    };
+  }
+});
+
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/identity.js
 function isCollection(node) {
   if (node && typeof node === "object") switch (node[NODE_TYPE]) {
@@ -5675,10 +11198,10 @@ function foldFlowLines(text3, indent, mode = "flow", { indentAtStart, lineWidth 
   if (text3.length <= endStep) return text3;
   const folds = [];
   const escapedFolds = {};
-  let end = lineWidth - indent.length;
+  let end2 = lineWidth - indent.length;
   if (typeof indentAtStart === "number") {
     if (indentAtStart > lineWidth - Math.max(2, minContentWidth)) folds.push(0);
-    else end = lineWidth - indentAtStart;
+    else end2 = lineWidth - indentAtStart;
   }
   let split = void 0;
   let prev = void 0;
@@ -5688,7 +11211,7 @@ function foldFlowLines(text3, indent, mode = "flow", { indentAtStart, lineWidth 
   let escEnd = -1;
   if (mode === FOLD_BLOCK) {
     i = consumeMoreIndentedLines(text3, i, indent.length);
-    if (i !== -1) end = i + endStep;
+    if (i !== -1) end2 = i + endStep;
   }
   for (let ch; ch = text3[i += 1]; ) {
     if (mode === FOLD_QUOTED && ch === "\\") {
@@ -5710,17 +11233,17 @@ function foldFlowLines(text3, indent, mode = "flow", { indentAtStart, lineWidth 
     }
     if (ch === "\n") {
       if (mode === FOLD_BLOCK) i = consumeMoreIndentedLines(text3, i, indent.length);
-      end = i + indent.length + endStep;
+      end2 = i + indent.length + endStep;
       split = void 0;
     } else {
       if (ch === " " && prev && prev !== " " && prev !== "\n" && prev !== "	") {
         const next = text3[i + 1];
         if (next && next !== " " && next !== "\n" && next !== "	") split = i;
       }
-      if (i >= end) {
+      if (i >= end2) {
         if (split) {
           folds.push(split);
-          end = split + endStep;
+          end2 = split + endStep;
           split = void 0;
         } else if (mode === FOLD_QUOTED) {
           while (prev === " " || prev === "	") {
@@ -5732,7 +11255,7 @@ function foldFlowLines(text3, indent, mode = "flow", { indentAtStart, lineWidth 
           if (escapedFolds[j]) return text3;
           folds.push(j);
           escapedFolds[j] = true;
-          end = j + endStep;
+          end2 = j + endStep;
           split = void 0;
         } else {
           overflow = true;
@@ -5747,19 +11270,19 @@ function foldFlowLines(text3, indent, mode = "flow", { indentAtStart, lineWidth 
   let res = text3.slice(0, folds[0]);
   for (let i2 = 0; i2 < folds.length; ++i2) {
     const fold = folds[i2];
-    const end2 = folds[i2 + 1] || text3.length;
+    const end3 = folds[i2 + 1] || text3.length;
     if (fold === 0) res = `
-${indent}${text3.slice(0, end2)}`;
+${indent}${text3.slice(0, end3)}`;
     else {
       if (mode === FOLD_QUOTED && escapedFolds[fold]) res += `${text3[fold]}\\`;
       res += `
-${indent}${text3.slice(fold + 1, end2)}`;
+${indent}${text3.slice(fold + 1, end3)}`;
     }
   }
   return res;
 }
 function consumeMoreIndentedLines(text3, i, indent) {
-  let end = i;
+  let end2 = i;
   let start = i + 1;
   let ch = text3[start];
   while (ch === " " || ch === "	") {
@@ -5769,12 +11292,12 @@ function consumeMoreIndentedLines(text3, i, indent) {
       do {
         ch = text3[++i];
       } while (ch && ch !== "\n");
-      end = i;
+      end2 = i;
       start = i + 1;
       ch = text3[start];
     }
   }
-  return end;
+  return end2;
 }
 var FOLD_FLOW, FOLD_BLOCK, FOLD_QUOTED;
 var init_foldFlowLines = __esm({
@@ -5909,20 +11432,20 @@ function blockString({ comment, type, value }, ctx, onComment, onChompKeep) {
     const ch = value[endStart - 1];
     if (ch !== "\n" && ch !== "	" && ch !== " ") break;
   }
-  let end = value.substring(endStart);
-  const endNlPos = end.indexOf("\n");
+  let end2 = value.substring(endStart);
+  const endNlPos = end2.indexOf("\n");
   if (endNlPos === -1) {
     chomp = "-";
-  } else if (value === end || endNlPos !== end.length - 1) {
+  } else if (value === end2 || endNlPos !== end2.length - 1) {
     chomp = "+";
     if (onChompKeep) onChompKeep();
   } else {
     chomp = "";
   }
-  if (end) {
-    value = value.slice(0, -end.length);
-    if (end[end.length - 1] === "\n") end = end.slice(0, -1);
-    end = end.replace(blockEndNewlines, `$&${indent}`);
+  if (end2) {
+    value = value.slice(0, -end2.length);
+    if (end2[end2.length - 1] === "\n") end2 = end2.slice(0, -1);
+    end2 = end2.replace(blockEndNewlines, `$&${indent}`);
   }
   let startWithSpace = false;
   let startEnd;
@@ -5953,13 +11476,13 @@ function blockString({ comment, type, value }, ctx, onComment, onChompKeep) {
         literalFallback = true;
       };
     }
-    const body = foldFlowLines(`${start}${foldedValue}${end}`, indent, FOLD_BLOCK, foldOptions);
+    const body = foldFlowLines(`${start}${foldedValue}${end2}`, indent, FOLD_BLOCK, foldOptions);
     if (!literalFallback) return `>${header}
 ${indent}${body}`;
   }
   value = value.replace(/\n+/g, `$&${indent}`);
   return `|${header}
-${indent}${start}${value}${end}`;
+${indent}${start}${value}${end2}`;
 }
 function plainString(item, ctx, onComment, onChompKeep) {
   const { type, value } = item;
@@ -6517,9 +12040,9 @@ function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
     lines2.push(str);
     linesAtValue = lines2.length;
   }
-  const { start, end } = flowChars;
+  const { start, end: end2 } = flowChars;
   if (lines2.length === 0) {
-    return start + end;
+    return start + end2;
   } else {
     if (!reqNewline) {
       const len = lines2.reduce((sum, line) => sum + line.length + 2, 2);
@@ -6530,9 +12053,9 @@ function stringifyFlowCollection({ items }, ctx, { flowChars, itemIndent }) {
       for (const line of lines2) str += line ? `
 ${indentStep}${indent}${line}` : "\n";
       return `${str}
-${indent}${end}`;
+${indent}${end2}`;
     } else {
-      return `${start}${fcPadding}${lines2.join(" ")}${fcPadding}${end}`;
+      return `${start}${fcPadding}${lines2.join(" ")}${fcPadding}${end2}`;
     }
   }
 }
@@ -6993,7 +12516,7 @@ var init_int = __esm({
 
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/schema.js
 var schema;
-var init_schema = __esm({
+var init_schema2 = __esm({
   "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/schema.js"() {
     init_map();
     init_null();
@@ -7023,7 +12546,7 @@ function intIdentify2(value) {
   return typeof value === "bigint" || Number.isInteger(value);
 }
 var stringifyJSON, jsonScalars, jsonError, schema2;
-var init_schema2 = __esm({
+var init_schema3 = __esm({
   "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/json/schema.js"() {
     init_Scalar();
     init_map();
@@ -7597,7 +13120,7 @@ var init_timestamp = __esm({
 
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/schema.js
 var schema3;
-var init_schema3 = __esm({
+var init_schema4 = __esm({
   "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/schema.js"() {
     init_map();
     init_null();
@@ -7679,13 +13202,13 @@ var init_tags = __esm({
     init_bool();
     init_float();
     init_int();
-    init_schema();
     init_schema2();
+    init_schema3();
     init_binary();
     init_merge();
     init_omap();
     init_pairs();
-    init_schema3();
+    init_schema4();
     init_set();
     init_timestamp();
     schemas = /* @__PURE__ */ new Map([
@@ -8206,9 +13729,9 @@ var init_errors = __esm({
       }
       if (/[^ ]/.test(lineStr)) {
         let count = 1;
-        const end = error.linePos[1];
-        if (end && end.line === line && end.col > col) {
-          count = Math.max(1, Math.min(end.col - col, 80 - ci));
+        const end2 = error.linePos[1];
+        if (end2 && end2.line === line && end2.col > col) {
+          count = Math.max(1, Math.min(end2.col - col, 80 - ci));
         }
         const pointer = " ".repeat(ci) + "^".repeat(count);
         error.message += `:
@@ -8315,7 +13838,7 @@ function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIn
     }
   }
   const last = tokens[tokens.length - 1];
-  const end = last ? last.offset + last.source.length : offset;
+  const end2 = last ? last.offset + last.source.length : offset;
   if (reqSpace && next && next.type !== "space" && next.type !== "newline" && next.type !== "comma" && (next.type !== "scalar" || next.source !== "")) {
     onError(next.offset, "MISSING_CHAR", "Tags and anchors must be separated from the next token by white space");
   }
@@ -8329,8 +13852,8 @@ function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIn
     anchor,
     tag,
     newlineAfterProp,
-    end,
-    start: start ?? end
+    end: end2,
+    start: start ?? end2
   };
 }
 var init_resolve_props = __esm({
@@ -8372,10 +13895,10 @@ var init_util_contains_newline = __esm({
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-flow-indent-check.js
 function flowIndentCheck(indent, fc, onError) {
   if (fc?.type === "flow-collection") {
-    const end = fc.end[0];
-    if (end.indent === indent && (end.source === "]" || end.source === "}") && containsNewline(fc)) {
+    const end2 = fc.end[0];
+    if (end2.indent === indent && (end2.source === "]" || end2.source === "}") && containsNewline(fc)) {
       const msg = "Flow end indicator should be more indented than parent";
-      onError(end, "BAD_INDENT", msg, true);
+      onError(end2, "BAD_INDENT", msg, true);
     }
   }
 }
@@ -8541,12 +14064,12 @@ var init_resolve_block_seq = __esm({
 });
 
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-end.js
-function resolveEnd(end, offset, reqSpace, onError) {
+function resolveEnd(end2, offset, reqSpace, onError) {
   let comment = "";
-  if (end) {
+  if (end2) {
     let hasSpace = false;
     let sep = "";
-    for (const token of end) {
+    for (const token of end2) {
       const { source, type } = token;
       switch (type) {
         case "space":
@@ -8717,15 +14240,15 @@ function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: co
     if (ce && ce.source.length !== 1) ee.unshift(ce);
   }
   if (ee.length > 0) {
-    const end = resolveEnd(ee, cePos, ctx.options.strict, onError);
-    if (end.comment) {
-      if (coll.comment) coll.comment += "\n" + end.comment;
-      else coll.comment = end.comment;
+    const end2 = resolveEnd(ee, cePos, ctx.options.strict, onError);
+    if (end2.comment) {
+      if (coll.comment) coll.comment += "\n" + end2.comment;
+      else coll.comment = end2.comment;
     }
     coll.range = [
       fc.offset,
       cePos,
-      end.offset
+      end2.offset
     ];
   } else {
     coll.range = [
@@ -8839,16 +14362,16 @@ function resolveBlockScalar(ctx, scalar, onError) {
   }
   if (chompStart === 0) {
     const value2 = header.chomp === "+" && lines2.length > 0 ? "\n".repeat(Math.max(1, lines2.length - 1)) : "";
-    let end2 = start + header.length;
-    if (scalar.source) end2 += scalar.source.length;
+    let end3 = start + header.length;
+    if (scalar.source) end3 += scalar.source.length;
     return {
       value: value2,
       type,
       comment: header.comment,
       range: [
         start,
-        end2,
-        end2
+        end3,
+        end3
       ]
     };
   }
@@ -8920,15 +14443,15 @@ function resolveBlockScalar(ctx, scalar, onError) {
     default:
       value += "\n";
   }
-  const end = start + header.length + scalar.source.length;
+  const end2 = start + header.length + scalar.source.length;
   return {
     value,
     type,
     comment: header.comment,
     range: [
       start,
-      end,
-      end
+      end2,
+      end2
     ]
   };
 }
@@ -9021,7 +14544,7 @@ var init_resolve_block_scalar = __esm({
 
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-scalar.js
 function resolveFlowScalar(scalar, strict, onError) {
-  const { offset, type, source, end } = scalar;
+  const { offset, type, source, end: end2 } = scalar;
   let _type;
   let value;
   const _onError = (rel, code, msg) => onError(offset + rel, code, msg);
@@ -9053,7 +14576,7 @@ function resolveFlowScalar(scalar, strict, onError) {
       };
   }
   const valueEnd = offset + source.length;
-  const re = resolveEnd(end, valueEnd, strict, onError);
+  const re = resolveEnd(end2, valueEnd, strict, onError);
   return {
     value,
     type: _type,
@@ -9366,7 +14889,7 @@ function composeNode(ctx, token, props, onError) {
   if (ctx.options.keepSourceTokens && isSrcToken) node.srcToken = token;
   return node;
 }
-function composeEmptyNode(ctx, offset, before, pos, { spaceBefore, comment, anchor, tag, end }, onError) {
+function composeEmptyNode(ctx, offset, before, pos, { spaceBefore, comment, anchor, tag, end: end2 }, onError) {
   const token = {
     type: "scalar",
     offset: emptyScalarPosition(offset, before, pos),
@@ -9381,16 +14904,16 @@ function composeEmptyNode(ctx, offset, before, pos, { spaceBefore, comment, anch
   if (spaceBefore) node.spaceBefore = true;
   if (comment) {
     node.comment = comment;
-    node.range[2] = end;
+    node.range[2] = end2;
   }
   return node;
 }
-function composeAlias({ options }, { offset, source, end }, onError) {
+function composeAlias({ options }, { offset, source, end: end2 }, onError) {
   const alias = new Alias(source.substring(1));
   if (alias.source === "") onError(offset, "BAD_ALIAS", "Alias cannot be an empty string");
   if (alias.source.endsWith(":")) onError(offset + source.length - 1, "BAD_ALIAS", "Alias ending in : is ambiguous", true);
   const valueEnd = offset + source.length;
-  const re = resolveEnd(end, valueEnd, options.strict, onError);
+  const re = resolveEnd(end2, valueEnd, options.strict, onError);
   alias.range = [
     offset,
     valueEnd,
@@ -9416,7 +14939,7 @@ var init_compose_node = __esm({
 });
 
 // ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-doc.js
-function composeDoc(options, directives, { offset, start, value, end }, onError) {
+function composeDoc(options, directives, { offset, start, value, end: end2 }, onError) {
   const opts = Object.assign({
     _directives: directives
   }, options);
@@ -9430,7 +14953,7 @@ function composeDoc(options, directives, { offset, start, value, end }, onError)
   };
   const props = resolveProps(start, {
     indicator: "doc-start",
-    next: value ?? end?.[0],
+    next: value ?? end2?.[0],
     offset,
     onError,
     parentIndent: 0,
@@ -9442,7 +14965,7 @@ function composeDoc(options, directives, { offset, start, value, end }, onError)
   }
   doc.contents = value ? composeNode(ctx, value, props, onError) : composeEmptyNode(ctx, props.end, start, null, props, onError);
   const contentEnd = doc.contents.range[2];
-  const re = resolveEnd(end, contentEnd, false, onError);
+  const re = resolveEnd(end2, contentEnd, false, onError);
   if (re.comment) doc.comment = re.comment;
   doc.range = [
     offset,
@@ -9625,14 +15148,14 @@ ${cb}` : comment;
               break;
             }
             this.doc.directives.docEnd = true;
-            const end = resolveEnd(token.end, token.offset + token.source.length, this.doc.options.strict, this.onError);
+            const end2 = resolveEnd(token.end, token.offset + token.source.length, this.doc.options.strict, this.onError);
             this.decorate(this.doc, true);
-            if (end.comment) {
+            if (end2.comment) {
               const dc = this.doc.comment;
               this.doc.comment = dc ? `${dc}
-${end.comment}` : end.comment;
+${end2.comment}` : end2.comment;
             }
-            this.doc.range[2] = end.offset;
+            this.doc.range[2] = end2.offset;
             break;
           }
           default:
@@ -9709,7 +15232,7 @@ function createScalarToken(value, context) {
       lineWidth: -1
     }
   });
-  const end = context.end ?? [
+  const end2 = context.end ?? [
     {
       type: "newline",
       offset: -1,
@@ -9731,7 +15254,7 @@ function createScalarToken(value, context) {
           source: head
         }
       ];
-      if (!addEndtoBlockProps(props, end)) props.push({
+      if (!addEndtoBlockProps(props, end2)) props.push({
         type: "newline",
         offset: -1,
         indent,
@@ -9751,7 +15274,7 @@ function createScalarToken(value, context) {
         offset,
         indent,
         source,
-        end
+        end: end2
       };
     case "'":
       return {
@@ -9759,7 +15282,7 @@ function createScalarToken(value, context) {
         offset,
         indent,
         source,
-        end
+        end: end2
       };
     default:
       return {
@@ -9767,7 +15290,7 @@ function createScalarToken(value, context) {
         offset,
         indent,
         source,
-        end
+        end: end2
       };
   }
 }
@@ -9853,8 +15376,8 @@ function setBlockScalarValue(token, source) {
     });
   }
 }
-function addEndtoBlockProps(props, end) {
-  if (end) for (const st of end) switch (st.type) {
+function addEndtoBlockProps(props, end2) {
+  if (end2) for (const st of end2) switch (st.type) {
     case "space":
     case "comment":
       props.push(st);
@@ -9874,15 +15397,15 @@ function setFlowScalarValue(token, source, type) {
       token.source = source;
       break;
     case "block-scalar": {
-      const end = token.props.slice(1);
+      const end2 = token.props.slice(1);
       let oa = source.length;
       if (token.props[0].type === "block-scalar-header") oa -= token.props[0].source.length;
-      for (const tok of end) tok.offset += oa;
+      for (const tok of end2) tok.offset += oa;
       delete token.props;
       Object.assign(token, {
         type,
         source,
-        end
+        end: end2
       });
       break;
     }
@@ -9907,13 +15430,13 @@ function setFlowScalarValue(token, source, type) {
     }
     default: {
       const indent = "indent" in token ? token.indent : -1;
-      const end = "end" in token && Array.isArray(token.end) ? token.end.filter((st) => st.type === "space" || st.type === "comment" || st.type === "newline") : [];
+      const end2 = "end" in token && Array.isArray(token.end) ? token.end.filter((st) => st.type === "space" || st.type === "comment" || st.type === "newline") : [];
       for (const key of Object.keys(token)) if (key !== "type" && key !== "offset") delete token[key];
       Object.assign(token, {
         type,
         indent,
         source,
-        end
+        end: end2
       });
     }
   }
@@ -10225,14 +15748,14 @@ var init_lexer = __esm({
         return offset;
       }
       getLine() {
-        let end = this.lineEndPos;
-        if (typeof end !== "number" || end !== -1 && end < this.pos) {
-          end = this.buffer.indexOf("\n", this.pos);
-          this.lineEndPos = end;
+        let end2 = this.lineEndPos;
+        if (typeof end2 !== "number" || end2 !== -1 && end2 < this.pos) {
+          end2 = this.buffer.indexOf("\n", this.pos);
+          this.lineEndPos = end2;
         }
-        if (end === -1) return this.atEnd ? this.buffer.substring(this.pos) : null;
-        if (this.buffer[end - 1] === "\r") end -= 1;
-        return this.buffer.substring(this.pos, end);
+        if (end2 === -1) return this.atEnd ? this.buffer.substring(this.pos) : null;
+        if (this.buffer[end2 - 1] === "\r") end2 -= 1;
+        return this.buffer.substring(this.pos, end2);
       }
       hasChars(n) {
         return this.pos + n <= this.buffer.length;
@@ -10444,18 +15967,18 @@ var init_lexer = __esm({
       }
       *parseQuotedScalar() {
         const quote = this.charAt(0);
-        let end = this.buffer.indexOf(quote, this.pos + 1);
+        let end2 = this.buffer.indexOf(quote, this.pos + 1);
         if (quote === "'") {
-          while (end !== -1 && this.buffer[end + 1] === "'") end = this.buffer.indexOf("'", end + 2);
+          while (end2 !== -1 && this.buffer[end2 + 1] === "'") end2 = this.buffer.indexOf("'", end2 + 2);
         } else {
-          while (end !== -1) {
+          while (end2 !== -1) {
             let n = 0;
-            while (this.buffer[end - 1 - n] === "\\") n += 1;
+            while (this.buffer[end2 - 1 - n] === "\\") n += 1;
             if (n % 2 === 0) break;
-            end = this.buffer.indexOf('"', end + 1);
+            end2 = this.buffer.indexOf('"', end2 + 1);
           }
         }
-        const qb = this.buffer.substring(0, end);
+        const qb = this.buffer.substring(0, end2);
         let nl = qb.indexOf("\n", this.pos);
         if (nl !== -1) {
           while (nl !== -1) {
@@ -10464,14 +15987,14 @@ var init_lexer = __esm({
             nl = qb.indexOf("\n", cs);
           }
           if (nl !== -1) {
-            end = nl - (qb[nl - 1] === "\r" ? 2 : 1);
+            end2 = nl - (qb[nl - 1] === "\r" ? 2 : 1);
           }
         }
-        if (end === -1) {
+        if (end2 === -1) {
           if (!this.atEnd) return this.setNext("quoted-scalar");
-          end = this.buffer.length;
+          end2 = this.buffer.length;
         }
-        yield* this.pushToIndex(end + 1, false);
+        yield* this.pushToIndex(end2 + 1, false);
         return this.flowLevel ? "flow" : "doc";
       }
       *parseBlockScalarHeader() {
@@ -10547,14 +16070,14 @@ var init_lexer = __esm({
       }
       *parsePlainScalar() {
         const inFlow = this.flowLevel > 0;
-        let end = this.pos - 1;
+        let end2 = this.pos - 1;
         let i = this.pos - 1;
         let ch;
         while (ch = this.buffer[++i]) {
           if (ch === ":") {
             const next = this.buffer[i + 1];
             if (isEmpty(next) || inFlow && flowIndicatorChars.has(next)) break;
-            end = i;
+            end2 = i;
           } else if (isEmpty(ch)) {
             let next = this.buffer[i + 1];
             if (ch === "\r") {
@@ -10562,7 +16085,7 @@ var init_lexer = __esm({
                 i += 1;
                 ch = "\n";
                 next = this.buffer[i + 1];
-              } else end = i;
+              } else end2 = i;
             }
             if (next === "#" || inFlow && flowIndicatorChars.has(next)) break;
             if (ch === "\n") {
@@ -10572,12 +16095,12 @@ var init_lexer = __esm({
             }
           } else {
             if (inFlow && flowIndicatorChars.has(ch)) break;
-            end = i;
+            end2 = i;
           }
         }
         if (!ch && !this.atEnd) return this.setNext("plain-scalar");
         yield SCALAR2;
-        yield* this.pushToIndex(end + 1, true);
+        yield* this.pushToIndex(end2 + 1, true);
         return inFlow ? "flow" : "doc";
       }
       *pushCount(n) {
@@ -11123,9 +16646,9 @@ var init_parser = __esm({
           case "newline":
             this.onKeyLine = false;
             if (it.value) {
-              const end = "end" in it.value ? it.value.end : void 0;
-              const last = Array.isArray(end) ? end[end.length - 1] : void 0;
-              if (last?.type === "comment") end?.push(this.sourceToken);
+              const end2 = "end" in it.value ? it.value.end : void 0;
+              const last = Array.isArray(end2) ? end2[end2.length - 1] : void 0;
+              if (last?.type === "comment") end2?.push(this.sourceToken);
               else map2.items.push({
                 start: [
                   this.sourceToken
@@ -11150,10 +16673,10 @@ var init_parser = __esm({
             } else {
               if (this.atIndentedComment(it.start, map2.indent)) {
                 const prev = map2.items[map2.items.length - 2];
-                const end = prev?.value?.end;
-                if (Array.isArray(end)) {
-                  Array.prototype.push.apply(end, it.start);
-                  end.push(this.sourceToken);
+                const end2 = prev?.value?.end;
+                if (Array.isArray(end2)) {
+                  Array.prototype.push.apply(end2, it.start);
+                  end2.push(this.sourceToken);
                   map2.items.pop();
                   return;
                 }
@@ -11393,9 +16916,9 @@ var init_parser = __esm({
         switch (this.type) {
           case "newline":
             if (it.value) {
-              const end = "end" in it.value ? it.value.end : void 0;
-              const last = Array.isArray(end) ? end[end.length - 1] : void 0;
-              if (last?.type === "comment") end?.push(this.sourceToken);
+              const end2 = "end" in it.value ? it.value.end : void 0;
+              const last = Array.isArray(end2) ? end2[end2.length - 1] : void 0;
+              if (last?.type === "comment") end2?.push(this.sourceToken);
               else seq2.items.push({
                 start: [
                   this.sourceToken
@@ -11413,10 +16936,10 @@ var init_parser = __esm({
             else {
               if (this.atIndentedComment(it.start, seq2.indent)) {
                 const prev = seq2.items[seq2.items.length - 2];
-                const end = prev?.value?.end;
-                if (Array.isArray(end)) {
-                  Array.prototype.push.apply(end, it.start);
-                  end.push(this.sourceToken);
+                const end2 = prev?.value?.end;
+                if (Array.isArray(end2)) {
+                  Array.prototype.push.apply(end2, it.start);
+                  end2.push(this.sourceToken);
                   seq2.items.pop();
                   return;
                 }
@@ -11882,5996 +17405,6 @@ var init_browser = __esm({
   }
 });
 
-// core/http.js
-var LIMITS = {
-  json: 16 * 2 ** 20,
-  page: 16 * 2 ** 20,
-  file: 512 * 2 ** 20,
-  large: 32 * 2 ** 20,
-  cache: 64 * 2 ** 20,
-  timeout: 6e4,
-  stall: 3e4,
-  concurrency: 6,
-  depth: 3,
-  pins: 2e3,
-  mirrors: 5,
-  versions: 1e4,
-  objects: 1e4,
-  nesting: 64,
-  retry: 3e4,
-  pageRequests: 4e4,
-  pageBytes: 256 * 2 ** 20
-};
-var FetchError = class extends Error {
-  constructor(kind, url, detail, status = null) {
-    super(url ? `${url}: ${detail}` : detail);
-    this.kind = kind;
-    this.url = url;
-    this.detail = detail;
-    this.status = status;
-  }
-};
-function pool(size) {
-  let active = 0;
-  const waiting = [];
-  const next = () => {
-    while (active < size && waiting.length) {
-      active++;
-      waiting.shift()();
-    }
-  };
-  function acquire(signal) {
-    return new Promise((resolve, reject) => {
-      if (signal?.aborted) return reject(new FetchError("aborted", "", "cancelled"));
-      let released = false;
-      const release = () => {
-        if (released) return;
-        released = true;
-        active--;
-        next();
-      };
-      const grant = () => {
-        signal?.removeEventListener("abort", give);
-        resolve(release);
-      };
-      const give = () => {
-        const k = waiting.indexOf(grant);
-        if (k >= 0) {
-          waiting.splice(k, 1);
-          reject(new FetchError("aborted", "", "cancelled"));
-        }
-      };
-      signal?.addEventListener("abort", give, {
-        once: true
-      });
-      waiting.push(grant);
-      next();
-    });
-  }
-  async function run(task, signal) {
-    const release = await acquire(signal);
-    try {
-      return await task();
-    } finally {
-      release();
-    }
-  }
-  run.acquire = acquire;
-  return run;
-}
-function pause(ms, signal) {
-  return new Promise((resolve, reject) => {
-    const stop2 = () => {
-      clearTimeout(timer);
-      reject(new FetchError("aborted", "", "cancelled"));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", stop2);
-      resolve();
-    }, ms);
-    if (signal?.aborted) stop2();
-    else signal?.addEventListener("abort", stop2, {
-      once: true
-    });
-  });
-}
-function watchdog() {
-  const controller = new AbortController();
-  let timer = null, ms = 0;
-  return {
-    signal: controller.signal,
-    fired: null,
-    why: "",
-    arm(limit, why) {
-      ms = limit;
-      this.why = why;
-      this.rearm();
-    },
-    rearm() {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        this.fired = this.why;
-        controller.abort();
-      }, ms);
-    },
-    stop() {
-      clearTimeout(timer);
-    }
-  };
-}
-var Busy = class {
-  constructor(retryAfter) {
-    const s = String(retryAfter ?? "").trim();
-    const ms = /^\d+$/.test(s) ? Number(s) * 1e3 : s ? Date.parse(s) - Date.now() : NaN;
-    this.after = Number.isNaN(ms) ? null : Math.min(Math.max(ms, 0), LIMITS.retry);
-  }
-};
-function tooLarge(url, limit, declared = null) {
-  return new FetchError("too-large", url, declared === null ? `more than ${limit} bytes` : `${declared} bytes, more than the limit of ${limit}`);
-}
-async function readLimited(response, url, limit, { dog, large, signal } = {}) {
-  const declared = Number(response.headers.get("content-length"));
-  if (declared > limit) {
-    response.body?.cancel().catch(() => {
-    });
-    throw tooLarge(url, limit, declared);
-  }
-  if (!response.body?.getReader) {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length > limit) throw tooLarge(url, limit);
-    return bytes;
-  }
-  const reader = response.body.getReader();
-  let buffer = new Uint8Array(Math.min(declared > 0 ? declared : limit, 65536));
-  let size = 0, release = null;
-  const turn = async () => {
-    dog?.stop();
-    release = await large.acquire(signal);
-    dog?.rearm();
-  };
-  try {
-    for (; ; ) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const end = size + value.length;
-      if (end > limit) throw tooLarge(url, limit);
-      if (!release && large && end > LIMITS.large) await turn();
-      if (end > buffer.length) {
-        let room = Math.min(limit, Math.max(2 * buffer.length, end));
-        if (declared >= end) room = Math.min(room, declared);
-        if (!release && large && room > LIMITS.large) await turn();
-        if (release && declared >= end) room = declared;
-        const grown = new Uint8Array(room);
-        grown.set(buffer.subarray(0, size));
-        buffer = grown;
-      }
-      buffer.set(value, size);
-      size = end;
-      dog?.rearm();
-    }
-  } catch (error) {
-    reader.cancel().catch(() => {
-    });
-    throw error;
-  } finally {
-    release?.();
-  }
-  return size === buffer.length ? buffer : buffer.slice(0, size);
-}
-var Http = class _Http {
-  constructor({ fetch: fetch2 = globalThis.fetch?.bind(globalThis), concurrency = LIMITS.concurrency, timeout = LIMITS.timeout, stall = LIMITS.stall, cacheLimit = LIMITS.cache, run = pool(concurrency), large = pool(1), budget = {
-    requests: LIMITS.pageRequests,
-    bytes: LIMITS.pageBytes
-  }, spent = {
-    requests: 0,
-    bytes: 0
-  } } = {}) {
-    this.fetchImpl = fetch2;
-    this.run = run;
-    this.large = large;
-    this.timeout = timeout;
-    this.stall = stall;
-    this.cache = /* @__PURE__ */ new Map();
-    this.cacheLimit = cacheLimit;
-    this.cacheBytes = 0;
-    this.requests = 0;
-    this.bytesRead = 0;
-    this.budget = budget;
-    this.spent = spent;
-  }
-  newPage() {
-    this.spent.requests = 0;
-    this.spent.bytes = 0;
-  }
-  another({ budget = this.budget } = {}) {
-    return new _Http({
-      fetch: this.fetchImpl,
-      timeout: this.timeout,
-      stall: this.stall,
-      run: this.run,
-      large: this.large,
-      cacheLimit: this.cacheLimit,
-      budget,
-      spent: budget === this.budget ? this.spent : void 0
-    });
-  }
-  checkUrl(url) {
-    let parsed;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new FetchError("scheme", String(url), "not an absolute URL");
-    }
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-      throw new FetchError("scheme", parsed.href, `${parsed.protocol} addresses cannot be read by a web page`);
-    }
-    return parsed.href;
-  }
-  async request(url, { method = "GET", limit = LIMITS.json, signal, headers } = {}) {
-    url = this.checkUrl(url);
-    const cancelled = () => new FetchError("aborted", url, "cancelled");
-    for (const wait of [
-      1e3,
-      3e3,
-      null
-    ]) {
-      const release = await this.run.acquire(signal).catch(() => {
-        throw cancelled();
-      });
-      let answer;
-      try {
-        answer = await this.attempt(url, method, limit, signal, wait !== null, headers);
-      } finally {
-        release();
-      }
-      if (!(answer instanceof Busy)) return answer;
-      await pause(answer.after ?? wait, signal).catch(() => {
-        throw cancelled();
-      });
-    }
-  }
-  async attempt(url, method, limit, signal, canRetry, headers) {
-    const room = this.budget ? this.budget.bytes - this.spent.bytes : Infinity;
-    if (this.budget && (this.spent.requests >= this.budget.requests || room <= 0)) {
-      throw new FetchError("budget", url, `not read: this page has made ${this.spent.requests} requests and read ${this.spent.bytes} bytes, the most allowed for one page`);
-    }
-    const dog = watchdog();
-    const both = signal ? AbortSignal.any([
-      signal,
-      dog.signal
-    ]) : dog.signal;
-    this.requests++;
-    this.spent.requests++;
-    dog.arm(this.timeout, `no answer in ${this.timeout / 1e3} s`);
-    try {
-      let response;
-      try {
-        response = await this.fetchImpl(url, {
-          method,
-          signal: both,
-          credentials: "omit",
-          redirect: "follow",
-          ...headers ? {
-            headers
-          } : {}
-        });
-      } catch (error) {
-        throw await this.diagnose(url, error, signal, dog);
-      }
-      const status = response.status;
-      const busy = status === 429 || status >= 500;
-      if (canRetry && busy) {
-        response.body?.cancel().catch(() => {
-        });
-        return new Busy(response.headers.get("retry-after"));
-      }
-      if (!response.ok) {
-        response.body?.cancel().catch(() => {
-        });
-        const kind = status === 404 || status === 410 ? "not-found" : status === 403 ? "forbidden" : busy ? "busy" : "http";
-        throw new FetchError(kind, url, `HTTP ${status}`, status);
-      }
-      if (method === "HEAD") return response;
-      dog.arm(this.stall, `the answer stalled: nothing received for ${this.stall / 1e3} s`);
-      try {
-        const bytes = await readLimited(response, url, Math.min(limit, room), {
-          dog,
-          large: this.large,
-          signal
-        });
-        this.bytesRead += bytes.length;
-        this.spent.bytes += bytes.length;
-        return bytes;
-      } catch (error) {
-        if (error?.kind === "too-large" && room < limit) {
-          throw new FetchError("budget", url, `not read whole: this page may read ${this.budget.bytes} bytes at most`);
-        }
-        if (error instanceof FetchError && error.kind !== "aborted") throw error;
-        throw this.interrupted(url, error, signal, dog);
-      }
-    } finally {
-      dog.stop();
-    }
-  }
-  async diagnose(url, error, signal, dog) {
-    if (signal?.aborted) return new FetchError("aborted", url, "cancelled");
-    if (dog.fired) return new FetchError("timeout", url, dog.fired);
-    const page = globalThis.location;
-    if (page?.protocol === "https:" && url.startsWith("http:") && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url)) {
-      return new FetchError("mixed", url, "an http: address cannot be read from an https: page");
-    }
-    if (typeof document !== "undefined") {
-      try {
-        await this.fetchImpl(url, {
-          method: "HEAD",
-          mode: "no-cors",
-          credentials: "omit",
-          signal: AbortSignal.timeout(this.timeout)
-        });
-        return new FetchError("cors", url, "the server does not allow other sites to read it (no Access-Control-Allow-Origin header), or it is missing");
-      } catch {
-      }
-    }
-    return new FetchError("network", url, `cannot be reached (${error?.message || error})`);
-  }
-  interrupted(url, error, signal, dog) {
-    if (signal?.aborted) return new FetchError("aborted", url, "cancelled");
-    if (dog.fired) return new FetchError("timeout", url, dog.fired);
-    return new FetchError("network", url, `the answer was interrupted (${error?.message || error})`);
-  }
-  cached(url, options = {}) {
-    url = this.checkUrl(url);
-    const { signal, ...rest } = options;
-    let entry = this.cache.get(url);
-    if (entry) {
-      this.cache.delete(url);
-      this.cache.set(url, entry);
-    } else {
-      const controller = new AbortController();
-      entry = {
-        controller,
-        waiters: 0,
-        settled: false,
-        size: 0
-      };
-      entry.answer = this.request(url, {
-        ...rest,
-        signal: controller.signal
-      });
-      this.cache.set(url, entry);
-      entry.answer.then((bytes) => {
-        entry.settled = true;
-        if (this.cache.get(url) !== entry) return;
-        entry.size = bytes.length;
-        this.cacheBytes += entry.size;
-        this.evict();
-      }, () => {
-        entry.settled = true;
-        this.forget(url, entry);
-      });
-    }
-    return this.share(url, entry, signal);
-  }
-  share(url, entry, signal) {
-    if (signal?.aborted) return Promise.reject(new FetchError("aborted", url, "cancelled"));
-    entry.waiters++;
-    return new Promise((resolve, reject) => {
-      let left = false;
-      const leave = () => {
-        if (left) return false;
-        left = true;
-        signal?.removeEventListener("abort", give);
-        if (--entry.waiters === 0 && !entry.settled) {
-          entry.controller.abort();
-          this.forget(url, entry);
-        }
-        return true;
-      };
-      const give = () => {
-        if (leave()) reject(new FetchError("aborted", url, "cancelled"));
-      };
-      signal?.addEventListener("abort", give, {
-        once: true
-      });
-      entry.answer.then((bytes) => {
-        if (leave()) resolve(bytes);
-      }, (error) => {
-        if (leave()) reject(error);
-      });
-    });
-  }
-  forget(url, entry) {
-    if (this.cache.get(url) !== entry) return;
-    this.cache.delete(url);
-    this.cacheBytes -= entry.size;
-  }
-  evict() {
-    for (const [url, entry] of this.cache) {
-      if (this.cacheBytes <= this.cacheLimit) break;
-      if (entry.settled) this.forget(url, entry);
-    }
-  }
-  async json(url, options = {}) {
-    return parseJson(await this.cached(url, options), url);
-  }
-  async text(url, options = {}) {
-    const bytes = await this.request(url, {
-      limit: LIMITS.page,
-      ...options
-    });
-    return new TextDecoder("utf-8").decode(bytes);
-  }
-  async size(url, options = {}) {
-    const response = await this.request(url, {
-      ...options,
-      method: "HEAD"
-    });
-    const length = response.headers.get("content-length");
-    return length === null ? null : Number(length);
-  }
-};
-function nesting(text3) {
-  let depth = 0, most = 0, inString = false;
-  for (let k = 0; k < text3.length; k++) {
-    const c = text3.charCodeAt(k);
-    if (inString) {
-      if (c === 92) k++;
-      else if (c === 34) inString = false;
-    } else if (c === 34) inString = true;
-    else if (c === 91 || c === 123) most = Math.max(most, ++depth);
-    else if (c === 93 || c === 125) depth--;
-  }
-  return most;
-}
-function parseJson(bytes, url = "", { integers = false } = {}) {
-  let text3;
-  try {
-    text3 = new TextDecoder("utf-8", {
-      fatal: true,
-      ignoreBOM: true
-    }).decode(bytes);
-  } catch {
-    throw new FetchError("json", url, "is not UTF-8 (section 2)");
-  }
-  if (/^\ufeff?\s*</.test(text3)) {
-    throw new FetchError("html", url, "an HTML page, not the file: probably a wrong base URL or a site\u2019s fallback page");
-  }
-  if (text3.charCodeAt(0) === 65279) throw new FetchError("json", url, "starts with a byte order mark (section 2)");
-  if (nesting(text3) > LIMITS.nesting) {
-    throw new FetchError("too-large", url, `is nested deeper than ${LIMITS.nesting} levels`);
-  }
-  try {
-    return integers ? parseIntegers(text3) : JSON.parse(text3);
-  } catch (error) {
-    throw new FetchError("json", url, `is not JSON (${error.message})`);
-  }
-}
-var INTEGER = /^-?(?:0|[1-9][0-9]*)$/;
-var EXACT = 2n ** 53n - 1n;
-function numberProblem(token) {
-  if (!INTEGER.test(token)) return `the number ${token} is not an integer`;
-  const n = BigInt(token);
-  return n > EXACT || n < -EXACT ? `the integer ${token} has no exact form in JSON (section 2)` : null;
-}
-function numberTokens(text3) {
-  const tokens = [];
-  let inString = false;
-  for (let k = 0; k < text3.length; k++) {
-    const c = text3[k];
-    if (inString) {
-      if (c === "\\") k++;
-      else if (c === '"') inString = false;
-    } else if (c === '"') inString = true;
-    else if (c === "-" || c >= "0" && c <= "9") {
-      let end = k;
-      while (end < text3.length && /[-+.eE0-9]/.test(text3[end])) end++;
-      tokens.push(text3.slice(k, end));
-      k = end - 1;
-    }
-  }
-  return tokens;
-}
-var HAS_SOURCE = (() => {
-  try {
-    return JSON.parse("1", (key, value, context) => context?.source === "1") === true;
-  } catch {
-    return false;
-  }
-})();
-function parseIntegers(text3, { source = HAS_SOURCE } = {}) {
-  const check2 = (token) => {
-    const problem = numberProblem(token);
-    if (problem) throw new Error(problem);
-  };
-  if (!source) {
-    const value = JSON.parse(text3);
-    numberTokens(text3).forEach(check2);
-    return value;
-  }
-  return JSON.parse(text3, (key, value, context) => {
-    if (typeof value === "number") check2(context.source);
-    return value;
-  });
-}
-async function sha512(bytes) {
-  const subtle2 = globalThis.crypto?.subtle;
-  if (!subtle2) {
-    throw new FetchError("crypto", "", "WebCrypto is not available (it needs https: or localhost)");
-  }
-  const digest = new Uint8Array(await subtle2.digest("SHA-512", bytes));
-  return Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-// core/crypto.js
-function subtle() {
-  const s = globalThis.crypto?.subtle;
-  if (!s) throw new FetchError("crypto", "", "WebCrypto is not available (it needs https: or localhost)");
-  return s;
-}
-async function sha256(bytes) {
-  return new Uint8Array(await subtle().digest("SHA-256", bytes));
-}
-async function sha512bytes(bytes) {
-  return new Uint8Array(await subtle().digest("SHA-512", bytes));
-}
-function hex(bytes) {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-function utf8(text3) {
-  return new TextEncoder().encode(text3);
-}
-function sameBytes(a, b) {
-  if (!a || !b || a.length !== b.length) return false;
-  for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
-  return true;
-}
-var B32 = "abcdefghijklmnopqrstuvwxyz234567";
-function base32(bytes) {
-  let out = "", bits = 0, value = 0;
-  for (const b of bytes) {
-    value = value << 8 | b;
-    bits += 8;
-    while (bits >= 5) {
-      out += B32[value >>> bits - 5 & 31];
-      bits -= 5;
-    }
-    value &= (1 << bits) - 1;
-  }
-  if (bits > 0) out += B32[value << 5 - bits & 31];
-  return out;
-}
-var B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-function base58(bytes) {
-  let n = 0n;
-  for (const b of bytes) n = n * 256n + BigInt(b);
-  let out = "";
-  while (n > 0n) {
-    out = B58[Number(n % 58n)] + out;
-    n /= 58n;
-  }
-  let zeros = 0;
-  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
-  return "1".repeat(zeros) + out;
-}
-function unbase58(text3) {
-  let n = 0n;
-  for (const c of text3) {
-    const k = B58.indexOf(c);
-    if (k < 0) throw new Error(`not base58btc: ${JSON.stringify(c)}`);
-    n = n * 58n + BigInt(k);
-  }
-  const body = [];
-  while (n > 0n) {
-    body.unshift(Number(n % 256n));
-    n /= 256n;
-  }
-  let zeros = 0;
-  while (zeros < text3.length && text3[zeros] === "1") zeros++;
-  return new Uint8Array([
-    ...new Array(zeros).fill(0),
-    ...body
-  ]);
-}
-function unbase64(text3) {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text3)) {
-    throw new Error("not base64");
-  }
-  const binary2 = atob(text3);
-  return Uint8Array.from(binary2, (c) => c.charCodeAt(0));
-}
-var P = 2n ** 255n - 19n;
-var L = 2n ** 252n + 27742317777372353535851937790883648493n;
-var Y8 = littleEndian(fromHex("26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05"));
-var SMALL_ORDER_Y = /* @__PURE__ */ new Set([
-  0n,
-  1n,
-  P - 1n,
-  P,
-  P + 1n,
-  Y8,
-  P - Y8
-]);
-function fromHex(text3) {
-  return Uint8Array.from(text3.match(/../g), (b) => parseInt(b, 16));
-}
-function littleEndian(bytes) {
-  let n = 0n;
-  for (let k = bytes.length - 1; k >= 0; k--) n = n << 8n | BigInt(bytes[k]);
-  return n;
-}
-function yOf(encoding) {
-  return littleEndian(encoding) & (1n << 255n) - 1n;
-}
-function strictlyAcceptable(publicKey, signature) {
-  if (publicKey.length !== 32 || signature.length !== 64) return false;
-  if (littleEndian(signature.subarray(32)) >= L) return false;
-  const a = yOf(publicKey), r = yOf(signature.subarray(0, 32));
-  return a < P && r < P && !SMALL_ORDER_Y.has(a) && !SMALL_ORDER_Y.has(r);
-}
-async function verifyEd25519(publicKey, message2, signature, { engine = "js" } = {}) {
-  if (!strictlyAcceptable(publicKey, signature)) return false;
-  if (engine === "webcrypto") {
-    try {
-      const key = await subtle().importKey("raw", publicKey, {
-        name: "Ed25519"
-      }, false, [
-        "verify"
-      ]);
-      return await subtle().verify({
-        name: "Ed25519"
-      }, key, signature, message2);
-    } catch {
-      return false;
-    }
-  }
-  return verifyInJs(publicKey, message2, signature);
-}
-var mod = (a) => (a % P + P) % P;
-function power(base, exponent) {
-  let result = 1n;
-  base = mod(base);
-  while (exponent > 0n) {
-    if (exponent & 1n) result = mod(result * base);
-    base = mod(base * base);
-    exponent >>= 1n;
-  }
-  return result;
-}
-var invert = (a) => power(a, P - 2n);
-var D = mod(-121665n * invert(121666n));
-var SQRT_M1 = power(2n, (P - 1n) / 4n);
-var BY = mod(4n * invert(5n));
-var BASE = {
-  X: 15112221349535400772501151409588531511454012693041857206046113283949847762202n,
-  Y: BY,
-  Z: 1n,
-  T: mod(15112221349535400772501151409588531511454012693041857206046113283949847762202n * BY)
-};
-var ZERO = {
-  X: 0n,
-  Y: 1n,
-  Z: 1n,
-  T: 0n
-};
-function add(p, q) {
-  const a = mod((p.Y - p.X) * (q.Y - q.X));
-  const b = mod((p.Y + p.X) * (q.Y + q.X));
-  const c = mod(2n * D * p.T * q.T);
-  const d = mod(2n * p.Z * q.Z);
-  const e = b - a, f = d - c, g = d + c, h = b + a;
-  return {
-    X: mod(e * f),
-    Y: mod(g * h),
-    Z: mod(f * g),
-    T: mod(e * h)
-  };
-}
-function multiply(n, point) {
-  let result = ZERO;
-  while (n > 0n) {
-    if (n & 1n) result = add(result, point);
-    point = add(point, point);
-    n >>= 1n;
-  }
-  return result;
-}
-function decode(bytes) {
-  const y = yOf(bytes);
-  const sign = bytes[31] >> 7;
-  if (y >= P) return null;
-  const u = mod(y * y - 1n), v = mod(D * y * y + 1n);
-  let x = mod(u * power(v, 3n) * power(u * power(v, 7n), (P - 5n) / 8n));
-  if (mod(v * x * x) !== u) {
-    if (mod(v * x * x) !== mod(-u)) return null;
-    x = mod(x * SQRT_M1);
-  }
-  if (x === 0n && sign === 1) return null;
-  if (Number(x & 1n) !== sign) x = P - x;
-  return {
-    X: x,
-    Y: y,
-    Z: 1n,
-    T: mod(x * y)
-  };
-}
-function encode(point) {
-  const zi = invert(point.Z);
-  const x = mod(point.X * zi), y = mod(point.Y * zi);
-  const out = new Uint8Array(32);
-  let n = y;
-  for (let k = 0; k < 32; k++) {
-    out[k] = Number(n & 255n);
-    n >>= 8n;
-  }
-  out[31] |= Number(x & 1n) << 7;
-  return out;
-}
-async function verifyInJs(publicKey, message2, signature) {
-  const a = decode(publicKey);
-  if (!a) return false;
-  const r = signature.subarray(0, 32);
-  const s = littleEndian(signature.subarray(32));
-  const k = littleEndian(await sha512bytes(new Uint8Array([
-    ...r,
-    ...publicKey,
-    ...message2
-  ]))) % L;
-  const minusA = {
-    X: mod(-a.X),
-    Y: a.Y,
-    Z: a.Z,
-    T: mod(-a.T)
-  };
-  return sameBytes(encode(add(multiply(s, BASE), multiply(k, minusA))), r);
-}
-
-// core/names.js
-var NAME = /^[a-z2-7]{52}$/;
-var OWNER_NAME = /^[a-z2-7]{51}[aq]$/;
-var LABEL = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-var DID_KEY = /^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$/;
-var CREATED = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$/;
-var NONCE = /^([0-9a-f]{2}){16,}$/;
-var GENESIS = "genesis.json";
-var GENESIS_FORMAT = "opensheaf-genesis/0.2";
-var KINDS = [
-  "document",
-  "collection",
-  "owner"
-];
-var ED25519_PUB = [
-  237,
-  1
-];
-function didKey(publicKey) {
-  if (publicKey.length !== 32) throw new Error("an Ed25519 public key has 32 bytes");
-  return "did:key:z" + base58(new Uint8Array([
-    ...ED25519_PUB,
-    ...publicKey
-  ]));
-}
-function didKeyPublic(did) {
-  if (typeof did !== "string" || !did.startsWith("did:key:z")) throw new Error(`not a did:key URI in base58btc: ${did}`);
-  const raw = unbase58(did.slice("did:key:z".length));
-  if (raw.length !== 34 || raw[0] !== ED25519_PUB[0] || raw[1] !== ED25519_PUB[1]) {
-    throw new Error(`not the did:key URI of an Ed25519 key: ${did}`);
-  }
-  if (didKey(raw.subarray(2)) !== did) throw new Error(`not the canonical did:key URI of its key: ${did}`);
-  return raw.subarray(2);
-}
-async function keyDigest(did) {
-  return base32(await sha256(utf8(did)));
-}
-async function keyId(did) {
-  return (await keyDigest(did)).slice(0, 16);
-}
-async function nameOf(genesis, k = 0) {
-  if (!(Number.isInteger(k) && k >= 0 && k <= 15)) throw new Error("the algorithms of names are numbered 0 to 15");
-  const s = base32(await sha256(new Uint8Array([
-    ...utf8(`opensheaf-name-${k}
-`),
-    ...genesis
-  ])));
-  return s.slice(0, -1) + B32[B32.indexOf(s[s.length - 1]) | k];
-}
-function algorithm(name2) {
-  return B32.indexOf(name2[name2.length - 1]) & 15;
-}
-async function isNameOf(name2, genesis) {
-  return typeof name2 === "string" && NAME.test(name2) && await nameOf(genesis, algorithm(name2)) === name2;
-}
-function objectId(name2, owner) {
-  return `sheaf:${name2}:${owner}`;
-}
-function keyLogPin(owner, number, digest) {
-  return `sheaf:${owner}/v${number}?sha512=${digest}`;
-}
-function parseId(id) {
-  const m = typeof id === "string" ? /^sheaf:([^:]+):([^:]+)$/.exec(id) : null;
-  if (!m) return null;
-  if (m[1] === "draft") return LABEL.test(m[2]) && m[2].length <= 64 ? {
-    draft: m[2]
-  } : null;
-  return NAME.test(m[1]) && OWNER_NAME.test(m[2]) ? {
-    name: m[1],
-    owner: m[2]
-  } : null;
-}
-async function readGenesis(bytes) {
-  if (bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191) throw new Error("a genesis record has no byte order mark");
-  let rec;
-  try {
-    rec = parseIntegers(new TextDecoder("utf-8", {
-      fatal: true
-    }).decode(bytes));
-  } catch (error) {
-    throw new Error(`a genesis record is JSON in UTF-8 (${error.message})`);
-  }
-  if (!isObject(rec) || rec.format !== GENESIS_FORMAT) throw new Error(`not a genesis record of format ${GENESIS_FORMAT}`);
-  if (!KINDS.includes(rec.kind)) throw new Error(`unknown kind ${JSON.stringify(rec.kind)}`);
-  if (typeof rec.created !== "string" || !CREATED.test(rec.created)) throw new Error("created must be a date and time in UTC");
-  if (typeof rec.nonce !== "string" || !NONCE.test(rec.nonce)) throw new Error("nonce must have at least 128 bits in lowercase hexadecimal");
-  const ownerFields = [
-    "keys",
-    "threshold",
-    "next",
-    "nextThreshold",
-    "keeper",
-    "extensions"
-  ];
-  const allowed = [
-    "format",
-    "kind",
-    "created",
-    "nonce",
-    ...rec.kind === "owner" ? ownerFields : [
-      "originator"
-    ]
-  ];
-  const extra = Object.keys(rec).filter((k) => !allowed.includes(k)).sort();
-  if (extra.length) throw new Error(`fields not allowed in a genesis record of kind ${rec.kind}: ${extra.join(", ")}`);
-  if (rec.kind === "owner") {
-    const problems = await keyRulesOfRecord(rec);
-    if ("keeper" in rec && !(Array.isArray(rec.keeper) && rec.keeper.length === 1 && typeof rec.keeper[0] === "string" && keeperValid(rec.keeper[0]))) {
-      problems.push("keeper must be a list of one ORCID iD (with its check digit) or https://<domain>/");
-    }
-    if ("extensions" in rec && !(isObject(rec.extensions) && Object.values(rec.extensions).every(isObject))) {
-      problems.push("extensions must map names of extensions to objects");
-    }
-    if (problems.length) throw new Error(problems.join("; "));
-  } else if (typeof rec.originator !== "string" || !OWNER_NAME.test(rec.originator)) {
-    throw new Error("a document or a collection names its originator, an owner name");
-  }
-  return rec;
-}
-function isObject(x) {
-  return x !== null && typeof x === "object" && !Array.isArray(x);
-}
-async function keyRulesOfRecord(rec) {
-  const problems = [];
-  let keys = rec.keys, next = rec.next;
-  if (!Array.isArray(keys) || !keys.length || !keys.every((k) => typeof k === "string" && DID_KEY.test(k))) {
-    problems.push("keys must be a list of at least one did:key URI of an Ed25519 key");
-    keys = [];
-  }
-  if (!Array.isArray(next) || !next.length || !next.every((d) => typeof d === "string" && OWNER_NAME.test(d))) {
-    problems.push("next must be a list of at least one digest of a key (52 characters of base32)");
-    next = [];
-  }
-  for (const [field2, items] of [
-    [
-      "keys",
-      keys
-    ],
-    [
-      "next",
-      next
-    ]
-  ]) {
-    if (new Set(items).size !== items.length) problems.push(`${field2} lists an item twice`);
-  }
-  for (const [field2, count, items] of [
-    [
-      "threshold",
-      rec.threshold,
-      keys
-    ],
-    [
-      "nextThreshold",
-      rec.nextThreshold,
-      next
-    ]
-  ]) {
-    if (!Number.isInteger(count) || count < 1) problems.push(`${field2} must be a positive integer`);
-    else if (count > items.length) problems.push(`${field2} ${count} exceeds the ${items.length} item(s) it counts (rule 1)`);
-  }
-  const digests = await Promise.all(keys.map(keyDigest));
-  if (digests.some((d) => next.includes(d))) problems.push("a key is both a current key and a rotation key (rules 2 and 3)");
-  return problems;
-}
-function jcs(value) {
-  if (value === null || typeof value === "boolean") return String(value);
-  if (typeof value === "number") {
-    if (!Number.isInteger(value)) throw new Error("the canonical JSON of OpenSheaf has no fractional numbers");
-    if (!Number.isSafeInteger(value)) throw new Error(`the integer ${value} has no exact form in JCS`);
-    return String(value);
-  }
-  if (typeof value === "string") {
-    if (!value.isWellFormed()) throw new Error("a string with a lone surrogate has no JCS form");
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map(jcs).join(",")}]`;
-  if (isObject(value)) {
-    const names = Object.keys(value).sort();
-    return `{${names.map((k) => jcs(k) + ":" + jcs(value[k])).join(",")}}`;
-  }
-  throw new Error(`not a JSON value: ${typeof value}`);
-}
-function jcsBytes(value) {
-  return utf8(jcs(value));
-}
-var SheafUri = class _SheafUri {
-  constructor({ name: name2, owner = null, version = null, sha512: sha5123 = null, at = null, params = [] }) {
-    Object.assign(this, {
-      name: name2,
-      owner,
-      version,
-      sha512: sha5123,
-      at,
-      params
-    });
-  }
-  toString() {
-    let s = `sheaf:${this.name}`;
-    if (this.owner !== null) s += `:${this.owner}`;
-    if (this.version !== null) s += `/v${this.version}`;
-    const query = [];
-    if (this.sha512 !== null) query.push(`sha512=${this.sha512}`);
-    if (this.at !== null) query.push("at=" + encodeURIComponent(this.at).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase()));
-    for (const [k, v] of this.params) query.push(`${k}=${v}`);
-    return s + (query.length ? "?" + query.join("&") : "");
-  }
-  isComplete() {
-    return this.name.length === 52 && (this.owner === null || this.owner === "*" || this.owner.length === 52);
-  }
-  canonical(originator = null) {
-    if (!this.isComplete()) throw new Error(`a short form has no canonical form until it is expanded: ${this}`);
-    const owner = this.owner !== null && this.owner === originator ? null : this.owner;
-    return new _SheafUri({
-      name: this.name,
-      owner,
-      version: this.version,
-      sha512: this.sha512
-    }).toString();
-  }
-  matches(name2, owner) {
-    return name2.startsWith(this.name) && (this.owner === null || this.owner === "*" || owner.startsWith(this.owner));
-  }
-};
-var PART = /^[a-z2-7]+$/;
-var ESCAPED = /^(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})*$/;
-function parseSheaf(text3, { short: short2 = false, fold = false } = {}) {
-  const fail = (why) => {
-    throw new Error(`not a sheaf: URI (${why}): ${text3}`);
-  };
-  if (typeof text3 !== "string") fail("not a string");
-  const q = text3.indexOf("?");
-  let head = q < 0 ? text3 : text3.slice(0, q);
-  const query = q < 0 ? null : text3.slice(q + 1);
-  if (fold) head = head.toLowerCase();
-  const m = /^sheaf:([^:/]+)(?::([^:/]+))?(?:\/v([^/]*))?$/.exec(head);
-  if (!m) fail("sheaf:<name>[:<owner>][/v<n>]");
-  const [, name2, owner = null, version = null] = m;
-  for (const [label, part] of [
-    [
-      "name",
-      name2
-    ],
-    [
-      "owner",
-      owner
-    ]
-  ]) {
-    if (part === null || label === "owner" && part === "*") continue;
-    if (!PART.test(part) || part.length > 52 || part.length < 52 && !(short2 && part.length >= 8)) {
-      fail(`the ${label} has 52 characters of base32` + (short2 ? ", or at least 8" : ""));
-    }
-  }
-  if (owner && owner.length === 52 && !OWNER_NAME.test(owner)) fail("an owner name is a name of algorithm 0");
-  if (version !== null && !/^[1-9][0-9]*$/.test(version)) fail("a version is /v and a positive integer without leading zeros");
-  const uri = new SheafUri({
-    name: name2,
-    owner,
-    version: version === null ? null : Number(version)
-  });
-  if (query !== null) {
-    const seen = [];
-    for (const p of query.split("&")) {
-      const eq = p.indexOf("=");
-      let key = eq < 0 ? p : p.slice(0, eq);
-      let value = eq < 0 ? "" : p.slice(eq + 1);
-      if (fold) key = key.toLowerCase();
-      if (eq < 0 || !key) fail("parameters are name=value");
-      if (key === "sha512") {
-        if (fold) value = value.toLowerCase();
-        if (seen.includes("sha512") || uri.version === null || !/^[0-9a-f]{128}$/.test(value)) {
-          fail("one sha512, after a version, of 128 hexadecimal digits");
-        }
-        if (seen.includes("at")) fail("at comes after sha512");
-        uri.sha512 = value;
-      } else if (key === "at") {
-        if (seen.includes("at") || !ESCAPED.test(value)) fail("one at, percent-encoded");
-        const at = decodeURIComponent(value);
-        if (!at.startsWith("https://") || !at.endsWith("/")) fail("at is an https URL ending with /");
-        uri.at = at;
-      } else {
-        uri.params.push([
-          key,
-          value
-        ]);
-      }
-      seen.push(key);
-    }
-  }
-  if (owner === "*" && (uri.version !== null || uri.sha512 !== null)) fail("a work, sheaf:<name>:*, has no version");
-  return uri;
-}
-var ORCID = /^(?:https:\/\/orcid\.org\/)?([0-9]{4})-([0-9]{4})-([0-9]{4})-([0-9]{3}[0-9X])$/;
-function orcidValid(text3) {
-  const m = ORCID.exec(text3);
-  if (!m) return false;
-  const digits = m.slice(1).join("");
-  let total = 0;
-  for (const ch of digits.slice(0, 15)) total = (total + Number(ch)) * 2;
-  const r = (12 - total % 11) % 11;
-  return (r === 10 ? "X" : String(r)) === digits[15];
-}
-function keeperValid(uri) {
-  if (uri.startsWith("https://orcid.org/")) return orcidValid(uri);
-  return /^https:\/\/[a-z0-9.-]+\/$/.test(uri);
-}
-
-// core/paths.js
-var VERSION_RE = /^v[1-9][0-9]*$/;
-function isObjectId(s) {
-  return parseId(s) !== null;
-}
-function isVersion(s) {
-  return typeof s === "string" && VERSION_RE.test(s);
-}
-function versionNumber(v) {
-  return Number(String(v).slice(1));
-}
-var OWNER_NAME_LAYOUT = "opensheaf-owner-name-storage-layout";
-var HASHED_LAYOUT = "0003-hash-and-id-n-tuple-storage-layout";
-var LAYOUT_FILE = "opensheaf-owner-name-storage-layout.md";
-async function pathOf(id, layout = OWNER_NAME_LAYOUT) {
-  const parts = parseId(id);
-  if (!parts) throw new FetchError("unsafe", "", `${JSON.stringify(id)}: not the identifier of a line or of a draft (sections 3.2 and 4)`);
-  if (layout === HASHED_LAYOUT) {
-    const h = hex(await sha256(utf8(id)));
-    let encoded = [
-      ...id
-    ].map((c) => /^[A-Za-z0-9_-]$/.test(c) ? c : Array.from(utf8(c), (b) => "%" + b.toString(16).padStart(2, "0")).join("")).join("");
-    if (encoded.length > 100) encoded = encoded.slice(0, 100) + "-" + h;
-    return [
-      h.slice(0, 3),
-      h.slice(3, 6),
-      h.slice(6, 9),
-      encoded
-    ];
-  }
-  return parts.draft ? [
-    "draft",
-    parts.draft
-  ] : [
-    parts.owner,
-    parts.name
-  ];
-}
-function logicalPathProblem(p) {
-  if (typeof p !== "string") return "is not a string";
-  if (p.includes("\\")) return "has a \\";
-  if (p.split("/").some((x) => x === "" || x === "." || x === "..")) return "has an empty, . or .. segment";
-  if (p.normalize("NFC") !== p) return "is not in Unicode normalisation form C";
-  return null;
-}
-function unsafePath(path) {
-  if (typeof path !== "string" || path === "") return "is empty";
-  for (const segment of path.split("/")) {
-    if (segment === "" || segment === "." || segment === "..") return "has an empty, . or .. segment";
-    if (/[\u0000-\u001f\u007f\\]/.test(segment)) return "has a control character or a backslash";
-  }
-  return null;
-}
-function contentPathProblem(cp, contentDirectory = "content") {
-  const unsafe = unsafePath(cp);
-  if (unsafe) return unsafe;
-  const [ver, dir, ...rest] = cp.split("/");
-  if (!isVersion(ver) || dir !== contentDirectory || rest.length === 0) {
-    return `is not in the content directory of a version (vN/${contentDirectory}/...)`;
-  }
-  return null;
-}
-function encodeSegment(segment) {
-  return encodeURIComponent(segment).replace(/%(3D|2C|3A|40|2B|24|26|3B)/g, (m) => decodeURIComponent(m));
-}
-function under(root, segments) {
-  let url = root;
-  segments.forEach((segment, k) => {
-    const problem = unsafePath(segment) || (segment.includes("/") ? "has a /" : null);
-    if (problem) throw new FetchError("unsafe", root, `the name ${JSON.stringify(segment)} ${problem}`);
-    url += encodeSegment(segment) + (k + 1 < segments.length ? "/" : "");
-  });
-  if (!new URL(url).href.startsWith(new URL(root).href)) {
-    throw new FetchError("unsafe", url, "is not under the storage root");
-  }
-  return url;
-}
-function underPath(root, path) {
-  const problem = unsafePath(path);
-  if (problem) throw new FetchError("unsafe", root, `the path ${JSON.stringify(path)} ${problem}`);
-  return under(root, path.split("/"));
-}
-
-// core/signatures.js
-var SIGNATURE_FORMAT = "opensheaf-signature/0.2";
-var WITNESSES = "extensions/opensheaf-witnesses";
-function message(objectId2, version, inventory, keyLog) {
-  return utf8(`${SIGNATURE_FORMAT}
-object ${objectId2}
-version ${version}
-inventory ${inventory}
-keylog ${keyLog}
-`);
-}
-async function fileName(did) {
-  return `signature-${await keyId(did)}.json`;
-}
-var FIELDS = {
-  format: new RegExp(`^${SIGNATURE_FORMAT.replace(/[./]/g, "\\$&")}$`),
-  object: /^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$/,
-  version: /^v[1-9][0-9]*$/,
-  inventorySha512: /^[0-9a-f]{128}$/,
-  signer: OWNER_NAME,
-  key: DID_KEY,
-  keyLog: /^sheaf:([a-z2-7]{51}[aq])\/v([1-9][0-9]*)\?sha512=([0-9a-f]{128})$/,
-  signature: /^[A-Za-z0-9+/]{85}[AQgw]==$/
-};
-function readSignatureFile(bytes) {
-  let d;
-  try {
-    d = JSON.parse(new TextDecoder("utf-8", {
-      fatal: true
-    }).decode(bytes));
-  } catch (error) {
-    throw new Error(`not JSON in UTF-8 (${error.message})`);
-  }
-  const names = Object.keys(FIELDS);
-  if (!d || typeof d !== "object" || Array.isArray(d) || Object.keys(d).length !== names.length || !names.every((n) => Object.hasOwn(d, n))) {
-    throw new Error("a signature file has exactly the fields " + names.join(", "));
-  }
-  for (const [field2, pattern2] of Object.entries(FIELDS)) {
-    if (typeof d[field2] !== "string" || !pattern2.test(d[field2])) throw new Error(`${field2} is not of its form`);
-  }
-  didKeyPublic(d.key);
-  if (FIELDS.keyLog.exec(d.keyLog)[1] !== d.signer) throw new Error("keyLog names the key log of another owner than the signer");
-  return d;
-}
-var GOOD = "good";
-var UNCHECKED = "unchecked";
-var INVALID = "invalid";
-async function judge(bytes, file, { objectId: objectId2, version, inventory, owner, lookup, keyLog = false }) {
-  const bad = (reason, d2 = null) => ({
-    file,
-    status: INVALID,
-    reason,
-    key: d2?.key ?? null,
-    keyLog: null,
-    threshold: null
-  });
-  let d;
-  try {
-    d = readSignatureFile(bytes);
-  } catch (error) {
-    return bad(`malformed: ${error.message}`);
-  }
-  if (file !== await fileName(d.key)) return bad("its name does not match the digest of its key");
-  let signature;
-  try {
-    signature = unbase64(d.signature);
-  } catch {
-    return bad("the signature is not base64", d);
-  }
-  if (!await verifyEd25519(didKeyPublic(d.key), message(d.object, d.version, d.inventorySha512, d.keyLog), signature)) {
-    return bad("the signature does not verify", d);
-  }
-  if (d.object !== objectId2 || d.version !== version || d.inventorySha512 !== inventory) {
-    return bad("it signs another version, or another inventory", d);
-  }
-  if (d.signer !== owner) return bad("its signer is not the owner of the line", d);
-  const [, , number, digest] = FIELDS.keyLog.exec(d.keyLog);
-  const n = Number(number);
-  if (keyLog && (version === "v1" || n !== Number(version.slice(1)) - 1)) {
-    return bad("a key-log version is signed against the version before it, never the first", d);
-  }
-  const found2 = lookup(n, digest);
-  if (!found2) {
-    return {
-      file,
-      status: UNCHECKED,
-      reason: `v${n} of the key log, with that digest, is not reached`,
-      key: d.key,
-      keyLog: [
-        n,
-        digest
-      ],
-      threshold: null
-    };
-  }
-  if (found2.forkRecord || !found2.isVersion) return bad(`v${n} is not a version of the key log, or is a fork record`, d);
-  const keys = found2.keys || {};
-  let threshold;
-  if (keyLog) {
-    if (!(Array.isArray(keys.next) && keys.next.includes(await keyDigest(d.key)))) {
-      return bad(`the key is not a rotation key of v${n} of the key log`, d);
-    }
-    threshold = keys.nextThreshold;
-  } else {
-    if (!(Array.isArray(keys.keys) && keys.keys.includes(d.key))) return bad(`the key is not a current key of v${n} of the key log`, d);
-    threshold = keys.threshold;
-  }
-  return {
-    file,
-    status: GOOD,
-    reason: "",
-    key: d.key,
-    keyLog: [
-      n,
-      digest
-    ],
-    threshold
-  };
-}
-async function judgeFolder(witnesses, context) {
-  const names = [
-    ...witnesses.keys()
-  ].filter((n) => n.startsWith("signature-") && n.endsWith(".json")).sort();
-  return Promise.all(names.map((n) => judge(witnesses.get(n), n, context)));
-}
-var SIGNED = "signed";
-var VOUCHED = "vouched for";
-var CONTESTED = "contested";
-var UNSIGNED = "unsigned";
-function signedDirectly(judgements, leaveOut = null) {
-  const groups = /* @__PURE__ */ new Map();
-  for (const j of judgements) {
-    if (j.status !== GOOD || leaveOut && leaveOut(j)) continue;
-    const key = j.keyLog.join(" ");
-    if (!groups.has(key)) groups.set(key, {
-      threshold: j.threshold,
-      keys: /* @__PURE__ */ new Set()
-    });
-    groups.get(key).keys.add(j.key);
-  }
-  return [
-    ...groups.values()
-  ].some((g) => g.keys.size >= g.threshold);
-}
-function lineStatuses(versions2, { exposed = /* @__PURE__ */ new Set(), forkPoint = null, trusted = null } = {}) {
-  const leaveOut = (j) => {
-    const suspect = exposed.has(j.key) || forkPoint !== null && j.keyLog[0] >= forkPoint;
-    return suspect && !(trusted && trusted(j));
-  };
-  const direct = versions2.map((js) => signedDirectly(js));
-  const clean = versions2.map((js) => signedDirectly(js, leaveOut));
-  const would = versions2.map((js) => js.some((j) => j.status === UNCHECKED) || signedDirectly(js));
-  const later = (list2, k) => list2.slice(k).some(Boolean);
-  return versions2.map((js, k) => {
-    if (direct[k] || later(direct, k + 1)) {
-      if (clean[k] || later(clean, k + 1)) return direct[k] ? SIGNED : VOUCHED;
-      return CONTESTED;
-    }
-    if (would[k] || later(would, k + 1)) return UNCHECKED;
-    return js.some((j) => j.status === INVALID) ? INVALID : UNSIGNED;
-  });
-}
-function latestSigned(statuses) {
-  let found2 = null;
-  statuses.forEach((s, k) => {
-    if (s === SIGNED || s === VOUCHED) found2 = k + 1;
-  });
-  return found2;
-}
-async function lineStatusesOf(objectId2, owner, versions2, log) {
-  const lookup = log ? (n, d) => log.lookup(n, d) : () => null;
-  const judgements = await Promise.all(versions2.map(({ version, digest, witnesses }) => judgeFolder(witnesses, {
-    objectId: objectId2,
-    version,
-    inventory: digest,
-    owner,
-    lookup
-  })));
-  const statuses = lineStatuses(judgements, log ? {
-    exposed: log.exposedKeys(),
-    forkPoint: log.forkPoint
-  } : {});
-  return {
-    judgements,
-    statuses
-  };
-}
-
-// core/schema.js
-function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-function same(a, b) {
-  return canonical(a) === canonical(b);
-}
-var URI_CHAR = "[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]";
-var URI = new RegExp(`^[A-Za-z][A-Za-z0-9+.\\-]*:${URI_CHAR}*$`);
-var URI_REFERENCE = new RegExp(`^${URI_CHAR}*$`);
-var PERCENT_OK = (s) => !/%(?![0-9A-Fa-f]{2})/.test(s);
-var FORMATS = {
-  date(s) {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-    if (!m) return false;
-    const [y, mo, d] = m.slice(1).map(Number);
-    const leap = y % 4 === 0 && y % 100 !== 0 || y % 400 === 0;
-    const days = [
-      31,
-      leap ? 29 : 28,
-      31,
-      30,
-      31,
-      30,
-      31,
-      31,
-      30,
-      31,
-      30,
-      31
-    ][mo - 1];
-    return days !== void 0 && d >= 1 && d <= days;
-  },
-  uri: (s) => URI.test(s) && PERCENT_OK(s),
-  "uri-reference": (s) => URI_REFERENCE.test(s) && PERCENT_OK(s)
-};
-function show(value) {
-  const text3 = JSON.stringify(value) ?? String(value);
-  return text3.length > 60 ? text3.slice(0, 57) + "..." : text3;
-}
-function typeOf(value) {
-  if (value === null) return "null";
-  if (Array.isArray(value)) return "array";
-  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
-  return typeof value;
-}
-function hasType(type, value) {
-  const t = typeOf(value);
-  return type === t || type === "number" && t === "integer";
-}
-function describeNot(schema4) {
-  const names = (s) => s?.required || [];
-  const forbidden = [
-    ...names(schema4),
-    ...(schema4?.anyOf || []).flatMap(names)
-  ];
-  return forbidden.length ? `must not have ${forbidden.join(", ")}` : "is valid under a schema it must not match";
-}
-function check(s, v, path, root, errors) {
-  if (s === true || s === void 0) return;
-  if (s === false) {
-    errors.push({
-      path,
-      message: "is not allowed"
-    });
-    return;
-  }
-  const fail = (message2) => errors.push({
-    path,
-    message: message2
-  });
-  if (typeof s.$ref === "string") check(resolveRef(root, s.$ref), v, path, root, errors);
-  if (s.type !== void 0) {
-    const types = Array.isArray(s.type) ? s.type : [
-      s.type
-    ];
-    if (!types.some((t) => hasType(t, v))) {
-      fail(`${show(v)} is not of type ${types.join(" or ")}`);
-      return;
-    }
-  }
-  if ("const" in s && !same(s.const, v)) fail(`${show(v)} should be ${show(s.const)}`);
-  if (s.enum && !s.enum.some((e) => same(e, v))) fail(`${show(v)} is not one of ${show(s.enum)}`);
-  if (typeof v === "string") {
-    const length = [
-      ...v
-    ].length;
-    if (s.minLength !== void 0 && length < s.minLength) fail(`${show(v)} is shorter than ${s.minLength}`);
-    if (s.maxLength !== void 0 && length > s.maxLength) fail(`${show(v)} is longer than ${s.maxLength}`);
-    if (s.pattern !== void 0 && !pattern(s.pattern).test(v)) fail(`${show(v)} does not match ${s.pattern}`);
-    if (s.format !== void 0 && FORMATS[s.format] && !FORMATS[s.format](v)) fail(`${show(v)} is not a valid ${s.format}`);
-  }
-  if (typeof v === "number" && s.minimum !== void 0 && v < s.minimum) fail(`${v} is less than ${s.minimum}`);
-  if (typeof v === "number" && s.maximum !== void 0 && v > s.maximum) fail(`${v} is greater than ${s.maximum}`);
-  if (Array.isArray(v)) {
-    if (s.minItems !== void 0 && v.length < s.minItems) fail(`has fewer than ${s.minItems} items`);
-    if (s.maxItems !== void 0 && v.length > s.maxItems) fail(`has more than ${s.maxItems} items`);
-    if (s.uniqueItems && new Set(v.map(canonical)).size !== v.length) fail("has repeated items");
-    if (s.items !== void 0) v.forEach((item, k) => check(s.items, item, `${path}/${k}`, root, errors));
-  }
-  if (v && typeof v === "object" && !Array.isArray(v)) {
-    if (s.minProperties !== void 0 && Object.keys(v).length < s.minProperties) {
-      fail(`has fewer than ${s.minProperties} properties`);
-    }
-    for (const name2 of s.required || []) {
-      if (!Object.hasOwn(v, name2)) fail(`${JSON.stringify(name2)} is a required property`);
-    }
-    const props = s.properties || {};
-    for (const [name2, value] of Object.entries(v)) {
-      const where2 = `${path}/${name2.replace(/~/g, "~0").replace(/\//g, "~1")}`;
-      if (Object.hasOwn(props, name2)) check(props[name2], value, where2, root, errors);
-      else if (s.additionalProperties !== void 0) check(s.additionalProperties, value, where2, root, errors);
-      if (s.propertyNames !== void 0) {
-        for (const e of collect(s.propertyNames, name2, root)) {
-          errors.push({
-            path: where2,
-            message: `the name ${e.message}`
-          });
-        }
-      }
-    }
-    for (const [name2, needed] of Object.entries(s.dependentRequired || {})) {
-      if (Object.hasOwn(v, name2)) {
-        for (const other of needed) {
-          if (!Object.hasOwn(v, other)) fail(`${JSON.stringify(other)} is required with ${JSON.stringify(name2)}`);
-        }
-      }
-    }
-  }
-  for (const sub of s.allOf || []) check(sub, v, path, root, errors);
-  if (s.anyOf && !s.anyOf.some((sub) => isValid(sub, v, root))) {
-    const reasons = s.anyOf.map((sub) => collect(sub, v, root)[0]).filter(Boolean).map((e) => (e.path ? `${e.path}: ` : "") + e.message);
-    fail(`satisfies none of the alternatives (${reasons.join("; or ")})`);
-  }
-  if (s.oneOf) {
-    const holding = s.oneOf.filter((sub) => isValid(sub, v, root)).length;
-    if (holding === 0) {
-      const reasons = s.oneOf.map((sub) => collect(sub, v, root)[0]).filter(Boolean).map((e) => (e.path ? `${e.path}: ` : "") + e.message);
-      fail(`satisfies none of the alternatives (${reasons.join("; or ")})`);
-    } else if (holding > 1) {
-      fail(`satisfies ${holding} of the alternatives, and should satisfy one`);
-    }
-  }
-  if (s.not !== void 0 && isValid(s.not, v, root)) fail(describeNot(s.not));
-  if (s.if !== void 0) {
-    if (isValid(s.if, v, root)) {
-      if (s.then !== void 0) check(s.then, v, path, root, errors);
-    } else if (s.else !== void 0) {
-      check(s.else, v, path, root, errors);
-    }
-  }
-}
-function resolveRef(root, ref) {
-  if (!ref.startsWith("#")) throw new Error(`unsupported $ref ${ref}`);
-  return ref.slice(1).split("/").filter(Boolean).map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~")).reduce((node, key) => node?.[key], root);
-}
-function validate(schema4, data2) {
-  const errors = [];
-  check(schema4, data2, "", schema4, errors);
-  return errors;
-}
-function isValid(schema4, data2, root) {
-  const errors = [];
-  check(schema4, data2, "", root, errors);
-  return errors.length === 0;
-}
-var patterns = /* @__PURE__ */ new Map();
-function pattern(source) {
-  if (!patterns.has(source)) patterns.set(source, new RegExp(source, "u"));
-  return patterns.get(source);
-}
-function collect(schema4, data2, root) {
-  const errors = [];
-  check(schema4, data2, "", root, errors);
-  return errors;
-}
-var SCHEMA_FILES = {
-  "opensheaf-archive/0.2": "opensheaf-archive-0.2.schema.json",
-  "opensheaf-object/0.2": "opensheaf-object-0.2.schema.json",
-  "opensheaf-collection/0.2": "opensheaf-collection-0.2.schema.json",
-  "opensheaf-genesis/0.2": "opensheaf-genesis-0.2.schema.json",
-  "opensheaf-keys/0.2": "opensheaf-keys-0.2.schema.json",
-  "opensheaf-signature/0.2": "opensheaf-signature-0.2.schema.json",
-  "opensheaf-index/0.2": "opensheaf-index-0.2.schema.json",
-  "opensheaf-keeper/0.2": "opensheaf-keeper-0.2.schema.json",
-  "opensheaf-timestamps/0.2": "opensheaf-timestamps-0.2.schema.json"
-};
-async function loadSchemas(read) {
-  const schemas2 = {};
-  for (const [format, file] of Object.entries(SCHEMA_FILES)) {
-    schemas2[format] = await read(new URL(`../schemas/${file}`, import.meta.url));
-  }
-  return schemas2;
-}
-
-// core/owners.js
-var OBJECT_FORMAT = "opensheaf-object/0.2";
-var KEYS_FORMAT = "opensheaf-keys/0.2";
-var INVENTORY_TYPE = "https://ocfl.io/1.1/spec/#inventory";
-var OBJ = "object.json";
-var KEYS = "keys.json";
-var FORKED = "forked/";
-var RESERVED = [
-  "object.json",
-  "datacite.json",
-  "genesis.json",
-  "members.json",
-  "keys.json",
-  "forked",
-  "parent.inventory.json",
-  "parent.object.json",
-  "parent.signatures",
-  "parent.chain"
-];
-var Version = class _Version {
-  static async make(number, files, inventory, sidecar2 = null, witnesses = /* @__PURE__ */ new Map()) {
-    const v = new _Version(number, files, inventory, sidecar2, witnesses);
-    v.digest = await sha512(inventory);
-    if (v.forkRecord) v.carried = await carriedOf(files);
-    return v;
-  }
-  constructor(number, files, inventory, sidecar2, witnesses) {
-    Object.assign(this, {
-      number,
-      files,
-      inventory,
-      sidecar: sidecar2,
-      witnesses,
-      isVersion: true,
-      carried: []
-    });
-  }
-  get keys() {
-    return jsonOrNull(this.files.get(KEYS), {
-      integers: true
-    });
-  }
-  get forkRecord() {
-    return !this.files.has(KEYS) && [
-      ...this.files.keys()
-    ].some((p) => p.startsWith(FORKED));
-  }
-};
-function jsonOrNull(bytes, { integers = false } = {}) {
-  if (!bytes) return null;
-  try {
-    const text3 = new TextDecoder("utf-8", {
-      fatal: true
-    }).decode(bytes);
-    return integers ? parseIntegers(text3) : JSON.parse(text3);
-  } catch {
-    return null;
-  }
-}
-var CARRIED_FILES = [
-  "inventory.json",
-  "inventory.json.sha512",
-  "keys.json"
-];
-async function carriedOf(files) {
-  const groups = /* @__PURE__ */ new Map();
-  for (const [path, bytes] of files) {
-    if (!path.startsWith(FORKED)) continue;
-    const rest = path.slice(FORKED.length);
-    const k = rest.indexOf("/");
-    const d = k < 0 ? rest : rest.slice(0, k);
-    if (!groups.has(d)) groups.set(d, /* @__PURE__ */ new Map());
-    groups.get(d).set(k < 0 ? "" : rest.slice(k + 1), bytes);
-  }
-  const out = [];
-  for (const [d, group] of groups) {
-    const inventory = group.get("inventory.json") || new Uint8Array();
-    const inv = jsonOrNull(inventory);
-    const head = isObject(inv) ? inv.head : null;
-    const number = typeof head === "string" && /^v[0-9]+$/.test(head) ? Number(head.slice(1)) : null;
-    out.push({
-      d,
-      files: group,
-      inventory,
-      sidecar: group.get("inventory.json.sha512") || new Uint8Array(),
-      digest: await sha512(inventory),
-      number,
-      isVersion: true,
-      forkRecord: false,
-      keys: jsonOrNull(group.get("keys.json"), {
-        integers: true
-      }),
-      witnesses: new Map([
-        ...group
-      ].filter(([n]) => !CARRIED_FILES.includes(n)))
-    });
-  }
-  return out.sort((a, b) => (a.number ?? 0) - (b.number ?? 0));
-}
-function sidecarDigest(bytes) {
-  if (!bytes) return null;
-  let text3;
-  try {
-    text3 = new TextDecoder("ascii", {
-      fatal: true
-    }).decode(bytes);
-  } catch {
-    return null;
-  }
-  const parts = text3.split(/\s+/).filter(Boolean);
-  return parts.length === 2 && parts[1] === "inventory.json" ? parts[0].toLowerCase() : null;
-}
-function ownerObject(owner, previous = null) {
-  const d = {
-    format: OBJECT_FORMAT,
-    specification: "0.2",
-    kind: "owner",
-    status: "active",
-    name: owner,
-    owner
-  };
-  if (previous !== null) d.previous = previous;
-  return d;
-}
-async function firstVersion(genesis) {
-  const rec = await readGenesis(genesis);
-  if (rec.kind !== "owner") throw new Error("the genesis record of an owner has kind owner");
-  const owner = await nameOf(genesis);
-  const files = /* @__PURE__ */ new Map([
-    [
-      GENESIS,
-      genesis
-    ],
-    [
-      OBJ,
-      jcsBytes(ownerObject(owner))
-    ],
-    [
-      KEYS,
-      jcsBytes({
-        format: KEYS_FORMAT,
-        keys: rec.keys,
-        threshold: rec.threshold,
-        next: rec.next,
-        nextThreshold: rec.nextThreshold
-      })
-    ]
-  ]);
-  const manifest = {}, state = {};
-  for (const [path, bytes2] of files) {
-    const d = await sha512(bytes2);
-    manifest[d] = [
-      `v1/content/${path}`
-    ];
-    state[d] = [
-      path
-    ];
-  }
-  const inv = {
-    digestAlgorithm: "sha512",
-    head: "v1",
-    id: objectId(owner, owner),
-    manifest,
-    type: INVENTORY_TYPE,
-    versions: {
-      v1: {
-        created: rec.created,
-        state
-      }
-    }
-  };
-  const bytes = jcsBytes(inv);
-  return Version.make(1, files, bytes, utf8(`${await sha512(bytes)}  inventory.json
-`));
-}
-var KEYS_FIELDS = [
-  "format",
-  "keys",
-  "threshold",
-  "next",
-  "nextThreshold",
-  "extensions",
-  "ended",
-  "successor",
-  "exposed"
-];
-async function keyRules(k, earlier, owner) {
-  if (!isObject(k) || k.format !== KEYS_FORMAT) return [
-    `keys.json is not of format ${KEYS_FORMAT}`
-  ];
-  const problems = [];
-  const extra = Object.keys(k).filter((f) => !KEYS_FIELDS.includes(f)).sort();
-  if (extra.length) problems.push("keys.json has fields the specification does not define: " + extra.join(", "));
-  if ("ended" in k && k.ended !== true) problems.push("ended, when present, is true");
-  if (k.ended === true) {
-    if ([
-      "keys",
-      "threshold",
-      "next",
-      "nextThreshold"
-    ].some((f) => f in k)) {
-      problems.push("an ending version has no keys, threshold, next or nextThreshold (section 6.3)");
-    }
-    const succ = k.successor;
-    if (succ !== void 0 && succ !== null && (typeof succ !== "string" || !OWNER_NAME.test(succ) || succ === owner)) {
-      problems.push("successor is the owner name of another owner (section 6.3)");
-    }
-  } else {
-    if ("successor" in k) problems.push("only an ending version names a successor (section 6.3)");
-    problems.push(...await keyRulesOfRecord(k));
-  }
-  if ("extensions" in k && !(isObject(k.extensions) && Object.values(k.extensions).every(isObject))) {
-    problems.push("extensions maps names of extensions to objects");
-  }
-  let exposed = Array.isArray(k.exposed) ? k.exposed : [];
-  if ("exposed" in k && (!Array.isArray(k.exposed) || !k.exposed.length || !k.exposed.every((x) => typeof x === "string" && DID_KEY.test(x)) || new Set(k.exposed).size !== k.exposed.length)) {
-    problems.push("exposed is a list of distinct did:key URIs");
-    exposed = [];
-  }
-  const strings = (x) => Array.isArray(x) ? x.filter((y) => typeof y === "string") : [];
-  const keys = strings(k.keys), next = strings(k.next);
-  const earlierKeys = new Set(earlier.flatMap((e) => strings(e?.keys)));
-  const earlierNext = new Set(earlier.flatMap((e) => strings(e?.next)));
-  const earlierExposed = new Set(earlier.flatMap((e) => strings(e?.exposed)));
-  if (keys.some((x) => earlierExposed.has(x) || exposed.includes(x))) {
-    problems.push("keys lists a key exposed by this version or an earlier one (rule 2)");
-  }
-  if ((await Promise.all(keys.map(keyDigest))).some((d) => earlierNext.has(d))) {
-    problems.push("keys lists a rotation key of an earlier version (rule 2)");
-  }
-  const earlierKeyDigests = new Set(await Promise.all([
-    ...earlierKeys
-  ].map(keyDigest)));
-  if (next.some((d) => earlierKeyDigests.has(d))) problems.push("next holds the digest of a current key of an earlier version (rule 3)");
-  if (next.some((d) => earlierNext.has(d))) problems.push("next holds a digest that next of an earlier version holds (rule 3)");
-  if (exposed.some((x) => !earlierKeys.has(x))) problems.push("exposed lists a key that keys of no earlier version lists (rule 4)");
-  return problems;
-}
-var KeyLog = class _KeyLog {
-  static async of(genesis, versions2 = null, problems = []) {
-    const owner = await nameOf(genesis);
-    return new _KeyLog(genesis, owner, versions2 || [
-      await firstVersion(genesis)
-    ], problems);
-  }
-  constructor(genesis, owner, versions2, problems = []) {
-    this.genesis = genesis;
-    this.owner = owner;
-    this.id = objectId(owner, owner);
-    this.versions = versions2;
-    this.problems = problems;
-    this.checked = null;
-    this.met = null;
-  }
-  pin(number) {
-    return keyLogPin(this.owner, number, this.versions[number - 1].digest);
-  }
-  side() {
-    return this.versions.filter((v) => v.isVersion && !v.forkRecord);
-  }
-  latest() {
-    if (this.ended) return null;
-    const side = this.side();
-    const last = side[side.length - 1];
-    return last && isObject(last.keys) && "keys" in last.keys ? last : null;
-  }
-  get forkRecord() {
-    return this.versions.find((v) => v.forkRecord && v.isVersion) || this.met || null;
-  }
-  get forkPoint() {
-    return this.forkRecord?.carried[0]?.number ?? null;
-  }
-  get ended() {
-    return this.forkRecord !== null || this.side().slice(1).some((v) => v.keys?.ended);
-  }
-  get successor() {
-    return this.side().slice(1).find((v) => v.keys?.ended)?.keys.successor ?? null;
-  }
-  exposedKeys() {
-    const found2 = /* @__PURE__ */ new Set();
-    for (const v of this.side()) for (const x of arrayOf(v.keys?.exposed)) found2.add(x);
-    for (const c of this.forkRecord?.carried || []) for (const x of arrayOf(c.keys?.exposed)) found2.add(x);
-    return found2;
-  }
-  lookup(number, digest) {
-    for (const v of this.versions) if (v.number === number && v.digest === digest) return v;
-    for (const c of this.forkRecord?.carried || []) if (c.number === number && c.digest === digest) return c;
-    return null;
-  }
-  extensions() {
-    const side = this.side();
-    if (side.length <= 1) return jsonOrNull(this.genesis)?.extensions ?? null;
-    return side[side.length - 1].keys?.extensions ?? null;
-  }
-  async check() {
-    if (!this.checked) this.checked = this.checkNow();
-    return this.checked;
-  }
-  async checkNow() {
-    const errors = [
-      ...this.problems
-    ], warnings = [];
-    let rec = null;
-    try {
-      rec = await readGenesis(this.genesis);
-    } catch (error) {
-      errors.push(`genesis.json: ${error.message}`);
-    }
-    if (rec !== null && rec.kind !== "owner") {
-      errors.push("genesis.json: the genesis record of an owner has kind owner");
-      rec = null;
-    }
-    if (rec === null || !this.versions.length) {
-      for (const v of this.versions) v.isVersion = false;
-      return {
-        errors,
-        warnings
-      };
-    }
-    const v1 = this.versions[0];
-    const computed = await firstVersion(this.genesis);
-    if (v1.number !== 1 || !sameFiles(v1.files, computed.files) || !sameBytes(v1.inventory, computed.inventory)) {
-      errors.push("v1: not the version computed from the genesis record (section 6.1)");
-      v1.isVersion = false;
-    } else if (v1.sidecar && v1.sidecar.length && sidecarDigest(v1.sidecar) !== v1.digest) {
-      errors.push("v1: the checksum file does not state the digest of the inventory");
-      v1.isVersion = false;
-    }
-    if ([
-      ...v1.witnesses.keys()
-    ].some((n) => n.startsWith("signature-"))) {
-      warnings.push("v1: a signature file of the computed first version is invalid (section 7.3)");
-    }
-    const side = [
-      v1
-    ];
-    let state = v1.isVersion ? null : "broken";
-    for (const v of this.versions.slice(1)) {
-      const where2 = `v${v.number}`;
-      if (state === "broken") {
-        v.isVersion = false;
-        warnings.push(`${where2}: follows a version that is not a version of the key log`);
-        continue;
-      }
-      if (state === "forked" || state === "ended" && !v.forkRecord) {
-        v.isVersion = false;
-        warnings.push(`${where2}: held after ${state === "forked" ? "a fork record" : "an ending version"}: not a version of the key log (section 6.3)`);
-        continue;
-      }
-      const problems = await this.commonProblems(v, side[side.length - 1]);
-      if (v.forkRecord) {
-        problems.push(...await this.forkRecordProblems(v, side));
-      } else if (v.keys === null) {
-        problems.push("no keys.json, and not a fork record");
-      } else {
-        problems.push(...await keyRules(v.keys, side.map((x) => x.keys), this.owner));
-        if (!problems.length) problems.push(...await this.signatureProblems(v, side[side.length - 1], heldLookup(side), warnings));
-      }
-      if (problems.length) {
-        v.isVersion = false;
-        errors.push(...problems.map((p) => `${where2}: ${p}`));
-        state = "broken";
-      } else if (v.forkRecord) {
-        state = "forked";
-      } else {
-        side.push(v);
-        if (v.keys.ended) state = "ended";
-      }
-    }
-    return {
-      errors,
-      warnings
-    };
-  }
-  async commonProblems(v, prev) {
-    const problems = [];
-    const inv = jsonOrNull(v.inventory);
-    if (!isObject(inv) || inv.id !== this.id || inv.head !== `v${v.number}`) {
-      problems.push(`the inventory is not that of v${v.number} of ${this.id}`);
-    }
-    if (v.sidecar && v.sidecar.length && sidecarDigest(v.sidecar) !== v.digest) {
-      problems.push("the checksum file does not state the digest of the inventory");
-    }
-    if (!sameBytes(v.files.get(GENESIS), this.genesis)) problems.push("genesis.json differs from that of the first version");
-    const obj = jsonOrNull(v.files.get(OBJ));
-    const expected = ownerObject(this.owner, prev.digest);
-    const withoutExtensions = isObject(obj) ? Object.fromEntries(Object.entries(obj).filter(([k]) => k !== "extensions")) : null;
-    if (!withoutExtensions || !same(withoutExtensions, expected)) {
-      problems.push(`object.json has not the fields of an owner and previous, the digest of the inventory of v${prev.number} (section 4.3)`);
-    }
-    for (const path of v.files.keys()) {
-      const top = path.split("/")[0];
-      if (RESERVED.includes(top) && ![
-        GENESIS,
-        OBJ,
-        KEYS
-      ].includes(path) && !path.startsWith(FORKED)) {
-        problems.push(`${path}: a name reserved by section 4.1`);
-      }
-    }
-    return problems;
-  }
-  async signatureProblems(v, prev, lookup, warnings, where2 = null) {
-    where2 = where2 || `v${v.number}`;
-    const good = /* @__PURE__ */ new Set();
-    for (const j of await judgeFolder(v.witnesses, {
-      objectId: this.id,
-      version: `v${v.number}`,
-      inventory: v.digest,
-      owner: this.owner,
-      lookup,
-      keyLog: true
-    })) {
-      if (j.status === GOOD && j.keyLog[0] === prev.number && j.keyLog[1] === prev.digest) good.add(j.key);
-      else if (j.status !== GOOD) warnings.push(`${where2}/${j.file}: ${j.status}: ${j.reason}`);
-    }
-    const need = prev.keys.nextThreshold;
-    if (good.size < need) return [
-      `signed by ${good.size} rotation key${good.size === 1 ? "" : "s"} of v${prev.number}, which needs ${need} (section 6.1)`
-    ];
-    return [];
-  }
-  async forkRecordProblems(fr, side) {
-    const problems = [
-      ...fr.files.keys()
-    ].filter((p) => p !== GENESIS && p !== OBJ && !p.startsWith(FORKED)).map((p) => `${p}: a fork record holds only genesis.json, object.json and forked/ (section 6.3)`);
-    const carried = fr.carried;
-    if (!carried.length || carried.some((c) => c.number === null)) {
-      return [
-        ...problems,
-        "a fork record carries versions, each with its inventory"
-      ];
-    }
-    const first = carried[0].number;
-    const held2 = new Map(side.map((x) => [
-      x.number,
-      x
-    ]));
-    if (carried.some((c, k) => c.number !== first + k)) problems.push("the versions carried are consecutive");
-    if (!held2.has(first - 1) || !held2.has(first) || held2.get(first).digest === carried[0].digest) {
-      problems.push(`the first version carried, v${first}, differs from a version held of that number`);
-      return problems;
-    }
-    let before = side.filter((x) => x.number < first);
-    for (const c of carried) {
-      const where2 = `forked/${c.d}`;
-      const inv = jsonOrNull(c.inventory);
-      if (c.d !== base32(await sha256(c.inventory)).slice(0, 16)) problems.push(`${where2}: not the name its inventory digest gives`);
-      if (!isObject(inv) || inv.id !== this.id) {
-        problems.push(`${where2}: the inventory carried is not one of ${this.id}`);
-        continue;
-      }
-      if (sidecarDigest(c.sidecar) !== c.digest) problems.push(`${where2}: the checksum file does not state the digest of the inventory`);
-      const state = inv.versions?.[`v${c.number}`]?.state || {};
-      const keysDigest = c.files.has("keys.json") ? await sha512(c.files.get("keys.json")) : null;
-      if (!keysDigest || !Object.entries(state).some(([d, paths]) => Array.isArray(paths) && paths.includes(KEYS) && d === keysDigest)) {
-        problems.push(`${where2}: keys.json is not the one its inventory lists`);
-        continue;
-      }
-      const rules = await keyRules(c.keys, before.map((x) => x.keys), this.owner);
-      problems.push(...rules.map((p) => `${where2}: ${p}`));
-      if (!rules.length) {
-        const more = await this.signatureProblems(c, before[before.length - 1], heldLookup(before), [], where2);
-        problems.push(...more.map((p) => `${where2}: ${p}`));
-      }
-      before = [
-        ...before,
-        c
-      ];
-    }
-    return problems;
-  }
-  async meet(other) {
-    await this.check();
-    await other.check();
-    if (!sameBytes(this.genesis, other.genesis)) return this;
-    const mine = this.side(), theirs = other.side();
-    for (let k = 0; k < Math.min(mine.length, theirs.length); k++) {
-      if (mine[k].digest !== theirs[k].digest) return this.withFork(theirs.slice(k));
-    }
-    const theirFork = other.forkRecord;
-    if (theirs.length > mine.length) {
-      if (this.forkRecord) return this;
-      const log = new _KeyLog(this.genesis, this.owner, [
-        ...mine,
-        ...theirs.slice(mine.length),
-        ...theirFork ? [
-          theirFork
-        ] : []
-      ]);
-      log.checked = Promise.resolve({
-        errors: [],
-        warnings: []
-      });
-      log.met = other.met;
-      return log;
-    }
-    if (theirFork) {
-      const first = theirFork.carried[0];
-      const held2 = first && first.number <= mine.length ? mine[first.number - 1] : null;
-      if (held2 && held2.digest !== first.digest && !this.forkRecord) return this.withFork(theirFork.carried);
-    }
-    return this;
-  }
-  withFork(otherSide) {
-    if (this.forkRecord) return this;
-    const log = new _KeyLog(this.genesis, this.owner, this.versions, this.problems);
-    log.checked = this.checked;
-    log.met = {
-      carried: otherSide,
-      isVersion: true,
-      forkRecord: true,
-      met: true
-    };
-    return log;
-  }
-};
-function heldLookup(side) {
-  return (number, digest) => side.find((x) => x.number === number && x.digest === digest) || null;
-}
-function sameFiles(a, b) {
-  if (a.size !== b.size) return false;
-  for (const [path, bytes] of a) if (!sameBytes(bytes, b.get(path))) return false;
-  return true;
-}
-function arrayOf(x) {
-  return Array.isArray(x) ? x : [];
-}
-
-// core/versions.js
-function versionsOf(inv) {
-  const versions2 = inv && typeof inv.versions === "object" && inv.versions ? Object.keys(inv.versions) : [];
-  return versions2.filter(isVersion).sort((a, b) => versionNumber(a) - versionNumber(b));
-}
-var own = (o, k) => o !== null && typeof o === "object" && Object.hasOwn(o, k);
-function filesOf(inv, ver) {
-  const files = /* @__PURE__ */ Object.create(null);
-  const state = own(inv?.versions, ver) && inv.versions[ver]?.state || {};
-  for (const [digest, paths] of Object.entries(state)) {
-    for (const p of Array.isArray(paths) ? paths : []) files[p] = digest;
-  }
-  return files;
-}
-function contentPath(inv, ver, logical) {
-  const digest = filesOf(inv, ver)[logical];
-  const paths = digest && own(inv.manifest, digest) ? inv.manifest[digest] : null;
-  return Array.isArray(paths) && typeof paths[0] === "string" ? paths[0] : null;
-}
-function defaultHistory(inv, objOf2, at = inv.head) {
-  const last = /* @__PURE__ */ new Map();
-  for (const ver of versionsOf(inv)) {
-    if (versionNumber(ver) <= versionNumber(at)) {
-      const n = objOf2(ver)?.documentVersion;
-      if (Number.isInteger(n)) last.set(n, ver);
-    }
-  }
-  return [
-    ...last.keys()
-  ].sort((a, b) => a - b).map((n) => last.get(n));
-}
-function historyOf(inv, objOf2, at = inv.head) {
-  const hist = objOf2(at)?.history;
-  return Array.isArray(hist) && hist.length ? hist : defaultHistory(inv, objOf2, at);
-}
-function currentVersion(inv, objOf2, at = inv.head) {
-  const hist = historyOf(inv, objOf2, at);
-  return hist[hist.length - 1] || at;
-}
-function memberPins(m) {
-  if (own(m, "revisions")) {
-    return (Array.isArray(m.revisions) ? m.revisions : []).map((r) => ({
-      version: r?.version,
-      pin: r?.inventorySha512,
-      documentVersion: r?.documentVersion
-    }));
-  }
-  return [
-    {
-      version: m?.version,
-      pin: m?.inventorySha512,
-      documentVersion: null
-    }
-  ];
-}
-var list = (x) => Array.isArray(x) ? x : [];
-var text = (x) => typeof x === "string" ? x : null;
-function dateOf(dc, ...types) {
-  for (const type of types) {
-    const d = list(dc?.dates).find((x) => x?.dateType === type);
-    if (d && text(d.date)) return d.date;
-  }
-  return null;
-}
-function titleOf(dc) {
-  return text(list(dc?.titles).find((t) => !t?.titleType)?.title) || text(list(dc?.titles)[0]?.title);
-}
-function creatorsOf(dc) {
-  return list(dc?.creators).map((c) => text(c?.name) || [
-    c?.givenName,
-    c?.familyName
-  ].filter(text).join(" ")).filter(Boolean);
-}
-function pdfOf(obj) {
-  const rs = list(obj?.renditions).filter((r) => text(r?.path));
-  return (rs.find((r) => r.mediaType === "application/pdf") || rs.find((r) => r.path.toLowerCase().endsWith(".pdf")))?.path || null;
-}
-var IDENTITY = [
-  "datacite.json",
-  "object.json",
-  "genesis.json"
-];
-function isEvidence(p) {
-  return p === "parent.inventory.json" || p === "parent.object.json" || p.startsWith("parent.signatures/") || p.startsWith("parent.chain/");
-}
-function ownFiles(inv, ver, obj) {
-  const notes = new Set([
-    ...list(obj?.notices),
-    obj?.withdrawal?.reason,
-    obj?.licence
-  ].map((x) => x?.path).filter(text));
-  const files = /* @__PURE__ */ Object.create(null);
-  for (const [p, digest] of Object.entries(filesOf(inv, ver))) {
-    if (!IDENTITY.includes(p) && !isEvidence(p) && !notes.has(p)) files[p] = digest;
-  }
-  return files;
-}
-function documentVersionErrors(inv, objOf2) {
-  const errors = [];
-  const add2 = (ver, message2) => errors.push({
-    ver,
-    message: message2
-  });
-  const versions2 = versionsOf(inv);
-  const seen = /* @__PURE__ */ new Map(), filesOfDoc = /* @__PURE__ */ new Map(), missingOf = /* @__PURE__ */ new Map();
-  let highest = 0, hadHistory = false, notices = [];
-  for (const ver of versions2) {
-    const obj = objOf2(ver);
-    if (!obj || obj.kind !== "document") return errors;
-    const n = obj.documentVersion;
-    const own2 = ownFiles(inv, ver, obj);
-    const change = obj.changes?.text ?? null;
-    if (!seen.size && obj.parent) highest = (Number.isInteger(n) ? n : 1) - 1;
-    if (seen.has(n)) {
-      const before = filesOfDoc.get(n);
-      if (missingOf.get(n)) {
-        const changed = Object.entries(own2).some(([p, d]) => Object.hasOwn(before, p) && before[p] !== d);
-        const removed2 = Object.keys(before).some((p) => !Object.hasOwn(own2, p));
-        if (changed || removed2) add2(ver, `changes files of document version ${n} (only additions allowed)`);
-      } else if (!same(own2, before) || change !== seen.get(n)) {
-        add2(ver, `has other files than document version ${n}`);
-      }
-      missingOf.set(n, Boolean(obj.sourcesMissing));
-      filesOfDoc.set(n, own2);
-    } else {
-      if (n !== highest + 1) add2(ver, `document version ${n} breaks the numbering (expected ${highest + 1})`);
-      for (const [m, files] of filesOfDoc) {
-        if (same(own2, files) && change === seen.get(m)) {
-          add2(ver, `document version ${n} holds the same files and change note as document version ${m}, whose number it keeps`);
-          break;
-        }
-      }
-      highest = Math.max(highest, Number.isInteger(n) ? n : 0);
-      seen.set(n, change);
-      filesOfDoc.set(n, own2);
-      missingOf.set(n, Boolean(obj.sourcesMissing));
-    }
-    const hist = obj.history;
-    if (hadHistory && hist == null) add2(ver, "lacks the history of earlier versions");
-    if (hist != null) {
-      hadHistory = true;
-      const known = versions2.filter((v) => versionNumber(v) <= versionNumber(ver));
-      if (!Array.isArray(hist) || hist.some((h) => !known.includes(h))) {
-        add2(ver, "history names unknown object versions");
-      } else {
-        const docs = hist.map((h) => objOf2(h)?.documentVersion);
-        const all = Array.from({
-          length: highest
-        }, (_, k) => k + 1);
-        if (new Set(docs).size !== docs.length || !same([
-          ...new Set(docs)
-        ].sort((a, b) => a - b), all)) {
-          add2(ver, "history does not list each document version once");
-        }
-        hist.forEach((h, k) => {
-          const later = known.filter((v) => versionNumber(v) > versionNumber(h) && objOf2(v)?.documentVersion === docs[k]);
-          if (later.length) add2(ver, `history entry ${h} is not the last object version of ${docs[k]}`);
-        });
-      }
-    }
-    const current = Array.isArray(obj.notices) ? obj.notices : [];
-    if (notices.some((x) => !current.some((y) => same(x, y)))) add2(ver, "drops or changes an earlier notice");
-    notices = current;
-  }
-  return errors;
-}
-
-// core/archive.js
-function baseOf(url, relativeTo = globalThis.location?.href) {
-  const u = new URL(url, relativeTo);
-  u.hash = "";
-  u.search = "";
-  let s = u.href;
-  if (/\/[^/]*\.[A-Za-z0-9]{1,8}$/.test(u.pathname)) s = s.slice(0, s.lastIndexOf("/") + 1);
-  return s.endsWith("/") ? s : s + "/";
-}
-var Archive = class _Archive {
-  static async open(http, url, options = {}) {
-    const base = baseOf(url);
-    const where2 = base + "opensheaf.json";
-    const disc = parseJson(await http.cached(where2, options), where2);
-    if (!isObject(disc)) throw new FetchError("json", where2, "is not a JSON object");
-    const archive = new _Archive(http, base, disc);
-    if (!archive.old) {
-      const ids = [
-        ...archive.objects().map((o) => o.id),
-        ...archive.drafts().map((d) => d.id),
-        ...archive.tombstones().map((t) => t.id).filter(isObjectId)
-      ];
-      await Promise.all(ids.map((id) => archive.locate(id).catch(() => null)));
-    }
-    return archive;
-  }
-  constructor(http, base, disc) {
-    this.http = http;
-    this.base = base;
-    this.disc = disc;
-    this.old = disc.specification === "0.1" || disc.format === "opensheaf-archive/0.1" || disc.specification !== "0.2" && Object.hasOwn(disc, "archiveId");
-    this.name = typeof disc.name === "string" && disc.name ? disc.name : base;
-    this.layout = disc.storageLayout === HASHED_LAYOUT ? HASHED_LAYOUT : OWNER_NAME_LAYOUT;
-    let root;
-    try {
-      root = new URL(typeof disc.storageRoot === "string" ? disc.storageRoot : "ocfl/", base).href;
-    } catch {
-      root = base + "ocfl/";
-    }
-    this.root = root.endsWith("/") ? root : root + "/";
-    this.paths = /* @__PURE__ */ new Map();
-    this.keyLogs = /* @__PURE__ */ new Map();
-    this.lines = /* @__PURE__ */ new Map();
-    this.lister = null;
-  }
-  objects() {
-    const list2 = Array.isArray(this.disc.objects) ? this.disc.objects : [];
-    return list2.filter((o) => isObject(o) && isObjectId(o.id) && !parseId(o.id).draft);
-  }
-  entry(id) {
-    return this.objects().find((o) => o.id === id) || null;
-  }
-  drafts() {
-    const list2 = Array.isArray(this.disc.drafts) ? this.disc.drafts : [];
-    return list2.filter((d) => isObject(d) && isObjectId(d.id) && parseId(d.id).draft);
-  }
-  tombstones() {
-    const list2 = Array.isArray(this.disc.tombstones) ? this.disc.tombstones : [];
-    return list2.filter((t) => isObject(t) && typeof t.id === "string");
-  }
-  owners() {
-    return (Array.isArray(this.disc.owners) ? this.disc.owners : []).filter((o) => typeof o === "string");
-  }
-  labelOf(id) {
-    return this.objects().find((o) => o.id === id && typeof o.label === "string")?.label ?? null;
-  }
-  byLabel(label) {
-    return this.objects().find((o) => o.label === label)?.id ?? null;
-  }
-  where(id) {
-    const parts = parseId(id);
-    if (parts && parts.name === parts.owner) return `owner ${parts.owner}`;
-    return this.labelOf(id) || id || "?";
-  }
-  async locate(id) {
-    if (!this.paths.has(id)) this.paths.set(id, await pathOf(id, this.layout));
-    return this.paths.get(id);
-  }
-  url(id, ...segments) {
-    if (!this.paths.has(id)) {
-      throw new FetchError("unsafe", this.root, `${JSON.stringify(id)} is not the identifier of an object (section 4)`);
-    }
-    return under(this.root, [
-      ...this.paths.get(id),
-      ...segments
-    ]);
-  }
-  versionUrl(id, ver, file) {
-    if (!isVersion(ver)) throw new FetchError("unsafe", this.root, `${JSON.stringify(ver)} is not an object version (section 4.1)`);
-    return this.url(id, ver, file);
-  }
-  folderUrl(id, ver) {
-    const folder = this.url(id, "x").slice(0, -1);
-    if (!ver) return folder;
-    return this.versionUrl(id, ver, "x").slice(0, -1);
-  }
-  contentUrl(id, inv, cp) {
-    const problem = contentPathProblem(cp, inv?.contentDirectory || "content");
-    if (problem) throw new FetchError("unsafe", this.root, `the content path ${JSON.stringify(cp)} ${problem}`);
-    return underPath(this.folderUrl(id), cp);
-  }
-  inventoryUrl(id, ver) {
-    return ver ? this.versionUrl(id, ver, "inventory.json") : this.url(id, "inventory.json");
-  }
-  witnessUrl(id, ver, name2) {
-    if (!isVersion(ver)) throw new FetchError("unsafe", this.root, `${JSON.stringify(ver)} is not an object version (section 4.1)`);
-    return this.url(id, ...WITNESSES.split("/"), ver, name2);
-  }
-  async inventoryBytes(id, ver, options = {}) {
-    await this.locate(id);
-    return this.http.cached(this.inventoryUrl(id, ver), options);
-  }
-  async inventory(id, ver, options = {}) {
-    const bytes = await this.inventoryBytes(id, ver, options);
-    const where2 = this.inventoryUrl(id, ver);
-    const inv = parseJson(bytes, where2);
-    if (!isObject(inv) || !isObject(inv.versions) || !isObject(inv.manifest)) {
-      throw new FetchError("json", where2, "is not an OCFL inventory");
-    }
-    if (Object.keys(inv.versions).length > LIMITS.versions) {
-      throw new FetchError("too-large", where2, `has more than ${LIMITS.versions} object versions`);
-    }
-    return inv;
-  }
-  async sidecarBytes(id, ver, options = {}) {
-    await this.locate(id);
-    const where2 = ver ? this.versionUrl(id, ver, "inventory.json.sha512") : this.url(id, "inventory.json.sha512");
-    return this.http.cached(where2, {
-      ...options,
-      limit: 4096
-    });
-  }
-  async sidecar(id, ver, options = {}) {
-    return sidecarDigest(await this.sidecarBytes(id, ver, options)) ?? "";
-  }
-  async pin(id, ver, options = {}) {
-    const digest = await sha512(await this.inventoryBytes(id, ver, options));
-    if (await this.sidecar(id, ver, options) !== digest) {
-      throw new FetchError("digest", this.inventoryUrl(id, ver), "the inventory does not match its checksum file");
-    }
-    return digest;
-  }
-  fileUrl(id, inv, ver, logical) {
-    const cp = contentPath(inv, ver, logical);
-    return cp ? this.contentUrl(id, inv, cp) : null;
-  }
-  async json(id, inv, ver, logical, options = {}) {
-    await this.locate(id);
-    const url = this.fileUrl(id, inv, ver, logical);
-    if (!url) return null;
-    return this.http.json(url, {
-      ...options,
-      limit: LIMITS.json
-    });
-  }
-  async bytes(id, inv, ver, logical, options = {}) {
-    await this.locate(id);
-    const url = this.fileUrl(id, inv, ver, logical);
-    if (!url) return null;
-    return this.http.cached(url, {
-      ...options,
-      limit: LIMITS.json
-    });
-  }
-  async descriptions(id, inv, ver, options = {}) {
-    const [obj, dc] = await Promise.all([
-      this.json(id, inv, ver, "object.json", options),
-      this.json(id, inv, ver, "datacite.json", options)
-    ]);
-    return {
-      obj,
-      dc
-    };
-  }
-  async objectsOf(id, inv, options = {}) {
-    const versions2 = versionsOf(inv);
-    const objs = await Promise.all(versions2.map((v) => this.json(id, inv, v, "object.json", options).catch((error) => {
-      if (error.kind === "aborted") throw error;
-      return null;
-    })));
-    return new Map(versions2.map((v, k) => [
-      v,
-      objs[k]
-    ]));
-  }
-  async history(id, at, options = {}) {
-    const inv = await this.inventory(id, null, options);
-    const objs = await this.objectsOf(id, inv, options);
-    const objOf2 = (v) => objs.get(v) ?? null;
-    return {
-      inv,
-      objs,
-      hist: historyOf(inv, objOf2, at || inv.head),
-      current: currentVersion(inv, objOf2, at || inv.head)
-    };
-  }
-  async listWitnesses(id, ver) {
-    if (!this.lister) return null;
-    const found2 = await this.lister(this.url(id, ...WITNESSES.split("/"), ver, "x").slice(0, -1));
-    return found2 ? found2.filter((e) => e.kind === "file").map((e) => e.name) : null;
-  }
-  async listFolder(id, ...segments) {
-    if (!this.lister) return null;
-    return this.lister(this.url(id, ...segments, "x").slice(0, -1));
-  }
-  async witness(id, ver, name2, options = {}) {
-    await this.locate(id);
-    try {
-      return await this.http.cached(this.witnessUrl(id, ver, name2), {
-        ...options,
-        limit: LIMITS.json
-      });
-    } catch (error) {
-      if (error.kind === "not-found" || error.kind === "forbidden") return null;
-      throw error;
-    }
-  }
-  keyLog(owner, options = {}) {
-    if (!this.keyLogs.has(owner)) {
-      const loading = this.readKeyLog(owner, options);
-      this.keyLogs.set(owner, loading);
-      loading.catch((error) => {
-        if (error?.kind === "aborted") this.keyLogs.delete(owner);
-      });
-    }
-    return this.keyLogs.get(owner);
-  }
-  async readKeyLog(owner, options) {
-    const id = objectId(owner, owner);
-    let rootBytes;
-    try {
-      rootBytes = await this.inventoryBytes(id, null, options);
-    } catch (error) {
-      if (error.kind === "not-found") return null;
-      throw error;
-    }
-    const root = jsonOrNull(rootBytes);
-    const head = typeof root?.head === "string" && /^v[0-9]+$/.test(root.head) ? Number(root.head.slice(1)) : NaN;
-    if (!Number.isInteger(head)) throw new Error(`${this.where(id)}: not an OCFL object with an inventory`);
-    const versions2 = [], problems = [];
-    for (let n = 1; n <= Math.min(head, LIMITS.versions); n++) {
-      const ver = `v${n}`;
-      let invBytes, entry;
-      try {
-        invBytes = await this.inventoryBytes(id, ver, options);
-        entry = parseJson(invBytes);
-        if (!isObject(entry.manifest) || !isObject(entry.versions?.[ver]?.state)) throw new Error("not an inventory");
-      } catch (error) {
-        if (error.kind === "aborted") throw error;
-        problems.push(`${ver}: no readable inventory in the version folder (section 4.1; ${error.detail || error.message})`);
-        break;
-      }
-      const sc = await this.sidecarBytes(id, ver, options).catch((error) => {
-        if (error.kind === "aborted") throw error;
-        return new Uint8Array();
-      });
-      const digest = await sha512(invBytes);
-      if (sidecarDigest(sc) !== digest) problems.push(`${ver}: the checksum file does not state the digest of the inventory`);
-      const files = /* @__PURE__ */ new Map();
-      for (const [d, paths] of Object.entries(entry.versions[ver].state)) {
-        if (!Array.isArray(paths) || !paths.length) continue;
-        let bytes = new Uint8Array();
-        try {
-          const cp = entry.manifest[d]?.[0];
-          bytes = await this.http.cached(this.contentUrl(id, entry, cp), {
-            ...options,
-            limit: LIMITS.json
-          });
-        } catch (error) {
-          if (error.kind === "aborted") throw error;
-          problems.push(`${ver}: the content of ${paths[0]} is missing`);
-        }
-        if (await sha512(bytes) !== d) problems.push(`${ver}: ${paths[0]} does not have the digest its inventory states`);
-        for (const p of paths) files.set(p, bytes);
-      }
-      const witnesses = /* @__PURE__ */ new Map();
-      const prev = versions2[versions2.length - 1]?.keys;
-      for (const d of n > 1 && Array.isArray(prev?.next) ? prev.next : []) {
-        if (typeof d !== "string") continue;
-        const name2 = `signature-${d.slice(0, 16)}.json`;
-        const bytes = await this.witness(id, ver, name2, options);
-        if (bytes) witnesses.set(name2, bytes);
-      }
-      versions2.push(await Version.make(n, files, invBytes, sc, witnesses));
-    }
-    if (!versions2.length || !versions2[0].files.has("genesis.json")) {
-      throw new Error(`${this.where(id)}: no genesis record in the first version`);
-    }
-    if (versions2[versions2.length - 1].number === head && !sameBytes(rootBytes, versions2[versions2.length - 1].inventory)) {
-      problems.push("the root inventory differs from that of the head version");
-    }
-    const log = await KeyLog.of(versions2[0].files.get("genesis.json"), versions2, problems);
-    if (root.id !== log.id) {
-      problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
-    }
-    await log.check();
-    return log;
-  }
-  line(id, options = {}) {
-    const key = options.log === void 0 ? id : null;
-    if (key && this.lines.has(key)) return this.lines.get(key);
-    const loading = this.readLine(id, options);
-    if (key) {
-      this.lines.set(key, loading);
-      loading.catch(() => this.lines.delete(key));
-    }
-    return loading;
-  }
-  async readLine(id, { log, signal } = {}) {
-    const options = {
-      signal
-    };
-    const inv = await this.inventory(id, null, options);
-    const names = versionsOf(inv);
-    const objs = await this.objectsOf(id, inv, options);
-    const versions2 = await Promise.all(names.map(async (ver) => {
-      const bytes = await this.inventoryBytes(id, ver, options).catch((error) => {
-        if (error.kind === "aborted") throw error;
-        return null;
-      });
-      return {
-        ver,
-        digest: bytes ? await sha512(bytes) : "",
-        obj: objs.get(ver) ?? null
-      };
-    }));
-    const owner = objs.get(names[0])?.owner;
-    if (log === void 0) {
-      log = typeof owner === "string" ? await this.keyLog(owner, options).catch((error) => {
-        if (error?.kind === "aborted") throw error;
-        return null;
-      }) : null;
-    }
-    let judgements, statuses, unnamed = false, listed = null;
-    if (this.lister) listed = await Promise.all(versions2.map((v) => this.listWitnesses(id, v.ver)));
-    if (listed?.every((x) => x !== null)) {
-      const withWitnesses = await Promise.all(versions2.map(async (v, k) => {
-        const witnesses = /* @__PURE__ */ new Map();
-        for (const name2 of listed[k]) {
-          const bytes = await this.witness(id, v.ver, name2, options);
-          if (bytes) witnesses.set(name2, bytes);
-        }
-        return {
-          version: v.ver,
-          digest: v.digest,
-          witnesses
-        };
-      }));
-      if (log) {
-        ({ judgements, statuses } = await lineStatusesOf(id, owner, withWitnesses, log));
-      } else {
-        judgements = await Promise.all(withWitnesses.map((v) => judgeFolder(v.witnesses, {
-          objectId: id,
-          version: v.version,
-          inventory: v.digest,
-          owner,
-          lookup: () => null
-        })));
-        statuses = lineStatuses(judgements);
-      }
-    } else if (!log) {
-      listed = null;
-      unnamed = true;
-      judgements = versions2.map(() => []);
-      statuses = versions2.map(() => UNCHECKED);
-    } else {
-      listed = null;
-      const dids = /* @__PURE__ */ new Set();
-      for (const v of log.versions) {
-        for (const did of Array.isArray(v.keys?.keys) ? v.keys.keys : []) dids.add(did);
-        for (const c of v.carried || []) for (const did of Array.isArray(c.keys?.keys) ? c.keys.keys : []) dids.add(did);
-      }
-      for (const c of log.met?.carried || []) for (const did of Array.isArray(c.keys?.keys) ? c.keys.keys : []) dids.add(did);
-      const files = (await Promise.all([
-        ...dids
-      ].filter((d) => typeof d === "string").map(fileName))).sort();
-      const withWitnesses = await Promise.all(versions2.map(async (v) => {
-        const witnesses = /* @__PURE__ */ new Map();
-        for (const name2 of files) {
-          const bytes = await this.witness(id, v.ver, name2, options);
-          if (bytes) witnesses.set(name2, bytes);
-        }
-        return {
-          version: v.ver,
-          digest: v.digest,
-          witnesses
-        };
-      }));
-      ({ judgements, statuses } = await lineStatusesOf(id, owner, withWitnesses, log));
-    }
-    const n = latestSigned(statuses);
-    return {
-      id,
-      inv,
-      versions: versions2,
-      objs,
-      owner,
-      log,
-      judgements,
-      statuses,
-      unnamed,
-      listed,
-      latest: n ? `v${n}` : null
-    };
-  }
-};
-
-// core/storage.js
-var StorageError = class extends Error {
-};
-function checkPath(path, { folder = false } = {}) {
-  if (typeof path !== "string") throw new StorageError(`not a path: ${String(path)}`);
-  if (path === "" && folder) return path;
-  if (path === "" || path.startsWith("/")) throw new StorageError(`not a relative path: ${JSON.stringify(path)}`);
-  for (const segment of path.split("/")) {
-    if (segment === "" || segment === "." || segment === ".." || /[\u0000-\u001f\u007f\\]/.test(segment)) {
-      throw new StorageError(`an unsafe path: ${JSON.stringify(path)}`);
-    }
-  }
-  return path;
-}
-function joinPath(...parts) {
-  return parts.filter((p) => p !== "" && p !== null && p !== void 0).join("/");
-}
-function parentOf(path) {
-  const k = path.lastIndexOf("/");
-  return k < 0 ? "" : path.slice(0, k);
-}
-function compareText(a, b) {
-  const x = [
-    ...a
-  ], y = [
-    ...b
-  ];
-  for (let k = 0; k < Math.min(x.length, y.length); k++) {
-    const d = x[k].codePointAt(0) - y[k].codePointAt(0);
-    if (d) return d;
-  }
-  return x.length - y.length;
-}
-var decoder = new TextDecoder("utf-8", {
-  fatal: true
-});
-async function readText(storage, path) {
-  const bytes = await storage.read(path);
-  return bytes === null ? null : decoder.decode(bytes);
-}
-async function readJson(storage, path) {
-  const text3 = await readText(storage, path);
-  if (text3 === null) return null;
-  try {
-    return JSON.parse(text3);
-  } catch (error) {
-    throw new StorageError(`${path}: not JSON (${error.message})`);
-  }
-}
-async function writeText(storage, path, text3, options) {
-  return storage.write(path, utf8(text3), options);
-}
-var ORIGIN = "https://archive.invalid/";
-function storageFetch(storage, origin = ORIGIN, { fallback = null } = {}) {
-  const base = new URL(origin);
-  return async (url, init = {}) => {
-    const u = new URL(url);
-    if (u.origin !== base.origin || !u.pathname.startsWith(base.pathname)) {
-      if (fallback) return fallback(url, init);
-      throw new TypeError(`fetch failed: ${url} is not in this archive`);
-    }
-    let bytes = null;
-    try {
-      bytes = await storage.read(checkPath(decodeURIComponent(u.pathname.slice(base.pathname.length))));
-    } catch {
-      bytes = null;
-    }
-    if (bytes === null) return new Response("not found", {
-      status: 404
-    });
-    const headers = {
-      "content-length": String(bytes.length)
-    };
-    return new Response(init.method === "HEAD" ? null : bytes, {
-      status: 200,
-      headers
-    });
-  };
-}
-function storageLister(storage, origin = ORIGIN) {
-  const base = new URL(origin);
-  return async (url) => {
-    const u = new URL(url);
-    if (u.origin !== base.origin || !u.pathname.startsWith(base.pathname)) return null;
-    try {
-      const path = decodeURIComponent(u.pathname.slice(base.pathname.length)).replace(/\/$/, "");
-      return await storage.list(checkPath(path, {
-        folder: true
-      })) || [];
-    } catch {
-      return [];
-    }
-  };
-}
-
-// core/keys.js
-var KeyError = class extends Error {
-};
-var PassphraseNeeded = class extends KeyError {
-  constructor(message2, passkeys = []) {
-    super(message2);
-    this.passkeys = passkeys;
-  }
-};
-var PKCS8_ED25519 = [
-  48,
-  46,
-  2,
-  1,
-  0,
-  48,
-  5,
-  6,
-  3,
-  43,
-  101,
-  112,
-  4,
-  34,
-  4,
-  32
-];
-var Key = class _Key {
-  static async fromSeed(seed) {
-    if (!(seed instanceof Uint8Array) || seed.length !== 32) {
-      throw new KeyError("the seed of an Ed25519 key has 32 bytes");
-    }
-    const own2 = Uint8Array.from(seed);
-    const signing2 = await crypto.subtle.importKey("pkcs8", new Uint8Array([
-      ...PKCS8_ED25519,
-      ...own2
-    ]), {
-      name: "Ed25519"
-    }, true, [
-      "sign"
-    ]);
-    const jwk = await crypto.subtle.exportKey("jwk", signing2);
-    const publicKey = unbase64(jwk.x.replaceAll("-", "+").replaceAll("_", "/") + "=");
-    const did = didKey(publicKey);
-    return new _Key(own2, signing2, publicKey, did, await keyDigest(did));
-  }
-  constructor(seed, signing2, publicKey, did, digest) {
-    Object.assign(this, {
-      seed,
-      signing: signing2,
-      publicKey,
-      did,
-      digest,
-      id: digest.slice(0, 16)
-    });
-  }
-  async sign(message2) {
-    return new Uint8Array(await crypto.subtle.sign({
-      name: "Ed25519"
-    }, this.signing, message2));
-  }
-  toString() {
-    return `Key(${this.did})`;
-  }
-};
-function randomBytes(n) {
-  return crypto.getRandomValues(new Uint8Array(n));
-}
-async function newKey() {
-  return Key.fromSeed(randomBytes(32));
-}
-function base64(bytes) {
-  let binary2 = "";
-  for (const b of bytes) binary2 += String.fromCharCode(b);
-  return btoa(binary2);
-}
-function unbase32(text3) {
-  const t = text3.toUpperCase();
-  if (!/^[A-Z2-7]*$/.test(t) || [
-    1,
-    3,
-    6
-  ].includes(t.length % 8)) throw new KeyError(`not base32: ${text3}`);
-  const out = [];
-  let bits = 0, value = 0;
-  for (const c of t) {
-    value = value << 5 | "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".indexOf(c);
-    bits += 5;
-    if (bits >= 8) {
-      out.push(value >>> bits - 8 & 255);
-      bits -= 8;
-    }
-    value &= (1 << bits) - 1;
-  }
-  return new Uint8Array(out);
-}
-function strictBase64(text3) {
-  try {
-    return unbase64(text3);
-  } catch {
-    throw new KeyError("not base64");
-  }
-}
-function concat(...parts) {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let k = 0;
-  for (const p of parts) {
-    out.set(p, k);
-    k += p.length;
-  }
-  return out;
-}
-var OPSLIMIT = 3;
-var MEMLIMIT = 268435456;
-var ARGON2ID = {
-  opsMin: 1,
-  opsMax: 4,
-  memMin: 8192,
-  memMax: 1073741824,
-  saltBytes: 16
-};
-async function argon2id2(passphrase, salt, opslimit, memlimit) {
-  const ops = /^[0-9]+$/.test(String(opslimit)) ? Number(opslimit) : NaN;
-  const mem = /^[0-9]+$/.test(String(memlimit)) ? Number(memlimit) : NaN;
-  if (Number.isNaN(ops) || Number.isNaN(mem)) throw new KeyError("the encryption of the key is damaged");
-  if (!(ARGON2ID.opsMin <= ops && ops <= ARGON2ID.opsMax && ARGON2ID.memMin <= mem && mem <= ARGON2ID.memMax)) {
-    throw new KeyError(`the key asks for an Argon2id cost out of bounds (opslimit=${ops}, memlimit=${mem}): at most ${ARGON2ID.opsMax} and ${ARGON2ID.memMax}`);
-  }
-  if (salt.length !== ARGON2ID.saltBytes) throw new KeyError("the encryption of the key is damaged");
-  const hashWasm = await Promise.resolve().then(() => (init_index_esm(), index_esm_exports));
-  return hashWasm.argon2id({
-    password: utf8(passphrase),
-    salt,
-    parallelism: 1,
-    iterations: ops,
-    memorySize: Math.floor(mem / 1024),
-    hashLength: 32,
-    outputType: "binary"
-  });
-}
-async function secretbox() {
-  const nacl = await Promise.resolve().then(() => __toESM(require_nacl_fast()));
-  return (nacl.default || nacl).secretbox;
-}
-async function seal(data2, key) {
-  const box = await secretbox();
-  const nonce = randomBytes(24);
-  return concat(nonce, box(data2, nonce, key));
-}
-async function unseal(data2, key) {
-  const box = await secretbox();
-  if (data2.length < 24 + 16) return null;
-  return box.open(data2.subarray(24), data2.subarray(0, 24), key);
-}
-async function encryptSeed(seed, passphrase, { opslimit = OPSLIMIT, memlimit = MEMLIMIT } = {}) {
-  if (passphrase === null || passphrase === void 0) return [
-    "none",
-    seed
-  ];
-  const salt = randomBytes(ARGON2ID.saltBytes);
-  const box = await seal(seed, await argon2id2(passphrase, salt, opslimit, memlimit));
-  return [
-    `argon2id-secretbox opslimit=${opslimit} memlimit=${memlimit} salt=${base64(salt)}`,
-    box
-  ];
-}
-function parameters(words2) {
-  const out = {};
-  for (const w of words2) {
-    const k = w.indexOf("=");
-    out[k < 0 ? w : w.slice(0, k)] = k < 0 ? "" : w.slice(k + 1);
-  }
-  return out;
-}
-async function decryptSeed(encryption, data2, passphrase) {
-  const words2 = encryption.split(/\s+/).filter(Boolean);
-  if (words2.length === 1 && words2[0] === "none") return data2;
-  if (!words2.length || words2[0] !== "argon2id-secretbox") {
-    throw new KeyError(`unknown encryption: '${words2.join(" ")}'`);
-  }
-  if (passphrase === null || passphrase === void 0) {
-    throw new PassphraseNeeded("this key is encrypted: a passphrase is needed");
-  }
-  const p = parameters(words2.slice(1));
-  if (!("salt" in p) || !("opslimit" in p) || !("memlimit" in p)) throw new KeyError("the encryption of the key is damaged");
-  let salt;
-  try {
-    salt = strictBase64(p.salt);
-  } catch {
-    throw new KeyError("the encryption of the key is damaged");
-  }
-  const seed = await unseal(data2, await argon2id2(passphrase, salt, p.opslimit, p.memlimit));
-  if (!seed) throw new KeyError("wrong passphrase, or a damaged key");
-  return seed;
-}
-var ROTATION_FORMAT = "opensheaf-rotation-key/0.2";
-var KEY_FORMAT = "opensheaf-key/0.2";
-var TEXT_FORMAT = "opensheaf-key-text/0.2";
-var ENVELOPE = "envelope-secretbox";
-var CURRENT = "current";
-var ROTATION = "rotation";
-var KINDS2 = [
-  CURRENT,
-  ROTATION
-];
-function rotationFileName(owner, key) {
-  return `rotation-${owner.slice(0, 16)}-${key.id}.txt`;
-}
-async function rotationKeyText(key, owner, version, passphrase = null, cost = {}) {
-  return fileText([
-    ROTATION_FORMAT
-  ], key, owner, version, passphrase, cost);
-}
-async function fileText(head, key, owner, version, passphrase, cost) {
-  const [encryption, data2] = await encryptSeed(key.seed, passphrase, cost);
-  const lines2 = [
-    ...head,
-    `owner ${owner}`,
-    ...version ? [
-      `version v${version}`
-    ] : []
-  ];
-  lines2.push(`key ${key.did}`, `digest ${key.digest}`, `encryption ${encryption}`, `seed ${base64(data2)}`);
-  return lines2.join("\n") + "\n";
-}
-var SHEET_TITLE = "OpenSheaf rotation key";
-async function sheetCheck(seed) {
-  return base32(await sha256(concat(utf8("opensheaf-rotation-key-check\n"), seed))).slice(0, 4).toUpperCase();
-}
-async function rotationKeySheet(key, owner, version) {
-  const groups = base32(key.seed).toUpperCase().match(/.{1,4}/g).join(" ");
-  return [
-    `${SHEET_TITLE} (${ROTATION_FORMAT})`,
-    "Keep this sheet offline, apart from the owner's devices and its other rotation keys:",
-    "with enough of them, whoever holds it can change the owner's keys.",
-    "",
-    `owner    ${owner}`,
-    `version  v${version}`,
-    `key      ${key.did}`,
-    `digest   ${key.digest}`,
-    `seed     ${groups}`,
-    `check    ${await sheetCheck(key.seed)}`
-  ].join("\n") + "\n";
-}
-var PASSKEY_RP = "unlock.opensheaf.org";
-var PASSKEY_INFO = utf8("opensheaf wallet passkey v1");
-var PASSKEY_SALT = "opensheaf wallet unlock v1 ";
-async function hmacSha256(key, data2) {
-  const k = await crypto.subtle.importKey("raw", key, {
-    name: "HMAC",
-    hash: "SHA-256"
-  }, false, [
-    "sign"
-  ]);
-  return new Uint8Array(await crypto.subtle.sign("HMAC", k, data2));
-}
-async function hkdf(ikm, salt, info, length) {
-  const prk = await hmacSha256(salt.length ? salt : new Uint8Array(32), ikm);
-  const out = [];
-  let block = new Uint8Array();
-  for (let i = 1; out.length < length; i++) {
-    block = await hmacSha256(prk, concat(block, info, new Uint8Array([
-      i
-    ])));
-    out.push(...block);
-  }
-  return new Uint8Array(out.slice(0, length));
-}
-async function passkeySalt(owner) {
-  return sha256(utf8(PASSKEY_SALT + owner));
-}
-async function passkeyKek(prfSecret) {
-  return hkdf(prfSecret, new Uint8Array(32), PASSKEY_INFO, 32);
-}
-var Passkey = class {
-  constructor(cred, salt, { rp = PASSKEY_RP, kek = null, box = null } = {}) {
-    Object.assign(this, {
-      cred,
-      salt: Uint8Array.from(salt),
-      rp,
-      kek,
-      box
-    });
-  }
-  async opens(kek) {
-    return this.box !== null && await unseal(this.box, kek) !== null;
-  }
-  async wrap(dataKey2) {
-    return `wrap passkey prf rp=${this.rp} cred=${this.cred} salt=${base64(this.salt)} ` + base64(await seal(dataKey2, this.kek));
-  }
-  toString() {
-    return `Passkey(${this.rp} ${this.cred})`;
-  }
-};
-async function wrapsFor(dataKey2, passphrase, passkeys, { opslimit = OPSLIMIT, memlimit = MEMLIMIT } = {}) {
-  const salt = randomBytes(ARGON2ID.saltBytes);
-  const box = await seal(dataKey2, await argon2id2(passphrase, salt, opslimit, memlimit));
-  const out = [
-    `wrap passphrase argon2id opslimit=${opslimit} memlimit=${memlimit} salt=${base64(salt)} ${base64(box)}`
-  ];
-  for (const p of passkeys) out.push(await p.wrap(dataKey2));
-  return out;
-}
-async function envelope(seed, passphrase, passkeys = [], cost = {}) {
-  const dataKey2 = randomBytes(32);
-  return [
-    await wrapsFor(dataKey2, passphrase, passkeys, cost),
-    await seal(seed, dataKey2)
-  ];
-}
-function parseWrap(line) {
-  const parts = line.split(/\s+/).filter(Boolean);
-  if (parts.length < 4 || parts[0] !== "wrap") throw new KeyError(`a damaged lock of the key: '${line}'`);
-  const out = parameters(parts.slice(3, -1));
-  try {
-    out.method = parts[1];
-    out.kind = parts[2];
-    out.box = strictBase64(parts[parts.length - 1]);
-    if ("salt" in out) out.salt = strictBase64(out.salt);
-  } catch {
-    throw new KeyError("a lock of the key is damaged");
-  }
-  return out;
-}
-function wrapsOf(text3) {
-  return text3.split(/\r\n|\r|\n/).map((l) => l.trim()).filter((l) => l.startsWith("wrap "));
-}
-function passkeyOfWrap(w) {
-  return new Passkey(w.cred, w.salt || new Uint8Array(), {
-    rp: w.rp || PASSKEY_RP,
-    box: w.box
-  });
-}
-function passkeysOf(text3) {
-  return wrapsOf(text3).map(parseWrap).filter((w) => w.method === "passkey" && w.kind === "prf" && w.cred).map(passkeyOfWrap);
-}
-async function dataKey(wraps, passphrase = null, keks = null) {
-  const parsed = wraps.map(parseWrap);
-  for (const w of parsed) {
-    if (w.method === "passkey" && keks && w.cred in keks) {
-      const opened = await unseal(w.box, keks[w.cred]);
-      if (opened) return opened;
-    }
-  }
-  if (passphrase === null || passphrase === void 0) {
-    throw new PassphraseNeeded("this key is encrypted: a passphrase is needed", parsed.filter((w) => w.method === "passkey" && w.cred).map(passkeyOfWrap));
-  }
-  for (const w of parsed) {
-    if (w.method !== "passphrase" || w.kind !== "argon2id") continue;
-    if (!("salt" in w) || !("opslimit" in w) || !("memlimit" in w)) throw new KeyError("the encryption of the key is damaged");
-    const opened = await unseal(w.box, await argon2id2(passphrase, w.salt, w.opslimit, w.memlimit));
-    if (opened) return opened;
-  }
-  throw new KeyError("wrong passphrase, or a damaged key");
-}
-async function openEnvelope(wraps, data2, passphrase = null, keks = null) {
-  const seed = await unseal(data2, await dataKey(wraps, passphrase, keks));
-  if (!seed) throw new KeyError("the seed of the key is damaged");
-  return seed;
-}
-async function addPasskey(text3, passphrase, passkey, cost = {}) {
-  const lines2 = text3.split(/\r\n|\r|\n/);
-  if (lines2[lines2.length - 1] === "") lines2.pop();
-  const enc = lines2.findIndex((x) => x.startsWith("encryption "));
-  const seedAt = lines2.findIndex((x) => x.startsWith("seed "));
-  if (enc < 0 || seedAt < 0 || seedAt < enc) throw new KeyError("not a key file");
-  const method = lines2[enc].split(/\s+/).filter(Boolean)[1];
-  if (method === ENVELOPE) {
-    const key = await dataKey(wrapsOf(text3), passphrase);
-    let last = -1;
-    lines2.forEach((x, k) => {
-      if (x.startsWith("wrap ")) last = k;
-    });
-    lines2.splice(last + 1, 0, await passkey.wrap(key));
-  } else if (method === "none") {
-    throw new KeyError("this key is kept unencrypted: there is nothing to unlock");
-  } else {
-    let data2;
-    try {
-      data2 = strictBase64(lines2[seedAt].slice(5).trim());
-    } catch {
-      throw new KeyError("the seed of the key is damaged");
-    }
-    const seed = await decryptSeed(lines2[enc].slice("encryption ".length), data2, passphrase);
-    const [wraps, sealed] = await envelope(seed, passphrase, [
-      passkey
-    ], cost);
-    lines2.splice(enc, seedAt + 1 - enc, `encryption ${ENVELOPE}`, ...wraps, "seed " + base64(sealed));
-  }
-  return lines2.join("\n") + "\n";
-}
-async function keyFileText(key, owner, kind, version = null, passphrase = null, { passkeys = [], cost = {} } = {}) {
-  if (!KINDS2.includes(kind)) throw new KeyError(`a key is ${KINDS2.join(" or ")}`);
-  const head = [
-    KEY_FORMAT,
-    `kind ${kind}`
-  ];
-  if (passphrase === null || passphrase === void 0) return fileText(head, key, owner, version, null, cost);
-  const [wraps, data2] = await envelope(key.seed, passphrase, passkeys, cost);
-  const lines2 = [
-    ...head,
-    `owner ${owner}`,
-    ...version ? [
-      `version v${version}`
-    ] : []
-  ];
-  lines2.push(`key ${key.did}`, `digest ${key.digest}`, `encryption ${ENVELOPE}`, ...wraps, "seed " + base64(data2));
-  return lines2.join("\n") + "\n";
-}
-async function readKey(text3, passphrase = null, keks = null) {
-  const lines2 = text3.split(/\r\n|\r|\n/);
-  if (lines2[lines2.length - 1] === "") lines2.pop();
-  const formats = [
-    ROTATION_FORMAT,
-    KEY_FORMAT,
-    TEXT_FORMAT
-  ];
-  const start = lines2.findIndex((line) => formats.includes(line.trim()));
-  const format = start < 0 ? null : lines2[start].trim();
-  const fields = {};
-  for (const line of lines2.slice(start + 1)) {
-    const t = line.trim();
-    const k = t.indexOf(" ");
-    const name2 = k < 0 ? t : t.slice(0, k);
-    if (name2 && !(name2 in fields)) fields[name2] = k < 0 ? "" : t.slice(k + 1).trim();
-  }
-  let data2;
-  if (format === ROTATION_FORMAT || format === KEY_FORMAT) {
-    try {
-      data2 = strictBase64(fields.seed ?? "");
-    } catch {
-      throw new KeyError("the seed of the file is not base64");
-    }
-  } else {
-    try {
-      data2 = unbase32((fields.seed ?? "").replaceAll(" ", ""));
-    } catch {
-      data2 = new Uint8Array();
-    }
-    if (!data2.length || (fields.check ?? "").toUpperCase() !== await sheetCheck(data2)) {
-      throw new KeyError("the seed does not match its check: a character is mistyped");
-    }
-  }
-  let seed;
-  if ((fields.encryption ?? "").split(" ")[0] === ENVELOPE) {
-    const wraps = lines2.slice(Math.max(start, 0)).map((l) => l.trim()).filter((l) => l.startsWith("wrap "));
-    seed = await openEnvelope(wraps, data2, passphrase, keks);
-  } else {
-    seed = await decryptSeed(fields.encryption ?? "none", data2, passphrase);
-  }
-  if (seed.length !== 32) throw new KeyError("not the seed of an Ed25519 key");
-  const key = await Key.fromSeed(seed);
-  if ((fields.key ?? key.did) !== key.did || (fields.digest ?? key.digest) !== key.digest) {
-    throw new KeyError("the seed is not that of the key the file or sheet names");
-  }
-  const kind = fields.kind ?? ROTATION;
-  if (!KINDS2.includes(kind)) throw new KeyError(`unknown kind of key: '${kind}'`);
-  const version = (fields.version ?? "").split(" ")[0];
-  return {
-    key,
-    owner: fields.owner ?? null,
-    kind,
-    version: /^v[0-9]+$/.test(version) ? Number(version.slice(1)) : null
-  };
-}
-async function readRotationKey(text3, passphrase = null) {
-  const found2 = await readKey(text3, passphrase);
-  if (found2.kind !== ROTATION) throw new KeyError(`${found2.key.did} is a ${found2.kind} key, not a rotation key`);
-  return found2;
-}
-
-// core/write.js
-function jsonText(value) {
-  return JSON.stringify(value, null, 2) + "\n";
-}
-function jsonBytes(value) {
-  return utf8(jsonText(value));
-}
-function utcNow() {
-  return (/* @__PURE__ */ new Date()).toISOString().replace(/\.[0-9]{3}Z$/, "Z");
-}
-function today() {
-  const d = /* @__PURE__ */ new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-function newNonce() {
-  return hex(randomBytes(16));
-}
-async function genesisRecord(kind, { originator = null, keys = null, threshold = null, next = null, nextThreshold = null, keeper = null, extensions = null, created = null, nonce = null } = {}) {
-  if (!KINDS.includes(kind)) throw new Error(`unknown kind '${kind}'`);
-  nonce = nonce || newNonce();
-  created = created || utcNow();
-  if (!NONCE.test(nonce) || !CREATED.test(created)) {
-    throw new Error("a nonce of at least 128 bits in hexadecimal, and a date in UTC, are needed");
-  }
-  const rec = {
-    format: GENESIS_FORMAT,
-    kind,
-    created
-  };
-  if (kind === "owner") {
-    if (originator !== null) throw new Error("an owner is its own originator: its genesis record names none");
-    Object.assign(rec, {
-      nonce,
-      keys: [
-        ...keys || []
-      ],
-      threshold,
-      next: [
-        ...next || []
-      ],
-      nextThreshold
-    });
-    const problems = await keyRulesOfRecord(rec);
-    if (problems.length) throw new Error(problems.join("; "));
-    if (keeper !== null) {
-      rec.keeper = typeof keeper === "string" ? [
-        keeper
-      ] : [
-        ...keeper
-      ];
-      if (rec.keeper.length !== 1 || !keeperValid(rec.keeper[0])) {
-        throw new Error(`a keeper is one ORCID iD or https://<domain>/: '${keeper}'`);
-      }
-    }
-    if (extensions) rec.extensions = extensions;
-  } else {
-    if (typeof originator !== "string" || !OWNER_NAME.test(originator)) {
-      throw new Error(`the originator must be an owner name: '${originator}'`);
-    }
-    if ([
-      keys,
-      threshold,
-      next,
-      nextThreshold,
-      keeper,
-      extensions
-    ].some((v) => v !== null)) {
-      throw new Error("keys, thresholds, keeper and extensions are only for an owner");
-    }
-    Object.assign(rec, {
-      originator,
-      nonce
-    });
-  }
-  return jsonBytes(rec);
-}
-function place(contentPath3) {
-  const k = contentPath3.indexOf("/");
-  const ver = k < 0 ? contentPath3 : contentPath3.slice(0, k);
-  const rest = k < 0 ? "" : contentPath3.slice(k + 1);
-  return [
-    /^[0-9]+$/.test(ver.slice(1)) ? Number(ver.slice(1)) : 0,
-    rest
-  ];
-}
-function comparePlace(a, b) {
-  return a[0] - b[0] || compareText(a[1], b[1]);
-}
-function smallest(list2, compare) {
-  return list2.reduce((best, x) => compare(x, best) < 0 ? x : best);
-}
-var sortedKeys = (o) => Object.keys(o).sort(compareText);
-function orderedVersion(e) {
-  const out = {};
-  for (const k of [
-    "created",
-    "state",
-    "message",
-    "user"
-  ]) if (k in e) out[k] = e[k];
-  out.state = Object.fromEntries(Object.entries(e.state).map(([d, paths]) => [
-    d,
-    paths,
-    smallest(paths, compareText)
-  ]).sort((x, y) => compareText(x[2], y[2])).map(([d, paths]) => [
-    d,
-    paths
-  ]));
-  for (const k of sortedKeys(e)) if (!(k in out)) out[k] = e[k];
-  return out;
-}
-function orderedInventory(inv) {
-  const out = {};
-  for (const k of sortedKeys(inv)) out[k] = inv[k];
-  out.manifest = Object.fromEntries(Object.entries(inv.manifest).map(([d, paths]) => [
-    d,
-    paths,
-    place(smallest(paths, (a, b) => comparePlace(place(a), place(b))))
-  ]).sort((x, y) => comparePlace(x[2], y[2])).map(([d, paths]) => [
-    d,
-    paths
-  ]));
-  out.versions = {};
-  for (const k of Object.keys(inv.versions).sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)))) {
-    out.versions[k] = orderedVersion(inv.versions[k]);
-  }
-  return out;
-}
-function inventoryFile(inv) {
-  return jsonBytes(inv);
-}
-async function sha512hex(bytes) {
-  return hex(await sha512bytes(bytes));
-}
-async function sidecar(inventoryBytes) {
-  return utf8(`${await sha512hex(inventoryBytes)}  inventory.json
-`);
-}
-async function sha256hex(bytes) {
-  return hex(await sha256(bytes));
-}
-async function md5hex(bytes) {
-  const hashWasm = await Promise.resolve().then(() => (init_index_esm(), index_esm_exports));
-  return hashWasm.md5(bytes);
-}
-async function signatureFile(key, objectId2, version, inventory, signer, keyLog) {
-  const signature = await key.sign(message(objectId2, version, inventory, keyLog));
-  return jsonBytes({
-    format: SIGNATURE_FORMAT,
-    object: objectId2,
-    version,
-    inventorySha512: inventory,
-    signer,
-    key: key.did,
-    keyLog,
-    signature: base64(signature)
-  });
-}
-async function writeKeyLog(storage, dir, log) {
-  const namaste = joinPath(dir, "0=ocfl_object_1.1");
-  if (await storage.kind(namaste) !== "file") await storage.write(namaste, utf8("ocfl_object_1.1\n"));
-  let held2 = 0;
-  const root = await storage.read(joinPath(dir, "inventory.json"));
-  if (root) held2 = Number(JSON.parse(new TextDecoder().decode(root)).head.slice(1));
-  for (const v of log.versions.slice(0, held2)) {
-    const bytes = await storage.read(joinPath(dir, `v${v.number}`, "inventory.json"));
-    if (!bytes || bytes.length !== v.inventory.length || bytes.some((b, k) => b !== v.inventory[k])) {
-      throw new StorageError(`${dir}: v${v.number} differs from that of the key log of ${log.owner}`);
-    }
-  }
-  for (const v of log.versions.slice(held2)) {
-    const inv = JSON.parse(new TextDecoder().decode(v.inventory));
-    const byDigest = /* @__PURE__ */ new Map();
-    for (const bytes of v.files.values()) byDigest.set(await sha512hex(bytes), bytes);
-    for (const [d, paths] of Object.entries(inv.manifest)) {
-      for (const cp of paths) {
-        if (cp.startsWith(`v${v.number}/`)) await storage.write(joinPath(dir, cp), byDigest.get(d));
-      }
-    }
-    await storage.write(joinPath(dir, `v${v.number}`, "inventory.json"), v.inventory);
-    await storage.write(joinPath(dir, `v${v.number}`, "inventory.json.sha512"), v.sidecar?.length ? v.sidecar : await sidecar(v.inventory));
-  }
-  for (const v of log.versions) {
-    for (const [name2, bytes] of v.witnesses || []) {
-      const path = joinPath(dir, WITNESSES, `v${v.number}`, name2);
-      if (!await storage.kind(path)) await storage.write(path, bytes, {
-        exclusive: true
-      });
-    }
-  }
-  if (log.versions.length > held2) {
-    const head = log.versions[log.versions.length - 1];
-    await storage.write(joinPath(dir, "inventory.json.tmp"), head.inventory);
-    await storage.rename(joinPath(dir, "inventory.json.tmp"), joinPath(dir, "inventory.json"));
-    await storage.write(joinPath(dir, "inventory.json.sha512"), head.sidecar?.length ? head.sidecar : await sidecar(head.inventory));
-  }
-}
-
-// core/folder.js
-var Stop = class extends Error {
-};
-var LOWER_NAMES = [
-  "gh",
-  "osheaf",
-  "command"
-];
-function sentence(text3) {
-  const m = /^([a-z][a-z']{0,14})(?=[ ,;])/.exec(text3);
-  if (m && !LOWER_NAMES.includes(m[1])) text3 = text3[0].toUpperCase() + text3.slice(1);
-  return /[.?!:…]$/.test(text3) ? text3 : text3 + ".";
-}
-function stop(text3) {
-  throw new Stop(sentence(text3));
-}
-function exit(text3) {
-  throw new Stop(text3);
-}
-function short(name2) {
-  if (name2.startsWith("did:key:")) name2 = name2.slice("did:key:".length);
-  return [
-    ...name2
-  ].length <= 14 ? name2 : `${name2.slice(0, 8)}\u2026${name2.slice(-4)}`;
-}
-function plural(n, noun) {
-  return n === 1 ? `${n} ${noun}` : `${n} ${noun}s`;
-}
-function environment(given = {}) {
-  return {
-    out: (line) => console.log(line),
-    err: (line) => console.error(line),
-    warn(text3) {
-      this.err("Warning: " + sentence(text3));
-    },
-    newKey,
-    now: utcNow,
-    today,
-    fetch: globalThis.fetch?.bind(globalThis),
-    fetchJson: null,
-    template: null,
-    ...given
-  };
-}
-var CONFIG_NAME = "osheaf.json";
-var CONFIG_NAMES = [
-  "osheaf.json",
-  "osheaf.yaml",
-  "osheaf.yml"
-];
-var SPEC = "0.2";
-var OBJ2 = "object.json";
-var OBJ_FORMAT = "opensheaf-object/0.2";
-var GENESIS2 = "genesis.json";
-var LAYOUTS = {
-  "owner-name": OWNER_NAME_LAYOUT,
-  hashed: HASHED_LAYOUT
-};
-var LAYOUT_TEXT = "Lines at <owner>/<name>/, drafts at draft/<id>/: the owner-name layout of the OpenSheaf specification 0.2, section 3.2\n";
-var REQUIRED = [
-  "owner",
-  "name",
-  "baseUrl",
-  "mainCollection",
-  "curator",
-  "depositor"
-];
-var REBUILD = "this archive is of specification 0.1, which these tools no longer read: rebuild it under specification 0.2 (section 16.1)";
-async function readConfig(storage) {
-  const cfg = await readJson(storage, CONFIG_NAME);
-  if (cfg !== null) return cfg;
-  for (const n of CONFIG_NAMES.slice(1)) {
-    if (await storage.kind(n)) exit(`${n}: opensheaf-js reads osheaf.json only (opensheaf-py also reads YAML)`);
-  }
-  exit(`no ${CONFIG_NAME} or osheaf.yaml in the archive folder`);
-}
-var ArchiveFolder = class _ArchiveFolder {
-  static async open(storage, env = environment()) {
-    const folder = new _ArchiveFolder(storage, env);
-    await folder.configure();
-    return folder;
-  }
-  constructor(storage, env = environment()) {
-    this.storage = storage;
-    this.env = env;
-    this.archive = {};
-    this.index = {};
-    this.labels = /* @__PURE__ */ new Map();
-    this.tombstones = [];
-    this.layout = OWNER_NAME_LAYOUT;
-    this.old = false;
-    this.cached = null;
-  }
-  async configure() {
-    const cfg = await readConfig(this.storage);
-    const disc = await readJson(this.storage, "opensheaf.json") || {};
-    this.old = "archiveId" in cfg || disc.specification === "0.1";
-    this.layout = cfg.storageLayout || OWNER_NAME_LAYOUT;
-    this.archive = Object.fromEntries(Object.entries(cfg).filter(([k]) => k !== "texmacs" && k !== "index"));
-    if (this.old) return this;
-    const missing = REQUIRED.filter((k) => !(k in cfg));
-    if (missing.length) exit(`${CONFIG_NAME} lacks ${missing.join(", ")}`);
-    if (!Object.values(LAYOUTS).includes(this.layout)) {
-      exit(`${CONFIG_NAME}: storageLayout is one of ${Object.values(LAYOUTS).join(", ")}`);
-    }
-    this.archive.profiles ??= [];
-    this.archive.contact ??= this.archive.baseUrl;
-    this.index = cfg.index || {};
-    this.labels = new Map((disc.objects || []).filter((o) => o.label).map((o) => [
-      o.label,
-      o.id
-    ]));
-    this.tombstones = [
-      ...disc.tombstones || []
-    ];
-    return this;
-  }
-  archiveOwners() {
-    const out = [
-      this.archive.owner
-    ];
-    return out.concat((this.archive.owners || []).filter((o) => !out.includes(o)));
-  }
-  labelOf(id) {
-    for (const [label, i] of this.labels) if (i === id) return label;
-    return null;
-  }
-  depositor() {
-    return {
-      name: this.archive.depositor.name,
-      address: this.archive.depositor.address
-    };
-  }
-  async dirOf(id) {
-    return joinPath("ocfl", ...await pathOf(id, this.layout));
-  }
-  async initStorageRoot() {
-    const s = this.storage;
-    await writeText(s, "ocfl/0=ocfl_1.1", "ocfl_1.1\n");
-    if (this.layout === HASHED_LAYOUT) {
-      await s.write("ocfl/ocfl_layout.json", jsonBytes({
-        extension: HASHED_LAYOUT,
-        description: "Hashed n-tuple storage layout with its default parameters (OpenSheaf 0.2, section 3.2)"
-      }));
-    } else if (!await s.kind(`ocfl/${LAYOUT_FILE}`)) {
-      await writeText(s, `ocfl/${LAYOUT_FILE}`, LAYOUT_TEXT);
-    }
-  }
-  async inventory(dir) {
-    try {
-      return await readJson(this.storage, joinPath(dir, "inventory.json"));
-    } catch {
-      return null;
-    }
-  }
-  contentPath(inv, version, logical) {
-    for (const [d, paths] of Object.entries(inv.versions[version].state)) {
-      if (paths.includes(logical)) return inv.manifest[d][0];
-    }
-    return null;
-  }
-  async readLogical(dir, inv, logical, version = null) {
-    const cp = this.contentPath(inv, version || inv.head, logical);
-    return cp ? this.storage.read(joinPath(dir, cp)) : null;
-  }
-  async readObjectJson(dir, inv, logical, version = null) {
-    const bytes = await this.readLogical(dir, inv, logical, version);
-    return bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
-  }
-  async objects() {
-    const out = [];
-    const walk = async (dir) => {
-      for (const entry of await this.storage.list(dir) || []) {
-        if (entry.kind !== "dir") continue;
-        const child = joinPath(dir, entry.name);
-        if (await this.storage.kind(joinPath(child, "0=ocfl_object_1.1")) === "file") {
-          const inv = await this.inventory(child);
-          out.push({
-            id: inv?.id ?? null,
-            dir: child,
-            inv
-          });
-        } else if (!(dir === "ocfl" && entry.name === "extensions")) {
-          await walk(child);
-        }
-      }
-    };
-    if (await this.storage.kind("ocfl") === "dir") await walk("ocfl");
-    const idOf = (o) => typeof o.id === "string" ? o.id : "None";
-    return out.sort((a, b) => compareText(idOf(a), idOf(b)) || compareText(a.dir, b.dir));
-  }
-  reader() {
-    if (!this.cached) {
-      const base = /^https?:\/\/[^/]+\/(.*\/)?$/.test(this.archive.baseUrl || "") ? this.archive.baseUrl : ORIGIN;
-      const http = new Http({
-        fetch: storageFetch(this.storage, base),
-        budget: null
-      });
-      this.cached = new Archive(http, base, {
-        specification: SPEC,
-        storageRoot: "ocfl/",
-        storageLayout: this.layout
-      });
-      this.cached.lister = storageLister(this.storage, base);
-    }
-    return this.cached;
-  }
-  changed() {
-    this.cached = null;
-  }
-  async keyLog(owner) {
-    return this.reader().keyLog(owner);
-  }
-  async line(id) {
-    await this.reader().locate(id);
-    return this.reader().line(id);
-  }
-  async latestSigned(id) {
-    return (await this.line(id)).latest;
-  }
-  async signingKeys(owner) {
-    const who = short(owner);
-    const log = await this.keyLog(owner);
-    if (!log) stop(`the key log of ${who} is not in the storage root (section 6.5)`);
-    const { errors } = await log.check();
-    if (errors.length) stop(`the key log of ${who} has errors: ` + errors.join("; "));
-    const latest = log.latest();
-    if (!latest) stop(`the owner ${who} has ended (section 6.3): nothing is signed for it`);
-    let found2 = await this.env.keyStore.current(owner, latest.keys.keys);
-    const need = latest.keys.threshold;
-    if (found2.length < need && !this.env.signingKeyGiven && this.env.pullFromWallet) {
-      found2 = await this.env.pullFromWallet(this, owner, latest, found2);
-    }
-    if (found2.length < need) {
-      const hint = this.env.keyStore.keptOnDevice() ? "osheaf key new makes one for this computer" : "configure a key wallet, from which each command opens them";
-      stop(`this computer holds ${found2.length} of the current keys of ${who}, and v${latest.number} of its key log needs ${need} to sign (${hint})`);
-    }
-    return {
-      log,
-      latest,
-      signers: found2
-    };
-  }
-  async checkBeforeExtending(id, acknowledged = false) {
-    const { statuses } = await this.line(id);
-    const doubtful = statuses.map((s, k) => [
-      `v${k + 1}`,
-      s
-    ]).filter(([, s]) => s !== SIGNED && s !== VOUCHED);
-    if (!doubtful.length) return;
-    const lines2 = doubtful.map(([v, s]) => `  ${v}: ${s}`).join("\n");
-    if (!acknowledged) {
-      exit(`${id}: the new version would extend versions that are not signed, or are contested (section 7.3):
-${lines2}
-look at them; give --i-know to extend them anyway`);
-    }
-    this.env.err(`warning: ${id}: extending versions that are not signed, or are contested:
-${lines2}`);
-  }
-  async zenodoPending(id) {
-    try {
-      const state = await readJson(this.storage, joinPath("zenodo-staging", ...await pathOf(id, this.layout), "state.json"));
-      return state?.phase === "published";
-    } catch {
-      return false;
-    }
-  }
-  async addVersion(id, files, obj, message2, { acknowledged = false, stageIn = null } = {}) {
-    const s = this.storage;
-    const dir = await this.dirOf(id);
-    let inv = await this.inventory(dir);
-    if (stageIn === null && await this.zenodoPending(id)) {
-      const name2 = this.labelOf(id) || id;
-      exit(`${name2}: a Zenodo deposit was published and its version is not added yet: osheaf zenodo ${name2} completes it first (appendix A.1)`);
-    }
-    const draft = id.startsWith("sheaf:draft:");
-    const { log, latest, signers: signers2 } = draft ? {
-      log: null,
-      latest: null,
-      signers: []
-    } : await this.signingKeys(obj.owner);
-    obj = Object.fromEntries(Object.entries(obj).filter(([k]) => k !== "previous"));
-    if (inv === null) {
-      if (await s.kind(dir)) exit(`${dir} exists, and is not an object`);
-      inv = {
-        id,
-        type: INVENTORY_TYPE,
-        digestAlgorithm: "sha512",
-        head: "v0",
-        manifest: {},
-        versions: {},
-        fixity: {
-          md5: {},
-          sha256: {}
-        }
-      };
-    } else if (!draft) {
-      await this.checkBeforeExtending(id, acknowledged);
-      obj.previous = sidecarDigest(await s.read(joinPath(dir, inv.head, "inventory.json.sha512")));
-    }
-    const ver = `v${Number(inv.head.slice(1)) + 1}`;
-    if (stageIn !== null && await s.kind(stageIn)) exit(`${stageIn} exists`);
-    const stage = stageIn ?? `.staging-${hex(randomBytes(6))}`;
-    try {
-      const content = new Map(files);
-      content.set(OBJ2, jsonBytes(obj));
-      const state = {};
-      for (const logical of [
-        ...content.keys()
-      ].sort(compareText)) {
-        const data3 = content.get(logical);
-        const d = await sha512hex(data3);
-        (state[d] ||= []).push(logical);
-        if (!Object.hasOwn(inv.manifest, d)) {
-          const cp = `${ver}/content/${logical}`;
-          await s.write(joinPath(stage, cp), data3);
-          inv.manifest[d] = [
-            cp
-          ];
-          inv.fixity ??= {};
-          inv.fixity.md5 ??= {};
-          (inv.fixity.md5[await md5hex(data3)] ||= []).push(cp);
-          inv.fixity.sha256 ??= {};
-          (inv.fixity.sha256[await sha256hex(data3)] ||= []).push(cp);
-        }
-      }
-      inv.head = ver;
-      inv.versions[ver] = {
-        created: this.env.now(),
-        message: message2,
-        user: this.depositor(),
-        state
-      };
-      inv = orderedInventory(inv);
-      const data2 = inventoryFile(inv);
-      await s.write(joinPath(stage, ver, "inventory.json"), data2);
-      await s.write(joinPath(stage, ver, "inventory.json.sha512"), await sidecar(data2));
-      const pin = log ? log.pin(latest.number) : null, digest = await sha512hex(data2);
-      for (const key of signers2) {
-        await s.write(joinPath(stage, "witnesses", await fileName(key.did)), await signatureFile(key, id, ver, digest, obj.owner, pin));
-      }
-      if (stageIn === null) await this.moveStaged(dir, stage, ver, draft);
-    } finally {
-      if (stageIn === null) await removeTree(s, stage);
-      this.changed();
-    }
-    return inv;
-  }
-  async moveStaged(dir, stage, ver, draft = false) {
-    const s = this.storage;
-    const data2 = await s.read(joinPath(stage, ver, "inventory.json"));
-    const sc = await s.read(joinPath(stage, ver, "inventory.json.sha512"));
-    if (ver === "v1") {
-      const obj = joinPath(stage, "object");
-      await writeText(s, joinPath(obj, "0=ocfl_object_1.1"), "ocfl_object_1.1\n");
-      await s.rename(joinPath(stage, ver), joinPath(obj, ver));
-      if (!draft) await s.rename(joinPath(stage, "witnesses"), joinPath(obj, WITNESSES, ver));
-      await s.write(joinPath(obj, "inventory.json"), data2);
-      await s.write(joinPath(obj, "inventory.json.sha512"), sc);
-      await s.rename(obj, dir);
-    } else {
-      await s.rename(joinPath(stage, ver), joinPath(dir, ver));
-      if (!draft) await s.rename(joinPath(stage, "witnesses"), joinPath(dir, WITNESSES, ver));
-      for (const [name2, bytes] of [
-        [
-          "inventory.json",
-          data2
-        ],
-        [
-          "inventory.json.sha512",
-          sc
-        ]
-      ]) {
-        await s.write(joinPath(stage, name2), bytes);
-        await s.rename(joinPath(stage, name2), joinPath(dir, name2));
-      }
-    }
-  }
-  async installVersion(id, stage) {
-    const s = this.storage;
-    const ver = (await s.list(stage) || []).find((e) => e.kind === "dir" && /^v[1-9][0-9]*$/.test(e.name))?.name;
-    if (!ver) exit(`${stage} holds no version`);
-    const inv = JSON.parse(new TextDecoder().decode(await s.read(joinPath(stage, ver, "inventory.json"))));
-    const dir = await this.dirOf(id);
-    const before = await this.inventory(dir);
-    if ((before ? before.head : "v0") !== `v${Number(ver.slice(1)) - 1}`) {
-      exit(`${id}: the line has moved since ${ver} was built in ${stage}: it cannot be added`);
-    }
-    await this.moveStaged(dir, stage, ver, id.startsWith("sheaf:draft:"));
-    await removeStage(s, stage);
-    this.changed();
-    return inv;
-  }
-  async seal(kind, owner) {
-    const taken = /* @__PURE__ */ new Set();
-    for (const { id } of await this.objects()) {
-      const name2 = (id || "").split(":")[1];
-      if (name2 !== void 0) taken.add(name2);
-    }
-    for (const t of this.tombstones) {
-      taken.add(t.genesisName);
-      taken.add(t.name);
-    }
-    for (; ; ) {
-      const genesis = await genesisRecord(kind, {
-        originator: owner
-      });
-      const name2 = await nameOf(genesis);
-      if (!taken.has(name2)) return {
-        genesis,
-        id: objectId(name2, owner)
-      };
-    }
-  }
-};
-async function removeTree(storage, path) {
-  if (!/^\.staging-[0-9a-f]+$/.test(path.split("/")[0])) throw new Error(`not a staging folder: ${path}`);
-  const kind = await storage.kind(path);
-  if (kind === "dir") {
-    for (const entry of await storage.list(path) || []) await removeTree(storage, joinPath(path, entry.name));
-    await storage.remove(path);
-  } else if (kind) {
-    await storage.remove(path);
-  }
-}
-async function removeStage(storage, path) {
-  if (!/^zenodo-staging\/./.test(path)) throw new Error(`not a staging folder of Zenodo: ${path}`);
-  const walk = async (p) => {
-    const kind = await storage.kind(p);
-    if (kind === "dir") for (const entry of await storage.list(p) || []) await walk(joinPath(p, entry.name));
-    if (kind) await storage.remove(p);
-  };
-  await walk(path);
-  for (let p = path.slice(0, path.lastIndexOf("/")); p; p = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") {
-    if (await storage.kind(p) !== "dir" || (await storage.list(p) || []).length) break;
-    await storage.remove(p);
-  }
-}
-
-// core/keepers.js
-var KEEPER_FORMAT = "opensheaf-keeper/0.2";
-var CONFIRMED = "confirmed";
-var CLAIMED = "claimed only";
-var ABSENT = "absent";
-var NOT_CHECKED = "not checked";
-var ORCID_API = "https://pub.orcid.org/v3.0/{}/researcher-urls";
-var KEEPER_TIMEOUT = 15e3;
-var OWNER_WORD = /(?<![a-z0-9])[a-z2-7]{51}[aq](?![a-z0-9])/g;
-var KeeperUnreachable = class extends Error {
-};
-function fetchJsonWith(fetch2 = globalThis.fetch?.bind(globalThis)) {
-  return async (url) => {
-    let response;
-    try {
-      response = await fetch2(url, {
-        headers: {
-          Accept: "application/json"
-        },
-        signal: AbortSignal.timeout(KEEPER_TIMEOUT)
-      });
-    } catch (error) {
-      throw new KeeperUnreachable(`${url}: ${error.cause?.message || error.message}`);
-    }
-    if (response.status === 404 || response.status === 410) return null;
-    if (!response.ok) throw new KeeperUnreachable(`${url}: HTTP ${response.status}`);
-    const data2 = new Uint8Array(await response.arrayBuffer());
-    if (data2.length > 1 << 20) throw new KeeperUnreachable(`${url}: more than 1 MB`);
-    try {
-      return JSON.parse(new TextDecoder().decode(data2));
-    } catch {
-      throw new KeeperUnreachable(`${url}: not JSON`);
-    }
-  };
-}
-async function keeperOf(log) {
-  try {
-    return log ? ((await readGenesis(log.genesis)).keeper || [
-      null
-    ])[0] : null;
-  } catch {
-    return null;
-  }
-}
-async function keeperLink(log, fetchJson = null) {
-  fetchJson ||= fetchJsonWith();
-  const keeper = await keeperOf(log), owner = log.owner;
-  if (keeper === null) return {
-    keeper: null,
-    status: ABSENT,
-    reason: "the owner names no keeper",
-    successor: null
-  };
-  const link = (status, reason, successor = null) => ({
-    keeper,
-    status,
-    reason,
-    successor
-  });
-  const orcid = keeper.startsWith("https://orcid.org/");
-  const url = orcid ? ORCID_API.replace("{}", keeper.slice(keeper.lastIndexOf("/") + 1)) : keeper + ".well-known/opensheaf";
-  let data2;
-  try {
-    data2 = await fetchJson(url);
-  } catch (error) {
-    if (!(error instanceof KeeperUnreachable)) throw error;
-    return link(NOT_CHECKED, `offline: ${error.message}`);
-  }
-  const isMap2 = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
-  if (orcid) {
-    const links = isMap2(data2) ? data2["researcher-url"] : null;
-    for (const item of Array.isArray(links) ? links : []) {
-      const value = isMap2(item) ? (item.url || {}).value : null;
-      const found2 = typeof value === "string" ? value.match(OWNER_WORD) || [] : [];
-      if (found2.length && found2[0] === owner) {
-        const others = found2.slice(1).filter((w) => w !== owner);
-        return link(CONFIRMED, "ORCID record links the owner", others[0] ?? null);
-      }
-    }
-    return link(CLAIMED, "the ORCID record has no link naming the owner");
-  }
-  if (data2 === null) return link(CLAIMED, `there is no ${url}`);
-  if (!isMap2(data2) || data2.format !== KEEPER_FORMAT) return link(CLAIMED, `${url} is not of format ${KEEPER_FORMAT}`);
-  if (!(Array.isArray(data2.owners) && data2.owners.includes(owner))) return link(CLAIMED, `${url} does not list the owner`);
-  let succ = isMap2(data2.successors) ? data2.successors[owner] : null;
-  succ = typeof succ === "string" && OWNER_NAME.test(succ) && succ !== owner ? succ : null;
-  return link(CONFIRMED, `${url} lists the owner`, succ);
-}
-function successorClaim(log, link) {
-  if (!link || link.successor === null || link.successor === void 0 || link.successor === log.successor) return null;
-  if (log.successor) return `claimed by the keeper (the ending version names ${log.successor}; section 6.6)`;
-  return "named by the keeper (section 6.6)";
-}
-
-// core/wallets.js
-var WalletError = class extends Error {
-};
-var ENTRY_SUFFIX = ".key.enc";
-function entryPath(owner, kid) {
-  if (!OWNER_NAME.test(owner || "") || !/^[a-z2-7]{16}$/.test(kid || "")) {
-    throw new WalletError(`not an owner name and a key: ${owner} ${kid}`);
-  }
-  return `${owner}/${kid}${ENTRY_SUFFIX}`;
-}
-var GitHubWallet = class {
-  constructor(repo, github, forbidden = []) {
-    this.repo = repo;
-    this.name = `github:${repo}`;
-    this.github = github;
-    this.forbidden = new Set([
-      ...forbidden
-    ].map((f) => f.toLowerCase()));
-    this.token = void 0;
-    this.checked = false;
-  }
-  async api(method, path, body = null) {
-    if (this.token === void 0) this.token = await this.github.token();
-    if (!this.token) throw new WalletError("gh is not signed in to GitHub, and GITHUB_TOKEN is not set: run gh auth login");
-    let r;
-    try {
-      r = await this.github.fetch(`${this.github.api.replace(/\/$/, "")}/${path}`, {
-        method,
-        headers: {
-          Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${this.token}`,
-          "X-GitHub-Api-Version": "2022-11-28",
-          "User-Agent": "opensheaf-js",
-          ...body ? {
-            "Content-Type": "application/json"
-          } : {}
-        },
-        body: body ? JSON.stringify(body) : void 0
-      });
-    } catch (error) {
-      throw new WalletError(`GitHub API ${path}: ${error.message}`);
-    }
-    const text3 = await r.text();
-    if (r.status === 404) return null;
-    if (!r.ok) {
-      let message2 = text3;
-      try {
-        message2 = JSON.parse(text3).message || text3;
-      } catch {
-      }
-      throw new WalletError(`GitHub API ${path}: ${message2.trim()} (HTTP ${r.status})`);
-    }
-    try {
-      return text3.trim() ? JSON.parse(text3) : {};
-    } catch {
-      throw new WalletError(`GitHub API ${path}: not JSON`);
-    }
-  }
-  contents(path = "") {
-    return `repos/${this.repo}/contents/${path}`.replace(/\/$/, "");
-  }
-  checkName() {
-    if (this.forbidden.has(this.repo.toLowerCase())) {
-      throw new WalletError(`${this.repo} is a repository of the archive, which is public: a wallet is a repository of its own`);
-    }
-  }
-  async checkWritable() {
-    this.checkName();
-    if (this.checked) return;
-    const info = await this.api("GET", `repos/${this.repo}`);
-    if (info === null) {
-      throw new WalletError(`no repository ${this.repo} that gh can reach: create it, private, with gh repo create ${this.repo} --private`);
-    }
-    if (info.private !== true || info.visibility !== "private") {
-      throw new WalletError(`${this.repo} is not a private repository: a wallet must be private`);
-    }
-    if (this.forbidden.has(String(info.full_name ?? this.repo).toLowerCase())) {
-      throw new WalletError(`${this.repo} is a repository of the archive, which is public: a wallet is a repository of its own`);
-    }
-    this.checked = true;
-  }
-  async read(owner, kid) {
-    this.checkName();
-    const got = await this.api("GET", this.contents(entryPath(owner, kid)));
-    if (!got || typeof got !== "object" || Array.isArray(got) || !("content" in got)) return null;
-    try {
-      return new TextDecoder("utf-8", {
-        fatal: true
-      }).decode(unbase64(String(got.content).replace(/\s+/g, "")));
-    } catch {
-      throw new WalletError(`${this.name}: ${entryPath(owner, kid)} is not a key file`);
-    }
-  }
-  async write(owner, kid, kind, text3) {
-    await this.checkWritable();
-    const path = entryPath(owner, kid);
-    const old = await this.api("GET", this.contents(path));
-    const body = {
-      message: `opensheaf: ${kind} key ${kid} of ${owner}`,
-      content: base64(utf8(text3))
-    };
-    if (old?.sha) body.sha = old.sha;
-    if (await this.api("PUT", this.contents(path), body) === null) throw new WalletError(`${this.repo} refused ${path}`);
-  }
-  async entries(owner = null) {
-    this.checkName();
-    const listing = async (p) => {
-      const got = await this.api("GET", this.contents(p));
-      return Array.isArray(got) ? got : [];
-    };
-    const folders = owner ? [
-      owner
-    ] : (await listing("")).filter((x) => x.type === "dir" && OWNER_NAME.test(x.name)).map((x) => x.name);
-    const out = [];
-    for (const o of folders) {
-      for (const x of await listing(o)) {
-        if (x.type === "file" && x.name.endsWith(ENTRY_SUFFIX)) out.push([
-          o,
-          x.name.slice(0, -ENTRY_SUFFIX.length)
-        ]);
-      }
-    }
-    return out;
-  }
-  async forget(owner, kid, kind) {
-    await this.checkWritable();
-    const path = entryPath(owner, kid);
-    const old = await this.api("GET", this.contents(path));
-    if (old?.sha) await this.api("DELETE", this.contents(path), {
-      message: `opensheaf: forget ${kind} key ${kid} of ${owner}`,
-      sha: old.sha
-    });
-  }
-};
-async function putKey(wallet, owner, key, kind, version, passphrase, passkeys = [], cost = {}) {
-  if ((passphrase === null || passphrase === void 0) && kind === ROTATION) {
-    throw new WalletError("a rotation key is kept in a wallet only locked with a passphrase");
-  }
-  const text3 = await keyFileText(key, owner, kind, version, passphrase, {
-    passkeys,
-    cost
-  });
-  await wallet.write(owner, key.id, kind, text3);
-  if ((await wallet.read(owner, key.id, kind) || "").trim() !== text3.trim()) {
-    throw new WalletError(`${wallet.name} did not keep the ${kind} key ${key.did}`);
-  }
-}
-async function readAny(wallet, owner, kid) {
-  for (const kind of KINDS2) {
-    const t = await wallet.read(owner, kid, kind);
-    if (t) return t;
-  }
-  return "";
-}
-async function addPasskey2(wallet, owner, kid, passphrase, passkey, cost = {}) {
-  const text3 = await readAny(wallet, owner, kid);
-  const where2 = `${wallet.name} ${entryPath(owner, kid)}`;
-  let before, fresh, after;
-  try {
-    before = await readKey(text3, passphrase);
-    fresh = await addPasskey(text3, passphrase, passkey, cost);
-    after = await readKey(fresh, null, {
-      [passkey.cred]: passkey.kek
-    });
-  } catch (error) {
-    if (error instanceof KeyError) throw new WalletError(`${where2}: ${error.message}`);
-    throw error;
-  }
-  if (after.key.did !== before.key.did || after.kind !== before.kind) {
-    throw new WalletError(`${where2}: the key changed when the passkey lock was added`);
-  }
-  await wallet.write(owner, kid, before.kind, fresh);
-  if ((await wallet.read(owner, kid, before.kind) || "").trim() !== fresh.trim()) {
-    throw new WalletError(`${wallet.name} did not keep the ${before.kind} key ${before.key.did}`);
-  }
-  return [
-    before.kind,
-    before.key.did
-  ];
-}
-function describeEntry(text3) {
-  const fields = {};
-  for (const line of text3.split(/\r\n|\r|\n/)) {
-    const t = line.trim();
-    const k = t.indexOf(" ");
-    const name2 = k < 0 ? t : t.slice(0, k);
-    if ([
-      "encryption",
-      "wrap",
-      "seed"
-    ].includes(name2)) break;
-    if (!(name2 in fields)) fields[name2] = k < 0 ? "" : t.slice(k + 1).trim();
-  }
-  return fields;
-}
-
-// core/github.js
-var GITHUB_API = "https://api.github.com";
-var GitHubError = class extends Error {
-  constructor(message2, status = 0) {
-    super(message2);
-    this.status = status;
-  }
-};
-var CommitConflict = class extends GitHubError {
-};
-var GitHub = class {
-  constructor({ api = GITHUB_API, fetch: fetch2 = globalThis.fetch?.bind(globalThis), token = null } = {}) {
-    this.api = api.replace(/\/$/, "");
-    this.fetch = fetch2;
-    this.token = token;
-  }
-  async request(method, path, body = null, { raw = false, fresh = false } = {}) {
-    const token = typeof this.token === "function" ? await this.token() : this.token;
-    const headers = {
-      Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28"
-    };
-    if (token) headers.Authorization = `Bearer ${token}`;
-    if (body !== null) headers["Content-Type"] = "application/json";
-    let r;
-    try {
-      r = await this.fetch(`${this.api}/${path}`, {
-        method,
-        headers,
-        body: body === null ? void 0 : JSON.stringify(body),
-        ...fresh ? {
-          cache: "no-store"
-        } : {}
-      });
-    } catch (error) {
-      throw new GitHubError(`GitHub API ${path}: ${error.message}`);
-    }
-    if (r.ok && raw) return new Uint8Array(await r.arrayBuffer());
-    const text3 = await r.text();
-    let data2 = null;
-    try {
-      data2 = text3 ? JSON.parse(text3) : null;
-    } catch {
-      data2 = null;
-    }
-    if (!r.ok) throw new GitHubError(`GitHub API ${path}: ${data2?.message || text3.slice(0, 200) || r.status}`, r.status);
-    return data2;
-  }
-};
-var REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
-function checkRepository(repo) {
-  if (!REPOSITORY.test(repo || "") || /\/\.\.?$/.test(repo)) throw new GitHubError(`not a repository: ${repo}`);
-  return repo;
-}
-function encodePath(path) {
-  return path.split("/").map(encodeURIComponent).join("/");
-}
-async function gitBlobSha(bytes) {
-  const header = utf8(`blob ${bytes.length}\0`);
-  const all = new Uint8Array(header.length + bytes.length);
-  all.set(header);
-  all.set(bytes, header.length);
-  return hex(new Uint8Array(await crypto.subtle.digest("SHA-1", all)));
-}
-async function inTurn(items, work, concurrency = 6) {
-  const queue = [
-    ...items
-  ];
-  const workers = Array.from({
-    length: Math.min(concurrency, queue.length)
-  }, async () => {
-    while (queue.length) await work(queue.shift());
-  });
-  await Promise.all(workers);
-}
-var FILE = "100644";
-var LINK = "120000";
-var GitHubStorage = class _GitHubStorage {
-  static async open(repo, github, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
-    const s = new _GitHubStorage(checkRepository(repo), github, {
-      cache,
-      mirror
-    });
-    s.branch = branch || (await github.request("GET", `repos/${repo}`)).default_branch;
-    await s.readHead();
-    return s;
-  }
-  constructor(repo, github, { cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
-    Object.assign(this, {
-      repo,
-      github,
-      cache,
-      mirror: mirror && (mirror.endsWith("/") ? mirror : mirror + "/")
-    });
-    this.base = /* @__PURE__ */ new Map();
-    this.files = /* @__PURE__ */ new Map();
-    this.dirs = /* @__PURE__ */ new Map([
-      [
-        "",
-        /* @__PURE__ */ new Map()
-      ]
-    ]);
-    this.reads = {
-      cache: 0,
-      mirror: 0,
-      api: 0
-    };
-  }
-  async readHead() {
-    const r = `repos/${this.repo}/git`;
-    const ref = await this.github.request("GET", `${r}/ref/heads/${encodePath(this.branch)}`, null, {
-      fresh: true
-    });
-    if (ref?.object?.type !== "commit") throw new GitHubError(`${this.repo}: the branch ${this.branch} is not a commit`);
-    this.head = ref.object.sha;
-    this.tree = (await this.github.request("GET", `${r}/commits/${this.head}`)).tree.sha;
-    const entries = [];
-    const walk = async (sha, prefix) => {
-      const t = await this.github.request("GET", `${r}/trees/${sha}${prefix === null ? "?recursive=1" : ""}`);
-      if (prefix === null && !t.truncated) {
-        entries.push(...t.tree);
-        return;
-      }
-      for (const e of t.tree) {
-        const path = prefix ? `${prefix}/${e.path}` : e.path;
-        if (e.type === "tree") await walk(e.sha, path);
-        else entries.push({
-          ...e,
-          path
-        });
-      }
-    };
-    await walk(this.tree, null);
-    this.base = /* @__PURE__ */ new Map();
-    for (const e of entries) {
-      if (e.type === "blob") this.base.set(e.path, {
-        sha: e.sha,
-        mode: e.mode,
-        size: e.size ?? null
-      });
-    }
-    this.files = /* @__PURE__ */ new Map();
-    this.dirs = /* @__PURE__ */ new Map([
-      [
-        "",
-        /* @__PURE__ */ new Map()
-      ]
-    ]);
-    for (const [path, e] of this.base) this.put(path, {
-      ...e
-    });
-  }
-  put(path, entry) {
-    this.files.set(path, entry);
-    let p = path, kind = entry.mode === LINK ? "link" : "file";
-    for (; ; ) {
-      const parent = parentOf(p), name2 = p.slice(parent ? parent.length + 1 : 0);
-      const fresh = !this.dirs.has(parent);
-      if (fresh) this.dirs.set(parent, /* @__PURE__ */ new Map());
-      this.dirs.get(parent).set(name2, kind);
-      if (!fresh || parent === "") return;
-      p = parent;
-      kind = "dir";
-    }
-  }
-  drop(path) {
-    this.files.delete(path);
-    let p = path;
-    while (p) {
-      const parent = parentOf(p), entries = this.dirs.get(parent);
-      entries.delete(p.slice(parent ? parent.length + 1 : 0));
-      if (entries.size || parent === "") return;
-      this.dirs.delete(parent);
-      p = parent;
-    }
-  }
-  async read(path) {
-    checkPath(path);
-    const e = this.files.get(path);
-    if (!e || e.mode === LINK) return null;
-    if (e.bytes) return e.bytes.slice();
-    return (await this.blob(e.sha, path)).slice();
-  }
-  async write(path, bytes, { exclusive = false } = {}) {
-    checkPath(path);
-    const old = this.files.get(path);
-    if (exclusive && old) throw new StorageError(`${path} exists already`);
-    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder`);
-    for (let p = parentOf(path); p; p = parentOf(p)) {
-      if (this.files.has(p)) throw new StorageError(`${p} is a file`);
-    }
-    this.put(path, {
-      bytes: Uint8Array.from(bytes),
-      mode: old && old.mode !== LINK ? old.mode : FILE,
-      sha: null
-    });
-  }
-  async kind(path) {
-    checkPath(path, {
-      folder: true
-    });
-    if (this.dirs.has(path)) return "dir";
-    const e = this.files.get(path);
-    return e ? e.mode === LINK ? "link" : "file" : null;
-  }
-  async list(path) {
-    checkPath(path, {
-      folder: true
-    });
-    const entries = this.dirs.get(path);
-    if (!entries) return null;
-    return [
-      ...entries
-    ].map(([name2, kind]) => ({
-      name: name2,
-      kind
-    })).sort((a, b) => compareText(a.name, b.name));
-  }
-  async rename(from, to) {
-    checkPath(from);
-    checkPath(to);
-    const what = await this.kind(from);
-    if (!what) throw new StorageError(`no ${from} to move`);
-    if (this.dirs.has(to)) throw new StorageError(`${to} exists already`);
-    if (what !== "dir") {
-      const e = this.files.get(from);
-      this.drop(from);
-      if (this.files.has(to)) this.drop(to);
-      this.put(to, e);
-      return;
-    }
-    for (const k of [
-      ...this.files.keys()
-    ]) {
-      if (k.startsWith(from + "/")) {
-        const e = this.files.get(k);
-        this.drop(k);
-        this.put(to + k.slice(from.length), e);
-      }
-    }
-  }
-  async remove(path) {
-    checkPath(path);
-    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder that is not empty`);
-    if (this.files.has(path)) this.drop(path);
-  }
-  async size(path) {
-    const e = this.files.get(checkPath(path));
-    if (!e || e.mode === LINK) return null;
-    return e.bytes ? e.bytes.length : e.size;
-  }
-  async blob(sha, path = null) {
-    const known = this.cache.get(sha);
-    if (known) {
-      this.reads.cache++;
-      return known;
-    }
-    let bytes = null;
-    if (this.mirror && path) {
-      try {
-        const r = await this.github.fetch(this.mirror + encodePath(path));
-        if (r.ok) {
-          const got = new Uint8Array(await r.arrayBuffer());
-          if (await gitBlobSha(got) === sha) bytes = got;
-        }
-      } catch {
-        bytes = null;
-      }
-      if (bytes) this.reads.mirror++;
-    }
-    if (!bytes) {
-      bytes = await this.github.request("GET", `repos/${this.repo}/git/blobs/${sha}`, null, {
-        raw: true
-      });
-      if (await gitBlobSha(bytes) !== sha) throw new GitHubError(`${this.repo}: the blob ${sha} read is not ${sha}`);
-      this.reads.api++;
-    }
-    this.cache.set(sha, bytes);
-    return bytes;
-  }
-  async prefetch({ maxSize = 1 << 20, skip = () => false, concurrency = 6 } = {}) {
-    const todo = /* @__PURE__ */ new Map();
-    for (const [path, e] of this.base) {
-      if (e.mode === LINK || this.cache.has(e.sha) || todo.has(e.sha)) continue;
-      if (e.size !== null && e.size > maxSize) continue;
-      if (!skip(path, e.size)) todo.set(e.sha, path);
-    }
-    await inTurn([
-      ...todo
-    ], async ([sha, path]) => {
-      try {
-        await this.blob(sha, path);
-      } catch {
-      }
-    }, concurrency);
-    return todo.size;
-  }
-  async changes() {
-    const changed = [], removed2 = [];
-    for (const [path, e] of this.files) {
-      if (e.bytes && e.sha === null) e.sha = await gitBlobSha(e.bytes);
-      const b = this.base.get(path);
-      if (!b || b.sha !== e.sha || b.mode !== e.mode) changed.push({
-        path,
-        ...e
-      });
-    }
-    for (const [path, b] of this.base) if (!this.files.has(path)) removed2.push({
-      path,
-      ...b
-    });
-    const order = (a, b) => compareText(a.path, b.path);
-    return {
-      changed: changed.sort(order),
-      removed: removed2.sort(order)
-    };
-  }
-  async commit(message2, { author = null } = {}) {
-    const { changed, removed: removed2 } = await this.changes();
-    if (!changed.length && !removed2.length) return null;
-    const r = `repos/${this.repo}/git`;
-    const held2 = new Set([
-      ...this.base.values()
-    ].map((e) => e.sha));
-    const upload = /* @__PURE__ */ new Map();
-    for (const e of changed) if (e.bytes && !held2.has(e.sha)) upload.set(e.sha, e.bytes);
-    await inTurn([
-      ...upload
-    ], async ([sha, bytes]) => {
-      const made2 = await this.github.request("POST", `${r}/blobs`, {
-        content: base64(bytes),
-        encoding: "base64"
-      });
-      if (made2.sha !== sha) throw new GitHubError(`${this.repo}: GitHub named a blob ${made2.sha}, not ${sha}`);
-    }, 4);
-    const tree = await this.github.request("POST", `${r}/trees`, {
-      base_tree: this.tree,
-      tree: [
-        ...changed.map((e) => ({
-          path: e.path,
-          mode: e.mode,
-          type: "blob",
-          sha: e.sha
-        })),
-        ...removed2.map((e) => ({
-          path: e.path,
-          mode: e.mode,
-          type: "blob",
-          sha: null
-        }))
-      ]
-    });
-    const made = await this.github.request("POST", `${r}/commits`, {
-      message: message2,
-      tree: tree.sha,
-      parents: [
-        this.head
-      ],
-      ...author ? {
-        author
-      } : {}
-    });
-    try {
-      await this.github.request("PATCH", `${r}/refs/heads/${encodePath(this.branch)}`, {
-        sha: made.sha,
-        force: false
-      });
-    } catch (error) {
-      if (error.status === 422 || error.status === 409) {
-        throw new CommitConflict(`${this.repo}: the branch ${this.branch} has moved since ${this.head.slice(0, 7)} was read`, error.status);
-      }
-      throw error;
-    }
-    for (const e of changed) if (e.bytes) this.cache.set(e.sha, e.bytes);
-    this.head = made.sha;
-    this.tree = tree.sha;
-    this.base = new Map([
-      ...this.files
-    ].map(([path, e]) => [
-      path,
-      {
-        sha: e.sha,
-        mode: e.mode,
-        size: e.bytes?.length ?? e.size
-      }
-    ]));
-    for (const e of this.files.values()) {
-      if (e.bytes) {
-        e.size = e.bytes.length;
-        delete e.bytes;
-      }
-    }
-    return {
-      sha: made.sha,
-      url: made.html_url ?? null,
-      changed: changed.length,
-      removed: removed2.length
-    };
-  }
-};
-async function oneCommit(repo, github, run, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null, attempts = 3, prepare: prepare2 = null } = {}) {
-  for (let k = 1; ; k++) {
-    const storage = await GitHubStorage.open(repo, github, {
-      branch,
-      cache,
-      mirror
-    });
-    if (prepare2) await prepare2(storage);
-    const { message: message2, ...rest } = await run(storage);
-    if (message2 === null || message2 === void 0) return {
-      ...rest,
-      commit: null,
-      storage
-    };
-    try {
-      return {
-        ...rest,
-        commit: await storage.commit(message2),
-        storage,
-        attempts: k
-      };
-    } catch (error) {
-      if (!(error instanceof CommitConflict) || k >= attempts) throw error;
-    }
-  }
-}
-
-// core/discovery.js
-async function lineStatus(f, id, dir, inv, head) {
-  if (head?.kind === "owner") return "active";
-  const signed = await f.latestSigned(id);
-  const obj = signed ? await f.readObjectJson(dir, inv, OBJ2, signed) : head;
-  return obj?.status ?? "active";
-}
-var INDEXES = {
-  names: 2,
-  owners: 2,
-  sha512: 2
-};
-var INDEX_FORMAT = "opensheaf-index/0.2";
-var INDEX_KEY = {
-  names: "name",
-  owners: "owner",
-  sha512: "inventorySha512"
-};
-async function discovery(f) {
-  const objs = [], drafts = [], used = /* @__PURE__ */ new Set();
-  for (const { id, dir, inv } of await f.objects()) {
-    if (!inv || typeof id !== "string") continue;
-    const head = await f.readObjectJson(dir, inv, OBJ2) || {};
-    for (const k of Object.keys(head.extensions || {})) used.add(k);
-    if (id.startsWith("sheaf:draft:")) {
-      drafts.push({
-        id,
-        kind: head.kind ?? null,
-        head: inv.head
-      });
-      continue;
-    }
-    if (head.kind === "owner") {
-      try {
-        const log = await f.keyLog(id.split(":")[2]);
-        for (const k of Object.keys(log && log.extensions() || {})) used.add(k);
-      } catch {
-      }
-    }
-    const entry = {
-      id,
-      kind: head.kind ?? null,
-      name: head.name ?? null,
-      owner: head.owner ?? null,
-      head: inv.head,
-      inventorySha512: sidecarDigest(await f.storage.read(joinPath(dir, "inventory.json.sha512"))),
-      status: await lineStatus(f, id, dir, inv, head)
-    };
-    const label = f.labelOf(id);
-    if (label) entry.label = label;
-    objs.push(entry);
-  }
-  const a = f.archive;
-  const doc = {
-    format: "opensheaf-archive/0.2",
-    specification: SPEC,
-    name: a.name,
-    contact: a.contact,
-    storageRoot: "ocfl/",
-    storageLayout: f.layout
-  };
-  if (f.labels.has(a.mainCollection)) doc.mainCollection = f.labels.get(a.mainCollection);
-  Object.assign(doc, {
-    profiles: a.profiles,
-    extensions: [
-      ...used
-    ].sort(compareText),
-    owners: f.archiveOwners(),
-    indexes: {
-      ...INDEXES
-    },
-    objects: objs
-  });
-  if (drafts.length) doc.drafts = drafts;
-  if (f.tombstones.length) doc.tombstones = f.tombstones;
-  return doc;
-}
-async function indexEntries(f) {
-  const out = {
-    names: [],
-    owners: [],
-    sha512: []
-  };
-  const lines2 = /* @__PURE__ */ new Map();
-  for (const { id, dir, inv } of await f.objects()) {
-    if (!inv || typeof id !== "string" || id.startsWith("sheaf:draft:")) continue;
-    const head = await f.readObjectJson(dir, inv, OBJ2) || {};
-    const genesis = await f.readLogical(dir, inv, GENESIS2);
-    if (!genesis || id.split(":").length !== 3) continue;
-    let rec;
-    try {
-      rec = await readGenesis(genesis);
-    } catch {
-      continue;
-    }
-    const [, name2, owner] = id.split(":");
-    const status = await lineStatus(f, id, dir, inv, head);
-    const entry = {
-      name: name2,
-      owner,
-      id,
-      status,
-      originator: rec.kind === "owner" ? owner : rec.originator ?? null,
-      genesis: new TextDecoder().decode(genesis)
-    };
-    const label = f.labelOf(id);
-    if (label) entry.label = label;
-    out.names.push(entry);
-    if (!lines2.has(owner)) lines2.set(owner, []);
-    lines2.get(owner).push(name2);
-    for (let n = 1; n <= Number(inv.head.slice(1)); n++) {
-      const sc = await f.storage.read(joinPath(dir, `v${n}`, "inventory.json.sha512"));
-      if (sc) out.sha512.push({
-        inventorySha512: sidecarDigest(sc),
-        id,
-        version: `v${n}`,
-        status
-      });
-    }
-    if (head.kind === "owner") {
-      let log = null;
-      try {
-        log = await f.keyLog(owner);
-      } catch {
-        continue;
-      }
-      for (const v of log?.versions || []) {
-        for (const c of v.forkRecord ? v.carried : []) {
-          out.sha512.push({
-            inventorySha512: c.digest,
-            id,
-            version: `v${c.number}`,
-            status: "active"
-          });
-        }
-      }
-    }
-  }
-  out.owners = [
-    ...lines2.keys()
-  ].sort(compareText).map((o) => ({
-    owner: o,
-    names: lines2.get(o).sort(compareText)
-  }));
-  out.names.push(...await removedEntries(f, "names"));
-  out.sha512.push(...await removedEntries(f, "sha512"));
-  return out;
-}
-async function readIndex(f, index) {
-  const out = [];
-  for (const entry of await f.storage.list(index) || []) {
-    if (entry.kind !== "file" || !entry.name.endsWith(".json")) continue;
-    try {
-      const data2 = await readJson(f.storage, `${index}/${entry.name}`);
-      out.push(...Array.isArray(data2?.entries) ? data2.entries : []);
-    } catch {
-    }
-  }
-  return out;
-}
-async function removedEntries(f, index) {
-  const gone = new Map(f.tombstones.map((t) => [
-    t.id,
-    t
-  ]));
-  const kept = (await readIndex(f, index)).filter((e) => gone.has(e.id)).map((e) => ({
-    ...e,
-    status: "removed"
-  }));
-  for (const t of gone.values()) {
-    if (index === "names" && !kept.some((e) => e.id === t.id)) {
-      kept.push({
-        name: t.name,
-        owner: t.owner,
-        id: t.id,
-        status: "removed"
-      });
-    }
-    if (index === "sha512" && !kept.some((e) => e.id === t.id && e.version === t.lastVersion)) {
-      kept.push({
-        inventorySha512: t.inventorySha512,
-        id: t.id,
-        version: t.lastVersion,
-        status: "removed"
-      });
-    }
-  }
-  return kept;
-}
-function indexFiles(entries) {
-  const out = {};
-  for (const [index, list2] of Object.entries(entries)) {
-    const files = out[index] = {};
-    const key = INDEX_KEY[index];
-    const number = (e) => Number((e.version ?? "v0").slice(1));
-    const sorted = [
-      ...list2
-    ].sort((a, b) => compareText(a[key], b[key]) || compareText(a.id ?? "", b.id ?? "") || number(a) - number(b));
-    for (const e of sorted) {
-      const p = e[key].slice(0, INDEXES[index]);
-      (files[p] ||= {
-        format: INDEX_FORMAT,
-        index,
-        entries: []
-      }).entries.push(e);
-    }
-  }
-  return out;
-}
-async function writeIndexes(f) {
-  const files = indexFiles(await indexEntries(f));
-  for (const index of Object.keys(INDEXES)) {
-    const want = files[index] || {};
-    for (const entry of await f.storage.list(index) || []) {
-      if (entry.kind === "file" && entry.name.endsWith(".json") && !Object.hasOwn(want, entry.name.slice(0, -5))) {
-        await f.storage.remove(`${index}/${entry.name}`);
-      }
-    }
-    for (const [prefix, data2] of Object.entries(want)) await f.storage.write(`${index}/${prefix}.json`, jsonBytes(data2));
-  }
-}
-async function writeDiscovery(f) {
-  await writeIndexes(f);
-  await f.storage.write("opensheaf.json", jsonBytes(await discovery(f)));
-}
-
-// core/deposit.js
-var RIGHTS = {
-  "cc-by-4.0": {
-    rights: "Creative Commons Attribution 4.0 International",
-    rightsUri: "https://creativecommons.org/licenses/by/4.0/",
-    rightsIdentifier: "cc-by-4.0",
-    rightsIdentifierScheme: "SPDX"
-  },
-  "cc0-1.0": {
-    rights: "Creative Commons Zero v1.0 Universal",
-    rightsUri: "https://creativecommons.org/publicdomain/zero/1.0/",
-    rightsIdentifier: "cc0-1.0",
-    rightsIdentifierScheme: "SPDX"
-  },
-  "cc-by-sa-4.0": {
-    rights: "Creative Commons Attribution Share Alike 4.0 International",
-    rightsUri: "https://creativecommons.org/licenses/by-sa/4.0/",
-    rightsIdentifier: "cc-by-sa-4.0",
-    rightsIdentifierScheme: "SPDX"
-  },
-  "gpl-3.0-only": {
-    rights: "GNU General Public License v3.0 only",
-    rightsUri: "https://www.gnu.org/licenses/gpl-3.0.html",
-    rightsIdentifier: "gpl-3.0-only",
-    rightsIdentifierScheme: "SPDX"
-  },
-  "gpl-3.0-or-later": {
-    rights: "GNU General Public License v3.0 or later",
-    rightsUri: "https://www.gnu.org/licenses/gpl-3.0.html",
-    rightsIdentifier: "gpl-3.0-or-later",
-    rightsIdentifierScheme: "SPDX"
-  }
-};
-function rightsList(rights, prevDc = null) {
-  if (rights) return [
-    Object.hasOwn(RIGHTS, rights) ? {
-      ...RIGHTS[rights]
-    } : {
-      rights
-    }
-  ];
-  if (prevDc?.rightsList?.length) return prevDc.rightsList;
-  return [
-    {
-      rights: "All rights reserved"
-    }
-  ];
-}
-function checkRights(rights) {
-  const known = Object.keys(RIGHTS).sort().join(", ");
-  if (typeof rights !== "string" || !rights.trim() || rights.length > 1e3 || /[\u0000-\u001f\u007f]/.test(rights)) {
-    throw new Error(`--rights is one of ${known}, or a statement on one line`);
-  }
-  if (!Object.hasOwn(RIGHTS, rights) && /^[a-z0-9][a-z0-9.+-]*$/.test(rights)) {
-    throw new Error(`--rights ${rights}: not a licence known by its SPDX key (${known}); give one of them, or the licence as a statement, by its name or its address`);
-  }
-  return rights;
-}
-function partition(text3, sep) {
-  const k = text3.indexOf(sep);
-  return k < 0 ? [
-    text3,
-    ""
-  ] : [
-    text3.slice(0, k),
-    text3.slice(k + sep.length)
-  ];
-}
-function creator(spec) {
-  const [name2, aff] = partition(spec, "|");
-  let [family, given] = partition(name2, ",");
-  family = family.trim();
-  given = given.trim();
-  const c = {
-    name: given ? `${family}, ${given}` : family,
-    nameType: "Personal",
-    familyName: family
-  };
-  if (given) c.givenName = given;
-  if (aff.trim()) c.affiliation = [
-    {
-      name: aff.trim()
-    }
-  ];
-  return c;
-}
-function displayName(c) {
-  return "familyName" in c ? `${c.givenName ?? ""} ${c.familyName}`.trim() : c.name;
-}
-function relatedFromArgs(specs) {
-  const related = [];
-  for (const kv of specs || []) {
-    const [k, v] = partition(kv, "=");
-    if (k === "arxiv" && v) {
-      related.push({
-        relatedIdentifier: `arXiv:${v}`,
-        relatedIdentifierType: "arXiv",
-        relationType: "IsVariantFormOf"
-      });
-      continue;
-    }
-    const [rel, rest] = partition(kv, ":");
-    const [type, value] = partition(rest, ":");
-    if (!(rel && [
-      "doi",
-      "arxiv"
-    ].includes(type) && value)) {
-      exit(`--related ${kv}: use arxiv=ID or RELATION:doi:DOI or RELATION:arxiv:ID`);
-    }
-    related.push({
-      relatedIdentifier: type === "arxiv" ? `arXiv:${value}` : value,
-      relatedIdentifierType: type === "arxiv" ? "arXiv" : "DOI",
-      relationType: rel
-    });
-  }
-  return related;
-}
-var SOURCE_FORMATS = {
-  ".tex": "application/x-tex",
-  ".ltx": "application/x-tex",
-  ".tm": "application/x-texmacs",
-  ".md": "text/markdown",
-  ".txt": "text/plain",
-  ".html": "text/html",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".odt": "application/vnd.oasis.opendocument.text",
-  ".zip": "application/zip"
-};
-function suffixOf(name2) {
-  const base = name2.slice(name2.lastIndexOf("/") + 1);
-  const k = base.lastIndexOf(".");
-  return k > 0 && k < base.length - 1 ? base.slice(k) : "";
-}
-function setDate(dc, dateType, date2, info = null) {
-  const entry = {
-    date: date2,
-    dateType
-  };
-  if (info) entry.dateInformation = info;
-  dc.dates = [
-    ...(dc.dates || []).filter((d) => d.dateType !== dateType),
-    entry
-  ];
-}
-function landingUrl(f, label) {
-  if (f.index.html || f.index.template) return `${f.archive.baseUrl}paper/${label}/`;
-  return `${f.archive.baseUrl}site/${label}/${label}.html`;
-}
-async function docVersionOf(f, dir, inv, ver) {
-  return (await f.readObjectJson(dir, inv, OBJ2, ver)).documentVersion;
-}
-async function defaultHistory2(f, dir, inv) {
-  const last = /* @__PURE__ */ new Map();
-  for (const ver of Object.keys(inv.versions)) last.set(await docVersionOf(f, dir, inv, ver), ver);
-  return [
-    ...last.keys()
-  ].sort((a, b) => a - b).map((n) => last.get(n));
-}
-async function carryForward(f, prev, obj, dir, inv, newVer, afterDoc = null) {
-  if (prev === null) {
-    if (afterDoc !== null && afterDoc !== void 0) exit("--after needs an existing document");
-    return;
-  }
-  if (prev.notices?.length) {
-    const kept = [
-      ...prev.notices
-    ];
-    obj.notices = [
-      ...kept,
-      ...(obj.notices || []).filter((n2) => !kept.some((k) => same(k, n2)))
-    ];
-  }
-  if ((prev.history === void 0 || prev.history === null) && (afterDoc === null || afterDoc === void 0)) return;
-  const hist = [
-    ...prev.history?.length ? prev.history : await defaultHistory2(f, dir, inv)
-  ];
-  const docs = /* @__PURE__ */ new Map();
-  for (const v of hist) docs.set(await docVersionOf(f, dir, inv, v), v);
-  const n = obj.documentVersion;
-  if (docs.has(n)) {
-    hist[hist.indexOf(docs.get(n))] = newVer;
-  } else if (afterDoc === null || afterDoc === void 0) {
-    hist.push(newVer);
-  } else {
-    if (!docs.has(afterDoc)) exit(`--after: no document version ${afterDoc}`);
-    hist.splice(hist.indexOf(docs.get(afterDoc)) + 1, 0, newVer);
-  }
-  obj.history = hist;
-}
-async function carriedFiles(f, dir, inv) {
-  const out = /* @__PURE__ */ new Map();
-  if (!inv) return out;
-  const head = await f.readObjectJson(dir, inv, OBJ2);
-  for (const n of head.notices || []) if (n.path) out.set(n.path, await f.readLogical(dir, inv, n.path));
-  return out;
-}
-async function deposit(f, a) {
-  const label = a.label;
-  const draft = Boolean(a.draft);
-  let id = null, owner = null;
-  if (draft) {
-    if (!label || !LABEL.test(label) || label.length > 64) {
-      exit("the identifier of a draft matches ^[a-z0-9]+(-[a-z0-9]+)*$ and has at most 64 characters (section 10.1)");
-    }
-    id = `sheaf:draft:${label}`;
-    const held2 = await f.storage.kind(joinPath(await f.dirOf(id), "inventory.json")) === "file";
-    if (a.new && held2) exit(`the draft ${label} exists: osheaf draft deposit ${label} adds a version to it`);
-    if (!a.new && !held2) exit(`no draft ${label} in this archive (osheaf draft new ${label} makes one)`);
-  } else if (f.labels.has(label)) {
-    if (a.new) exit(`${label} is the label of a line already: deposit a new version without --new, or choose another label for a new work`);
-    id = f.labels.get(label);
-  } else if (!a.new) {
-    exit(`no line labelled ${label} in this archive: give --new to seal a new work (section 10.2), or check the label (osheaf verify lists them)`);
-  } else {
-    if (!LABEL.test(label || "") || label.length > 64) {
-      exit("a label must match ^[a-z0-9]+(-[a-z0-9]+)*$ and have at most 64 characters");
-    }
-    if (label.length > 32) f.env.err(`warning: ${label} is longer than 32 characters (it appears in every URL of the website)`);
-    owner = a.owner || f.archive.owner;
-    if (!f.archiveOwners().includes(owner)) exit(`${owner} is not an owner this archive hosts`);
-  }
-  await f.initStorageRoot();
-  const dir = id ? await f.dirOf(id) : null;
-  const inv = dir ? await f.inventory(dir) : null;
-  let prevObj = null, prevDc = null, docVersion = 1;
-  if (inv) {
-    prevObj = await f.readObjectJson(dir, inv, OBJ2);
-    prevDc = await f.readObjectJson(dir, inv, "datacite.json");
-    if (prevObj.kind !== "document") exit(`${label} is not a document`);
-    if (prevObj.status === "withdrawn") exit(`${label} is withdrawn (section 13.1): a withdrawn document gets no new versions`);
-    let most = 0;
-    for (const v of Object.keys(inv.versions)) most = Math.max(most, await docVersionOf(f, dir, inv, v));
-    docVersion = most + 1;
-    owner = prevObj.owner;
-  }
-  if (a.created && a.available) exit("give --created (a version not public at the time) or --available, not both");
-  const available = a.created ? null : a.available || f.env.today();
-  const issued = a.issued || (prevDc ? dateOf(prevDc, "Issued") : null) || available;
-  const source = a.source || null;
-  if (source && suffixOf(source.name) === ".tm" && !a.pdf) {
-    exit("TeXmacs sources are typeset by opensheaf-py (osheaf deposit of opensheaf-py); with opensheaf-js, give the PDF with --pdf");
-  }
-  if (!a.pdf) exit("give the PDF of this version with --pdf (only TeXmacs sources are typeset by the archive)");
-  if (!source && !a.noSource) exit("a deposit without sources needs --no-source REASON (section 4.3: sourcesMissing)");
-  if (!a.title || !a.author?.length) exit("give the title (--title) and the authors (--author) of this version");
-  const files = /* @__PURE__ */ new Map(), formats = [];
-  let main = null, format = null;
-  if (source) {
-    main = source.name.slice(source.name.lastIndexOf("/") + 1);
-    format = a.sourceFormat || SOURCE_FORMATS[suffixOf(main).toLowerCase()] || "application/octet-stream";
-    files.set(main, source.bytes);
-    formats.push(format);
-  }
-  formats.push("application/pdf");
-  for (const extra of a.extraSource || []) {
-    const logical = extra.logical || extra.name.slice(extra.name.lastIndexOf("/") + 1);
-    const parts = logical.split("/");
-    if (logical.startsWith("/") || parts.includes("..") || parts.includes(".")) exit(`bad logical path ${logical}`);
-    files.set(logical, extra.bytes);
-    if (logical.endsWith(".bib") && !formats.includes("application/x-bibtex")) formats.push("application/x-bibtex");
-  }
-  const pdf = a.pdf.bytes;
-  if (!(pdf[0] === 37 && pdf[1] === 80 && pdf[2] === 68 && pdf[3] === 70)) exit(`${a.pdf.name} is not a PDF`);
-  files.set("paper.pdf", pdf);
-  let abstract = null;
-  if (a.abstractFile !== void 0 && a.abstractFile !== null) abstract = a.abstractFile.trim();
-  else if (a.abstract) abstract = a.abstract.trim();
-  if (abstract === null && prevDc) {
-    abstract = (prevDc.descriptions || []).find((x) => x.descriptionType === "Abstract")?.description ?? null;
-  }
-  const datacite = {
-    titles: [
-      {
-        title: a.title
-      }
-    ],
-    creators: a.author.map(creator),
-    publisher: {
-      name: f.archive.name
-    },
-    publicationYear: Number((issued || a.created).slice(0, 4)),
-    types: {
-      resourceTypeGeneral: a.type || "Preprint"
-    },
-    version: String(docVersion),
-    url: landingUrl(f, label),
-    dates: [],
-    language: a.language || "en",
-    formats,
-    rightsList: rightsList(a.rights, prevDc)
-  };
-  if (a.keyword?.length) datacite.subjects = a.keyword.map((k) => ({
-    subject: k
-  }));
-  else if (prevDc?.subjects?.length) datacite.subjects = prevDc.subjects;
-  if (issued) setDate(datacite, "Issued", issued);
-  if (available) setDate(datacite, "Available", available, a.dateInfo);
-  else setDate(datacite, "Created", a.created, a.dateInfo);
-  if (abstract) datacite.descriptions = [
-    {
-      description: abstract,
-      descriptionType: "Abstract"
-    }
-  ];
-  const related = relatedFromArgs(a.related);
-  if (related.length) datacite.relatedIdentifiers = related;
-  if (draft) delete datacite.url;
-  const obj = {
-    format: OBJ_FORMAT,
-    specification: SPEC,
-    kind: "document",
-    name: null,
-    owner,
-    documentVersion: docVersion
-  };
-  if (source) Object.assign(obj, {
-    mainSource: main,
-    sourceFormat: format
-  });
-  else obj.sourcesMissing = {
-    text: a.noSource
-  };
-  obj.renditions = [
-    {
-      path: "paper.pdf",
-      mediaType: "application/pdf"
-    }
-  ];
-  if (a.toolchain?.length) obj.toolchain = a.toolchain.map((t) => partition(t, "=")).map(([name2, version]) => ({
-    name: name2,
-    version
-  }));
-  obj.status = "active";
-  if (a.changes) obj.changes = {
-    text: a.changes
-  };
-  if (a.agreement) {
-    obj.agreement = {
-      by: datacite.creators.map((c) => c.name),
-      date: available || a.created || f.env.today(),
-      method: a.agreement
-    };
-  }
-  if (a.stage) obj.stage = {
-    scheme: "NISO-JAV",
-    value: a.stage
-  };
-  if (a.licenceFile) {
-    if (!files.has(a.licenceFile)) {
-      exit(`--licence-file ${a.licenceFile} is not a file of the deposit (give it as the main source or with --extra-source; files: ${[
-        ...files.keys()
-      ].sort().join(", ")})`);
-    }
-    obj.licence = {
-      path: a.licenceFile,
-      mediaType: {
-        ".pdf": "application/pdf",
-        ".md": "text/markdown",
-        ".txt": "text/plain",
-        ".html": "text/html"
-      }[suffixOf(a.licenceFile).toLowerCase()] || "text/plain"
-    };
-  }
-  if (draft) {
-    delete obj.name;
-    delete obj.owner;
-  } else if (id === null) {
-    const sealed = await f.seal("document", owner);
-    id = sealed.id;
-    files.set(GENESIS2, sealed.genesis);
-  } else {
-    files.set(GENESIS2, await f.readLogical(dir, inv, GENESIS2));
-  }
-  if (!draft) obj.name = id.split(":")[1];
-  if (prevObj?.parent) {
-    obj.parent = prevObj.parent;
-    const state = inv.versions[inv.head].state;
-    for (const lp of Object.values(state).flat().filter(isEvidence).sort()) files.set(lp, await f.readLogical(dir, inv, lp));
-  }
-  const next = inv ? `v${Number(inv.head.slice(1)) + 1}` : "v1";
-  await carryForward(f, prevObj, obj, dir, inv, next, a.after ?? null);
-  for (const [lp, bytes] of await carriedFiles(f, dir, inv)) if (!files.has(lp)) files.set(lp, bytes);
-  files.set("datacite.json", jsonBytes(datacite));
-  const done = await f.addVersion(id, files, obj, a.message || `Deposit: document version ${docVersion}`, {
-    acknowledged: Boolean(a.iKnow)
-  });
-  if (!draft) f.labels.set(label, id);
-  await writeDiscovery(f);
-  f.env.out(`${label}: ${done.head} (document version ${docVersion}) ${id}`);
-  return {
-    id,
-    head: done.head,
-    documentVersion: docVersion
-  };
-}
-
-// core/collect.js
-async function documents(f) {
-  const out = [], mine = f.archiveOwners();
-  for (const { id, dir, inv } of await f.objects()) {
-    if (!inv || typeof id !== "string" || id.startsWith("sheaf:draft:")) continue;
-    const head = await f.readObjectJson(dir, inv, OBJ2);
-    if (head?.kind !== "document" || !mine.includes(head.owner)) continue;
-    const line = await f.line(id);
-    const signed = line.latest;
-    if (!signed) {
-      f.env.err(`warning: ${f.labelOf(id) || id} has no signed version (section 7.3): left out`);
-      continue;
-    }
-    const cur = currentVersion(inv, (v) => line.objs.get(v) ?? null, signed);
-    out.push({
-      id,
-      dir,
-      inv,
-      signed,
-      cur,
-      obj: await f.readObjectJson(dir, inv, OBJ2, cur),
-      dc: await f.readObjectJson(dir, inv, "datacite.json", cur)
-    });
-  }
-  return out;
-}
-var ORDER = "issued-desc";
-function compareTuples(a, b) {
-  for (let k = 0; k < a.length; k++) {
-    if (a[k] < b[k]) return -1;
-    if (a[k] > b[k]) return 1;
-  }
-  return 0;
-}
-function memberOrder(members, order = ORDER) {
-  const key = (m) => [
-    m.cite?.issued || "",
-    m.cite?.available || ""
-  ];
-  const line = (a, b) => compareTuples([
-    a.name ?? "",
-    a.owner ?? ""
-  ], [
-    b.name ?? "",
-    b.owner ?? ""
-  ]);
-  const dated = members.filter((m) => key(m).some(Boolean)).sort(line);
-  dated.sort((a, b) => order === "issued-desc" ? compareTuples(key(b), key(a)) : compareTuples(key(a), key(b)));
-  return [
-    ...dated,
-    ...members.filter((m) => !key(m).some(Boolean)).sort(line)
-  ];
-}
-async function collect2(f, { curated = false, iKnow = false } = {}) {
-  await f.initStorageRoot();
-  const label = f.archive.mainCollection;
-  const collId = f.labels.get(label) ?? null;
-  const collDir = collId ? await f.dirOf(collId) : null;
-  const cinv = collDir ? await f.inventory(collDir) : null;
-  if (cinv && (await f.readObjectJson(collDir, cinv, "members.json"))?.order === "manual") {
-    f.env.out(`${label} is curated (order manual): use osheaf collection add|sync|update`);
-    return null;
-  }
-  const isCurated2 = cinv === null && Boolean(curated);
-  const order = isCurated2 ? "manual" : ORDER;
-  let members = [];
-  for (const { dir, signed, obj: obj2, dc } of await documents(f)) {
-    const cite2 = {
-      title: dc.titles[0].title,
-      creators: dc.creators.map(displayName),
-      year: dc.publicationYear
-    };
-    if (dateOf(dc, "Issued")) cite2.issued = dateOf(dc, "Issued");
-    const m = {
-      kind: "document",
-      name: obj2.name,
-      owner: obj2.owner,
-      at: [
-        f.archive.baseUrl
-      ],
-      version: signed,
-      inventorySha512: await sha512hex(await f.storage.read(joinPath(dir, signed, "inventory.json"))),
-      follow: "latest",
-      cite: cite2
-    };
-    m.cite.available = dateOf(dc, "Available", "Created");
-    members.push(m);
-  }
-  members = isCurated2 ? [] : memberOrder(members);
-  for (const m of members) delete m.cite.available;
-  const today2 = f.env.today();
-  let version = 1, issued = today2;
-  if (cinv) {
-    const old = await f.readObjectJson(collDir, cinv, "members.json");
-    if (same(old.members, members) && old.type === "catalogue") {
-      f.env.out(`${label}: unchanged (${cinv.head})`);
-      return null;
-    }
-    version = (await f.readObjectJson(collDir, cinv, OBJ2)).documentVersion + 1;
-    issued = dateOf(await f.readObjectJson(collDir, cinv, "datacite.json"), "Issued") || today2;
-  }
-  const owner = f.archive.owner;
-  let genesis, id = collId;
-  if (id === null) {
-    ({ genesis, id } = await f.seal("collection", owner));
-  } else {
-    genesis = await f.readLogical(collDir, cinv, GENESIS2);
-  }
-  const cur = f.archive.curator;
-  const creator2 = {
-    name: cur.name,
-    nameType: "Personal",
-    familyName: cur.familyName
-  };
-  if (cur.givenName) creator2.givenName = cur.givenName;
-  if (cur.affiliation) creator2.affiliation = [
-    {
-      name: cur.affiliation
-    }
-  ];
-  const files = /* @__PURE__ */ new Map([
-    [
-      "members.json",
-      jsonBytes({
-        format: "opensheaf-collection/0.2",
-        type: "catalogue",
-        order,
-        members
-      })
-    ],
-    [
-      "datacite.json",
-      jsonBytes({
-        titles: [
-          {
-            title: f.archive.name
-          }
-        ],
-        creators: [
-          creator2
-        ],
-        publisher: {
-          name: f.archive.name
-        },
-        publicationYear: Number(issued.slice(0, 4)),
-        types: {
-          resourceTypeGeneral: "Collection"
-        },
-        version: String(version),
-        url: f.archive.baseUrl,
-        dates: [
-          {
-            date: issued,
-            dateType: "Issued"
-          },
-          {
-            date: today2,
-            dateType: "Available"
-          }
-        ],
-        descriptions: [
-          {
-            description: "The documents deposited in this archive, newest first.",
-            descriptionType: "Abstract"
-          }
-        ],
-        rightsList: [
-          {
-            ...RIGHTS["cc0-1.0"]
-          }
-        ]
-      })
-    ],
-    [
-      GENESIS2,
-      genesis
-    ]
-  ]);
-  const obj = {
-    format: OBJ_FORMAT,
-    specification: SPEC,
-    kind: "collection",
-    name: id.split(":")[1],
-    owner,
-    documentVersion: version,
-    status: "active"
-  };
-  f.labels.set(label, id);
-  const inv = await f.addVersion(id, files, obj, `Collection version ${version}: ${members.length} documents`, {
-    acknowledged: iKnow
-  });
-  await writeDiscovery(f);
-  f.env.out(`Done: the main catalogue ${label} is at ${inv.head}, with ${members.length ? plural(members.length, "member") : "no members"}.`);
-  return inv;
-}
-
-// core/describe.js
-async function lineOf(f, label) {
-  if (f.labels.has(label)) return f.labels.get(label);
-  if (typeof label === "string" && label.startsWith("sheaf:")) {
-    try {
-      if (await f.storage.kind(joinPath(await f.dirOf(label), "inventory.json")) === "file") return label;
-    } catch {
-    }
-  }
-  exit(`no line labelled ${label} in this archive (osheaf deposit --new ${label} seals a new work)`);
-}
-async function headOf(f, label) {
-  const id = await lineOf(f, label);
-  const dir = await f.dirOf(id);
-  const inv = await f.inventory(dir);
-  if (inv === null) exit(`no object ${label}`);
-  return {
-    id,
-    dir,
-    inv
-  };
-}
-async function headFiles(f, dir, inv, ver = inv.head) {
-  const out = /* @__PURE__ */ new Map();
-  for (const paths of Object.values(inv.versions[ver].state)) {
-    for (const p of paths) if (p !== "datacite.json" && p !== OBJ2) out.set(p, await f.readLogical(dir, inv, p, ver));
-  }
-  return out;
-}
-async function descriptionVersion(f, label, change, message2, addFiles = null, acknowledged = false) {
-  const { id, dir, inv } = await headOf(f, label);
-  const files = await headFiles(f, dir, inv);
-  const dc = await f.readObjectJson(dir, inv, "datacite.json");
-  const prev = await f.readObjectJson(dir, inv, OBJ2);
-  if (prev.kind !== "document") exit(`${label} is not a document`);
-  const obj = JSON.parse(JSON.stringify(prev));
-  await change(dc, obj);
-  setDate(dc, "Updated", f.env.today());
-  await carryForward(f, prev, obj, dir, inv, `v${Number(inv.head.slice(1)) + 1}`);
-  for (const [lp, bytes] of addFiles || []) {
-    if (files.has(lp)) exit(`${label} has a file ${lp} already`);
-    files.set(lp, bytes);
-  }
-  files.set("datacite.json", jsonBytes(dc));
-  const done = await f.addVersion(id, files, obj, typeof message2 === "function" ? message2() : message2, {
-    acknowledged: Boolean(acknowledged)
-  });
-  await writeDiscovery(f);
-  return done;
-}
-var NOTE_TYPES = {
-  ".pdf": "application/pdf",
-  ".md": "text/markdown",
-  ".txt": "text/plain",
-  ".html": "text/html"
-};
-function noteFrom(text3, file, folder) {
-  const note = {}, add2 = /* @__PURE__ */ new Map();
-  if (text3) note.text = text3;
-  if (file) {
-    const lp = `${folder}/${file.name}`;
-    note.path = lp;
-    note.mediaType = NOTE_TYPES[suffixOf(file.name).toLowerCase()] || "application/octet-stream";
-    add2.set(lp, file.bytes);
-  }
-  if (!Object.keys(note).length) exit("a note needs a text, a file, or both");
-  return {
-    note,
-    add: add2
-  };
-}
-async function notice(f, a) {
-  const { dir, inv } = await headOf(f, a.label);
-  const numbers = /* @__PURE__ */ new Set();
-  for (const v of Object.keys(inv.versions)) numbers.add((await f.readObjectJson(dir, inv, OBJ2, v)).documentVersion);
-  if (!numbers.has(a.about)) exit(`${a.label} has no document version ${a.about}`);
-  const { note, add: add2 } = noteFrom(a.text, a.file, "notices");
-  Object.assign(note, {
-    documentVersion: a.about,
-    date: a.date || f.env.today()
-  });
-  const done = await descriptionVersion(f, a.label, (dc, obj) => {
-    obj.notices = [
-      ...obj.notices || [],
-      note
-    ];
-  }, a.message || `Notice about document version ${a.about} (description-only version)`, add2, a.iKnow);
-  f.env.out(`${a.label}: ${done.head} (notice about version ${a.about})`);
-  return done;
-}
-async function withdraw(f, a) {
-  const { note: reason, add: add2 } = noteFrom(a.reason, a.file, "withdrawal");
-  const date2 = a.date || f.env.today();
-  const done = await descriptionVersion(f, a.label, (dc, obj) => {
-    if (obj.status === "withdrawn") exit(`${a.label} is withdrawn already`);
-    obj.status = "withdrawn";
-    obj.withdrawal = {
-      date: date2,
-      reason
-    };
-    setDate(dc, "Withdrawn", date2);
-  }, a.message || "Withdrawal (description-only version)", add2, a.iKnow);
-  f.env.out(`${a.label}: ${done.head} (withdrawn)`);
-  return done;
-}
-async function relicense(f, a) {
-  const fresh = rightsList(checkRights(a.rights))[0];
-  const done = await descriptionVersion(f, a.label, (dc, obj) => {
-    if (dc.rightsList !== void 0 && same(dc.rightsList, [
-      fresh
-    ])) exit(`${a.label} already has ${a.rights}`);
-    dc.rightsList = [
-      fresh
-    ];
-    obj.agreement = {
-      by: dc.creators.map((c) => c.name),
-      date: a.date || f.env.today(),
-      method: a.method
-    };
-  }, a.message || `Licence: ${fresh.rights} (description-only version; content unchanged)`, null, a.iKnow);
-  f.env.out(`${a.label}: ${done.head} (${fresh.rights})`);
-  return done;
-}
-
-// core/resolve.js
-var MEMBER_STATUS = {
-  [SIGNED]: "verified",
-  [VOUCHED]: "verified",
-  [CONTESTED]: "contested",
-  [UNCHECKED]: "unchecked",
-  [UNSIGNED]: "not a version",
-  [INVALID]: "not a version"
-};
-var Copy = class {
-  constructor(where2, archive, line) {
-    Object.assign(this, {
-      where: where2,
-      archive,
-      line,
-      id: line.id
-    });
-  }
-  get head() {
-    return this.line.versions.length;
-  }
-  get statuses() {
-    return this.line.statuses;
-  }
-  get latestSigned() {
-    return this.line.latest ? versionNumber(this.line.latest) : 0;
-  }
-  digest(n) {
-    return n > 0 && n <= this.line.versions.length ? this.line.versions[n - 1].digest : null;
-  }
-  status(n) {
-    return n > 0 && n <= this.statuses.length ? this.statuses[n - 1] : null;
-  }
-  find(digest) {
-    const k = this.line.versions.findIndex((v) => v.digest === digest);
-    return k < 0 ? null : k + 1;
-  }
-  obj(n) {
-    return this.line.versions[n - 1]?.obj ?? null;
-  }
-  agrees(other) {
-    const k = Math.min(this.latestSigned, other.latestSigned);
-    return k === 0 || this.digest(k) === other.digest(k);
-  }
-};
-function found(status, copy = null, version = null, digest = null, copies = [], log = null) {
-  return {
-    status,
-    copy,
-    version,
-    digest,
-    copies,
-    log,
-    ok: status === "verified" || status === "contested"
-  };
-}
-function ipv6Groups(text3) {
-  const halves = text3.split("::");
-  if (halves.length > 2) return null;
-  const groups = (s) => s ? s.split(":").map((g) => parseInt(g, 16)) : [];
-  const head = groups(halves[0]), tail = halves.length === 2 ? groups(halves[1]) : [];
-  if (halves.length === 1 && head.length !== 8) return null;
-  const out = [
-    ...head,
-    ...new Array(8 - head.length - tail.length).fill(0),
-    ...tail
-  ];
-  return out.length === 8 && out.every((g) => Number.isInteger(g) && g >= 0 && g <= 65535) ? out : null;
-}
-function ipv4Kind([a, b]) {
-  if (a === 127) return "a loopback address";
-  if (a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168) return "a private address";
-  if (a === 169 && b === 254) return "a link-local address";
-  if (a === 0) return "an address of this network";
-  return null;
-}
-function localKind(hostname) {
-  const host = String(hostname).toLowerCase().replace(/\.$/, "");
-  if (host === "localhost" || host.endsWith(".localhost")) return "a loopback address";
-  if (host === "local" || host.endsWith(".local")) return "a name of the local network (.local)";
-  if (/^[0-9]+(\.[0-9]+){3}$/.test(host)) return ipv4Kind(host.split(".").map(Number));
-  if (!host.startsWith("[")) return null;
-  const g = ipv6Groups(host.slice(1, -1));
-  if (!g) return null;
-  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 65535) return ipv4Kind([
-    g[6] >> 8,
-    g[6] & 255
-  ]);
-  if (g.slice(0, 7).every((x) => x === 0)) return g[7] === 1 ? "a loopback address" : g[7] === 0 ? "an address of this network" : null;
-  if ((g[0] & 65024) === 64512) return "a unique local address";
-  if ((g[0] & 65472) === 65152) return "a link-local address";
-  return null;
-}
-var Resolver = class _Resolver {
-  constructor(http, home = null, { local = false } = {}) {
-    this.http = http;
-    this.home = home;
-    this.local = local;
-    this.archives = /* @__PURE__ */ new Map();
-    this.logs = /* @__PURE__ */ new Map();
-    this.notes = [];
-    if (home) this.archives.set(home.base, Promise.resolve(home));
-  }
-  again() {
-    const fresh = new _Resolver(this.http.another(), null, {
-      local: this.local
-    });
-    if (this.home) fresh.home = this.home;
-    return fresh;
-  }
-  note(level2, message2) {
-    if (!this.notes.some((n) => n.level === level2 && n.message === message2)) this.notes.push({
-      level: level2,
-      message: message2
-    });
-  }
-  source(where2, options = {}) {
-    const base = baseOf(where2);
-    if (!this.archives.has(base)) {
-      const refused = this.refused(base);
-      if (refused) {
-        this.note("warning", `unavailable: ${where2}: ${refused}`);
-        this.archives.set(base, Promise.resolve(null));
-        return this.archives.get(base);
-      }
-      const opening = Archive.open(this.http, base, options).then((archive) => {
-        if (archive.old || archive.disc.specification !== "0.2") {
-          this.note("warning", `unavailable: ${where2}: not an archive of specification 0.2`);
-          return null;
-        }
-        return archive;
-      }, (error) => {
-        if (error?.kind === "aborted") {
-          this.archives.delete(base);
-          throw error;
-        }
-        this.note("warning", `unavailable: ${where2}: ${error.kind === "not-found" ? "no discovery document opensheaf.json" : error.kind === "json" ? "the discovery document is not JSON" : error.detail || error.message}`);
-        return null;
-      });
-      this.archives.set(base, opening);
-    }
-    return this.archives.get(base);
-  }
-  refused(base) {
-    const kind = localKind(new URL(base).hostname);
-    if (!kind || this.local) return null;
-    if (this.home && localKind(new URL(this.home.base).hostname)) return null;
-    return `not fetched: ${new URL(base).hostname} is ${kind}, which the explorer fetches only for an archive that is itself on a local or private host`;
-  }
-  places(where2) {
-    const out = this.home ? [
-      this.home.base
-    ] : [];
-    const given = [];
-    for (const w of where2) {
-      if (typeof w !== "string" || !w) continue;
-      let base;
-      try {
-        base = baseOf(w);
-      } catch {
-        continue;
-      }
-      if (!out.includes(base) && !given.includes(base)) given.push(base);
-    }
-    if (given.length > LIMITS.mirrors) {
-      this.note("warning", `${given.length - LIMITS.mirrors} more location(s) not tried (at most ${LIMITS.mirrors} are tried, section 15.2)`);
-    }
-    return [
-      ...out,
-      ...given.slice(0, LIMITS.mirrors)
-    ];
-  }
-  async archiveOf(url, options = {}) {
-    this.bases ??= /* @__PURE__ */ new Map();
-    if (this.bases.has(url)) return this.bases.get(url);
-    const out = [];
-    this.bases.set(url, out);
-    let u;
-    try {
-      u = new URL(url);
-    } catch {
-      return out;
-    }
-    if (![
-      "https:",
-      "http:"
-    ].includes(u.protocol) || !u.host) return out;
-    const origin = `${u.protocol}//${u.host}`, path = u.pathname, whole = origin + path;
-    const cuts = [];
-    for (let k = path.length - 2; k >= 0; k--) if (path[k] === "/") cuts.push(k + 1);
-    const guess = path.indexOf("/ocfl/");
-    if (guess >= 0) cuts.unshift(guess + 1);
-    for (const k of [
-      ...new Set(cuts)
-    ]) {
-      const base = origin + path.slice(0, k);
-      if (this.refused(base)) continue;
-      let archive = this.archives.has(base) ? await this.archives.get(base) : null;
-      if (!archive) {
-        try {
-          archive = await Archive.open(this.http, base, options);
-        } catch (error) {
-          if (error?.kind === "aborted") throw error;
-          continue;
-        }
-        if (archive.old || archive.disc.specification !== "0.2") continue;
-      }
-      const root = archive.disc.storageRoot ?? "ocfl/";
-      if (typeof root !== "string" || root.includes(":") || !root.endsWith("/") || root.slice(0, -1).split("/").some((x) => [
-        "",
-        ".",
-        ".."
-      ].includes(x)) || root.includes("\\")) continue;
-      if (whole.startsWith(archive.root) && whole.length > archive.root.length) {
-        this.archives.set(base, Promise.resolve(archive));
-        out.push(base);
-        break;
-      }
-    }
-    return out;
-  }
-  async keyLog(owner, where2 = [], options = {}) {
-    if (!this.logs.has(owner)) this.logs.set(owner, {
-      log: null,
-      met: /* @__PURE__ */ new Set(),
-      found: []
-    });
-    const entry = this.logs.get(owner);
-    for (const w of this.places(where2)) {
-      if (entry.met.has(w)) continue;
-      entry.met.add(w);
-      const archive = await this.source(w, options);
-      if (!archive) continue;
-      let log;
-      try {
-        log = await archive.keyLog(owner, options);
-      } catch (error) {
-        if (error?.kind === "aborted") throw error;
-        this.note("warning", `${w}: the key log of ${owner}: ${error.detail || error.message}`);
-        continue;
-      }
-      if (!log || log.owner !== owner) continue;
-      entry.found.push({
-        where: w,
-        log
-      });
-      const before = entry.log;
-      entry.log = before ? await before.meet(log) : log;
-      if (before && before.forkPoint === null && entry.log.forkPoint !== null) {
-        this.note("result", `a fork of the key log of ${owner} at v${entry.log.forkPoint}, met at ${w} (section 6.3)`);
-      }
-    }
-    return entry.log;
-  }
-  ownerNotes(owner) {
-    const log = this.logs.get(owner)?.log;
-    if (!log) return [];
-    const out = [];
-    if (log.forkPoint) out.push(`owner ${owner} ended by a fork of its key log at v${log.forkPoint}`);
-    else if (log.ended) out.push(`owner ${owner} ended`);
-    if (log.successor) out.push(`owner ${owner}: successor ${log.successor} named by its ending version`);
-    for (const did of [
-      ...log.exposedKeys()
-    ].sort()) out.push(`owner ${owner}: exposed key ${did}`);
-    return out;
-  }
-  async copies(name2, owner, where2 = [], options = {}) {
-    const id = objectId(name2, owner);
-    const held2 = [];
-    for (const w of this.places(where2)) {
-      const archive = await this.source(w, options);
-      if (!archive) continue;
-      if (archive !== this.home && !archive.objects().some((o) => o.id === id)) continue;
-      await this.keyLog(owner, archive === this.home ? [] : [
-        w
-      ], options);
-      held2.push({
-        w,
-        archive
-      });
-    }
-    const log = await this.keyLog(owner, [], options);
-    const out = [];
-    for (const { w, archive } of held2) {
-      let line;
-      try {
-        line = await archive.line(id, {
-          log,
-          signal: options.signal
-        });
-      } catch (error) {
-        if (error?.kind === "aborted") throw error;
-        if (error?.kind !== "not-found") this.note("warning", `${w}: ${id}: ${error.detail || error.message}`);
-        continue;
-      }
-      const problem = await this.identityProblem(archive, id, line, options);
-      if (problem) {
-        this.note("warning", `${w}: ${id}: not a copy of the line: ${problem}`);
-        continue;
-      }
-      out.push(new Copy(w, archive, line));
-    }
-    if (out.length && await this.tombstoned(id, where2, options)) {
-      this.note("result", `${id}: taken down in an archive read, and found elsewhere (section 12.3)`);
-    }
-    return out;
-  }
-  async identityProblem(archive, id, line, options) {
-    if (line.inv.id !== id) return "its inventory names another object";
-    const [, name2, owner] = id.split(":");
-    let genesis = null;
-    try {
-      genesis = await archive.bytes(id, line.inv, "v1", "genesis.json", options);
-    } catch (error) {
-      if (error?.kind === "aborted") throw error;
-    }
-    if (!genesis || !await isNameOf(name2, genesis)) return "the name is not a name of its genesis record (section 5.2)";
-    for (const v of line.versions) {
-      if (v.obj?.name !== name2 || v.obj?.owner !== owner) return `${v.ver}: object.json does not record the line`;
-    }
-    return null;
-  }
-  async tombstoned(id, where2 = [], options = {}) {
-    for (const w of this.places(where2)) {
-      const archive = await this.source(w, options);
-      if (archive?.tombstones().some((t) => t.id === id)) return true;
-    }
-    return false;
-  }
-  async pin(name2, owner, version, digest, where2 = [], options = {}) {
-    if (name2 === owner) {
-      const log = await this.keyLog(owner, where2, options);
-      const v = log && isVersion(version) ? log.lookup(versionNumber(version), digest) : null;
-      if (v) return found("verified", null, version, digest, [], log);
-      return found(log ? "mismatch" : "unavailable", null, version, digest, [], log);
-    }
-    const copies = await this.copies(name2, owner, where2, options);
-    const n = isVersion(version) ? versionNumber(version) : 0;
-    for (const c of copies) {
-      if (n && c.digest(n) === digest) return found(MEMBER_STATUS[c.status(n)] || "not a version", c, version, digest, copies);
-    }
-    if (copies.length) return found("mismatch", null, version, digest, copies);
-    return found(await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable", null, version, digest, copies);
-  }
-  async latest(name2, owner, where2 = [], options = {}) {
-    const copies = await this.copies(name2, owner, where2, options);
-    const signed = copies.filter((c) => c.latestSigned).sort((a, b) => b.latestSigned - a.latestSigned);
-    if (!signed.length) {
-      const status = copies.length ? "not a version" : await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable";
-      return found(status, null, null, null, copies);
-    }
-    const top = signed[0];
-    const forks = signed.filter((c) => !top.agrees(c));
-    for (const c of forks) {
-      this.note("result", `a fork of the line ${top.id}: the copy at ${c.where} (latest signed v${c.latestSigned}) does not agree with the copy at ${top.where} (latest signed v${top.latestSigned}) (section 7.4)`);
-    }
-    if (forks.length) return found("fork", null, null, null, copies);
-    return found("verified", top, `v${top.latestSigned}`, top.digest(top.latestSigned), copies);
-  }
-  async documentVersion(name2, owner, n, where2 = [], options = {}) {
-    const latest = await this.latest(name2, owner, where2, options);
-    if (!latest.copy) return latest;
-    const c = latest.copy;
-    const objOf2 = (v) => c.line.objs.get(v) ?? null;
-    for (const h of historyOf(c.line.inv, objOf2, latest.version)) {
-      if (objOf2(h)?.documentVersion === n) {
-        const k = versionNumber(h);
-        return found(MEMBER_STATUS[c.status(k)] || "not a version", c, h, c.digest(k), latest.copies);
-      }
-    }
-    this.note("warning", `${c.id}: no document version ${n} in the history of ${latest.version}`);
-    return found("unavailable", null, null, null, latest.copies);
-  }
-  async resolve(text3, where2 = [], options = {}) {
-    const u = parseSheaf(text3, {
-      short: true,
-      fold: true
-    });
-    where2 = [
-      ...u.at ? [
-        u.at
-      ] : [],
-      ...where2
-    ];
-    if (u.owner === "*") throw new Error("a work, sheaf:<name>:*, is searched for (section 12.4), which the explorer does not do");
-    const [name2, owner] = await this.expand(u, where2, options);
-    if (name2 === owner) {
-      const id2 = objectId(owner, owner);
-      const log = await this.keyLog(owner, where2, options);
-      if (!log) return {
-        id: id2,
-        found: found("unavailable")
-      };
-      const side = log.side();
-      if (u.version === null) {
-        const v = side[side.length - 1];
-        return {
-          id: id2,
-          found: found("verified", null, `v${v.number}`, v.digest, [], log)
-        };
-      }
-      if (u.sha512 === null) {
-        if (u.version > side.length) return {
-          id: id2,
-          found: found("unavailable", null, null, null, [], log)
-        };
-        return {
-          id: id2,
-          found: found("verified", null, `v${u.version}`, side[u.version - 1].digest, [], log)
-        };
-      }
-      return {
-        id: id2,
-        found: await this.pin(owner, owner, `v${u.version}`, u.sha512, where2, options)
-      };
-    }
-    const id = objectId(name2, owner);
-    if (u.version === null) return {
-      id,
-      found: await this.latest(name2, owner, where2, options)
-    };
-    if (u.sha512 === null) return {
-      id,
-      found: await this.documentVersion(name2, owner, u.version, where2, options)
-    };
-    const copies = await this.copies(name2, owner, where2, options);
-    for (const c of copies) {
-      const k = c.find(u.sha512);
-      if (k === null) continue;
-      const held2 = c.obj(k)?.documentVersion;
-      if (held2 !== u.version) {
-        this.note("warning", `${id}: the version pinned holds document version ${held2}, not ${u.version}`);
-        return {
-          id,
-          found: found("mismatch", c, `v${k}`, u.sha512)
-        };
-      }
-      return {
-        id,
-        found: found(MEMBER_STATUS[c.status(k)] || "not a version", c, `v${k}`, u.sha512)
-      };
-    }
-    const status = copies.length ? "mismatch" : await this.tombstoned(id, where2, options) ? "removed" : "unavailable";
-    return {
-      id,
-      found: found(status, null, null, u.sha512, copies)
-    };
-  }
-  async expand(u, where2, options = {}) {
-    if (u.isComplete() && u.owner !== null) return [
-      u.name,
-      u.owner
-    ];
-    const candidates = /* @__PURE__ */ new Set();
-    for (const w of this.places(where2)) {
-      const archive = await this.source(w, options);
-      if (!archive) continue;
-      for (const o of archive.objects()) {
-        const name2 = typeof o.name === "string" ? o.name : "", owner = typeof o.owner === "string" ? o.owner : "";
-        if (!u.matches(name2, owner)) continue;
-        if (u.owner === null) {
-          if (o.kind === "owner" ? name2 !== owner : await this.originator(archive, o.id, options) !== owner) continue;
-        }
-        candidates.add(`${name2} ${owner}`);
-      }
-    }
-    if (candidates.size !== 1) {
-      const listed = [
-        ...candidates
-      ].sort().map((c) => `  sheaf:${c.replace(" ", ":")}`).join("\n");
-      throw new Error(`${u}: ` + (candidates.size ? "ambiguous, the candidates are:\n" + listed : "no line of that name in the archives read"));
-    }
-    return [
-      ...candidates
-    ][0].split(" ");
-  }
-  async originator(archive, id, options = {}) {
-    try {
-      const inv = await archive.inventory(id, null, options);
-      const genesis = await archive.bytes(id, inv, "v1", "genesis.json", options);
-      return genesis ? (await readGenesis(genesis)).originator ?? null : null;
-    } catch (error) {
-      if (error?.kind === "aborted") throw error;
-      return null;
-    }
-  }
-  async describe(result, { presentCurrent = false } = {}, options = {}) {
-    const c = result.copy;
-    if (!c) return null;
-    const objOf2 = (v) => c.line.objs.get(v) ?? null;
-    const shown = presentCurrent ? historyOf(c.line.inv, objOf2, result.version).slice(-1)[0] || result.version : result.version;
-    const { obj, dc } = await c.archive.descriptions(c.id, c.line.inv, shown, options);
-    const latest = c.line.latest ? objOf2(c.line.latest) : null;
-    return {
-      version: shown,
-      title: titleOf(dc),
-      creators: creatorsOf(dc),
-      documentVersion: obj?.documentVersion ?? null,
-      status: latest?.status ?? null,
-      withdrawal: latest?.withdrawal ?? null,
-      archive: c.archive
-    };
-  }
-};
-
 // core/inputs.js
 async function parseData(name2, text3, { yaml11 = false } = {}) {
   if (name2.toLowerCase().endsWith(".json")) return JSON.parse(text3);
@@ -17884,18 +17417,13 @@ async function parseData(name2, text3, { yaml11 = false } = {}) {
   };
   return YAML.parse(text3, options);
 }
+var init_inputs = __esm({
+  "core/inputs.js"() {
+    init_folder();
+  }
+});
 
 // core/collections.js
-var KINDS3 = [
-  "catalogue",
-  "selection"
-];
-var ORDERS = [
-  "manual",
-  "issued-desc",
-  "issued-asc"
-];
-var FORMAT = "opensheaf-collection/0.2";
 async function openResolver(f) {
   const base = ORIGIN;
   const http = new Http({
@@ -17910,7 +17438,6 @@ async function openResolver(f) {
     local: true
   });
 }
-var objOf = (c) => (v) => c.line.objs.get(v) ?? null;
 async function copyJson(c, logical, ver) {
   try {
     return await c.archive.json(c.id, c.line.inv, ver, logical);
@@ -18377,8 +17904,898 @@ async function syncMember(f, r, entry, kind, oldMembers) {
 function pyRepr(entry) {
   return "{" + Object.entries(entry).map(([k, v]) => `'${k}': ${typeof v === "string" ? `'${v}'` : JSON.stringify(v)}`).join(", ") + "}";
 }
+var KINDS3, ORDERS, FORMAT, objOf;
+var init_collections = __esm({
+  "core/collections.js"() {
+    init_http();
+    init_archive();
+    init_resolve();
+    init_names();
+    init_versions();
+    init_schema();
+    init_storage();
+    init_write();
+    init_discovery();
+    init_folder();
+    init_deposit();
+    init_collect();
+    init_describe();
+    init_inputs();
+    KINDS3 = [
+      "catalogue",
+      "selection"
+    ];
+    ORDERS = [
+      "manual",
+      "issued-desc",
+      "issued-asc"
+    ];
+    FORMAT = "opensheaf-collection/0.2";
+    objOf = (c) => (v) => c.line.objs.get(v) ?? null;
+  }
+});
+
+// web/manager.js
+init_folder();
+init_schema();
+
+// core/keepers.js
+init_names();
+var KEEPER_FORMAT = "opensheaf-keeper/0.2";
+var CONFIRMED = "confirmed";
+var CLAIMED = "claimed only";
+var ABSENT = "absent";
+var NOT_CHECKED = "not checked";
+var ORCID_API = "https://pub.orcid.org/v3.0/{}/researcher-urls";
+var KEEPER_TIMEOUT = 15e3;
+var OWNER_WORD = /(?<![a-z0-9])[a-z2-7]{51}[aq](?![a-z0-9])/g;
+var KeeperUnreachable = class extends Error {
+};
+function fetchJsonWith(fetch2 = globalThis.fetch?.bind(globalThis)) {
+  return async (url) => {
+    let response;
+    try {
+      response = await fetch2(url, {
+        headers: {
+          Accept: "application/json"
+        },
+        signal: AbortSignal.timeout(KEEPER_TIMEOUT)
+      });
+    } catch (error) {
+      throw new KeeperUnreachable(`${url}: ${error.cause?.message || error.message}`);
+    }
+    if (response.status === 404 || response.status === 410) return null;
+    if (!response.ok) throw new KeeperUnreachable(`${url}: HTTP ${response.status}`);
+    const data2 = new Uint8Array(await response.arrayBuffer());
+    if (data2.length > 1 << 20) throw new KeeperUnreachable(`${url}: more than 1 MB`);
+    try {
+      return JSON.parse(new TextDecoder().decode(data2));
+    } catch {
+      throw new KeeperUnreachable(`${url}: not JSON`);
+    }
+  };
+}
+async function keeperOf(log) {
+  try {
+    return log ? ((await readGenesis(log.genesis)).keeper || [
+      null
+    ])[0] : null;
+  } catch {
+    return null;
+  }
+}
+async function keeperLink(log, fetchJson = null) {
+  fetchJson ||= fetchJsonWith();
+  const keeper = await keeperOf(log), owner = log.owner;
+  if (keeper === null) return {
+    keeper: null,
+    status: ABSENT,
+    reason: "the owner names no keeper",
+    successor: null
+  };
+  const link = (status, reason, successor = null) => ({
+    keeper,
+    status,
+    reason,
+    successor
+  });
+  const orcid = keeper.startsWith("https://orcid.org/");
+  const url = orcid ? ORCID_API.replace("{}", keeper.slice(keeper.lastIndexOf("/") + 1)) : keeper + ".well-known/opensheaf";
+  let data2;
+  try {
+    data2 = await fetchJson(url);
+  } catch (error) {
+    if (!(error instanceof KeeperUnreachable)) throw error;
+    return link(NOT_CHECKED, `offline: ${error.message}`);
+  }
+  const isMap2 = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+  if (orcid) {
+    const links = isMap2(data2) ? data2["researcher-url"] : null;
+    for (const item of Array.isArray(links) ? links : []) {
+      const value = isMap2(item) ? (item.url || {}).value : null;
+      const found2 = typeof value === "string" ? value.match(OWNER_WORD) || [] : [];
+      if (found2.length && found2[0] === owner) {
+        const others = found2.slice(1).filter((w) => w !== owner);
+        return link(CONFIRMED, "ORCID record links the owner", others[0] ?? null);
+      }
+    }
+    return link(CLAIMED, "the ORCID record has no link naming the owner");
+  }
+  if (data2 === null) return link(CLAIMED, `there is no ${url}`);
+  if (!isMap2(data2) || data2.format !== KEEPER_FORMAT) return link(CLAIMED, `${url} is not of format ${KEEPER_FORMAT}`);
+  if (!(Array.isArray(data2.owners) && data2.owners.includes(owner))) return link(CLAIMED, `${url} does not list the owner`);
+  let succ = isMap2(data2.successors) ? data2.successors[owner] : null;
+  succ = typeof succ === "string" && OWNER_NAME.test(succ) && succ !== owner ? succ : null;
+  return link(CONFIRMED, `${url} lists the owner`, succ);
+}
+function successorClaim(log, link) {
+  if (!link || link.successor === null || link.successor === void 0 || link.successor === log.successor) return null;
+  if (log.successor) return `claimed by the keeper (the ending version names ${log.successor}; section 6.6)`;
+  return "named by the keeper (section 6.6)";
+}
+
+// web/manager.js
+init_keys();
+
+// core/wallets.js
+init_names();
+init_keys();
+init_crypto();
+init_folder();
+var WalletError = class extends Error {
+};
+var OFFLINE = "offline";
+var WALLET = "OPENSHEAF_WALLET";
+function risk(where2, owner) {
+  return `The rotation keys and the current keys of ${short(owner)} are kept in ${where2} (security level ${where2}), locked with your passphrase. Whoever controls ${where2} and knows the passphrase controls the owner: they can sign in its name and change its keys (sections 6.2 and 15.1), and a current key pulled from the wallet is on every computer that pulls it. The maximum security level keeps the rotation keys offline, apart from each other. To move up later, run once osheaf owner rotate --keys offline --export DIR: the rotation keys in the wallet are then used up, and the new ones are kept offline only.`;
+}
+var REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
+var COMMANDS = [
+  "read",
+  "write",
+  "list",
+  "forget"
+];
+function parseWallet(spec, env, { config = null, forbidden = [] } = {}) {
+  spec = (spec || "").trim();
+  if (spec.startsWith("{")) {
+    try {
+      config = JSON.parse(spec);
+    } catch {
+      throw new WalletError(`${WALLET}: not JSON: ${spec}`);
+    }
+    spec = String(config?.wallet ?? "");
+  }
+  if (spec === "" || spec === OFFLINE) return null;
+  if (spec.startsWith("github:")) {
+    const repo = spec.slice("github:".length);
+    if (!REPO.test(repo)) throw new WalletError(`a GitHub wallet is github:OWNER/REPO: ${spec}`);
+    return new GitHubWallet(repo, env.wallets.github, forbidden);
+  }
+  if (spec === "command") return new CommandWallet(config || env.wallets.userConfig(), env.wallets);
+  throw new WalletError(`a security level is offline, github:OWNER/REPO or command: ${spec}`);
+}
+function configuredWallet(config, env, { forbidden = [] } = {}) {
+  config = config && typeof config === "object" && !Array.isArray(config) ? config : {};
+  if (config.wallet === "command" || COMMANDS.some((c) => c in config)) {
+    throw new WalletError(`osheaf.json configures a command wallet ("keys"), whose commands would run on this machine: they are read only from your own configuration. Move "keys" to ${env.wallets.userConfigPath()} (or to ${WALLET}), and leave osheaf.json without it`);
+  }
+  const given = (env.wallets.walletEnv() || "").trim();
+  if (given) return parseWallet(given, env, {
+    forbidden
+  });
+  const user = env.wallets.userConfig();
+  if (user.wallet) return parseWallet(String(user.wallet), env, {
+    config: user,
+    forbidden
+  });
+  return parseWallet(config.wallet, env, {
+    forbidden
+  });
+}
+var GITHUB_REMOTE = /github\.com[:/]+([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?(?:\s|$)/g;
+var PAGES = /^https?:\/\/([A-Za-z0-9-]+)\.github\.io(?:\/([A-Za-z0-9._-]+))?\/?/;
+function archiveRepositories(remotes, baseUrl) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m2 of `${remotes || ""}
+`.matchAll(GITHUB_REMOTE)) out.add(`${m2[1]}/${m2[2]}`.toLowerCase());
+  const m = PAGES.exec(baseUrl || "");
+  if (m) out.add(`${m[1]}/${m[2] || m[1] + ".github.io"}`.toLowerCase());
+  return out;
+}
+var ENTRY_SUFFIX = ".key.enc";
+function entryPath(owner, kid) {
+  if (!OWNER_NAME.test(owner || "") || !/^[a-z2-7]{16}$/.test(kid || "")) {
+    throw new WalletError(`not an owner name and a key: ${owner} ${kid}`);
+  }
+  return `${owner}/${kid}${ENTRY_SUFFIX}`;
+}
+var GitHubWallet = class {
+  constructor(repo, github, forbidden = []) {
+    this.repo = repo;
+    this.name = `github:${repo}`;
+    this.github = github;
+    this.forbidden = new Set([
+      ...forbidden
+    ].map((f) => f.toLowerCase()));
+    this.token = void 0;
+    this.checked = false;
+  }
+  async api(method, path, body = null) {
+    if (this.token === void 0) this.token = await this.github.token();
+    if (!this.token) throw new WalletError("gh is not signed in to GitHub, and GITHUB_TOKEN is not set: run gh auth login");
+    let r;
+    try {
+      r = await this.github.fetch(`${this.github.api.replace(/\/$/, "")}/${path}`, {
+        method,
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${this.token}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "opensheaf-js",
+          ...body ? {
+            "Content-Type": "application/json"
+          } : {}
+        },
+        body: body ? JSON.stringify(body) : void 0
+      });
+    } catch (error) {
+      throw new WalletError(`GitHub API ${path}: ${error.message}`);
+    }
+    const text3 = await r.text();
+    if (r.status === 404) return null;
+    if (!r.ok) {
+      let message2 = text3;
+      try {
+        message2 = JSON.parse(text3).message || text3;
+      } catch {
+      }
+      throw new WalletError(`GitHub API ${path}: ${message2.trim()} (HTTP ${r.status})`);
+    }
+    try {
+      return text3.trim() ? JSON.parse(text3) : {};
+    } catch {
+      throw new WalletError(`GitHub API ${path}: not JSON`);
+    }
+  }
+  contents(path = "") {
+    return `repos/${this.repo}/contents/${path}`.replace(/\/$/, "");
+  }
+  checkName() {
+    if (this.forbidden.has(this.repo.toLowerCase())) {
+      throw new WalletError(`${this.repo} is a repository of the archive, which is public: a wallet is a repository of its own`);
+    }
+  }
+  async checkWritable() {
+    this.checkName();
+    if (this.checked) return;
+    const info = await this.api("GET", `repos/${this.repo}`);
+    if (info === null) {
+      throw new WalletError(`no repository ${this.repo} that gh can reach: create it, private, with gh repo create ${this.repo} --private`);
+    }
+    if (info.private !== true || info.visibility !== "private") {
+      throw new WalletError(`${this.repo} is not a private repository: a wallet must be private`);
+    }
+    if (this.forbidden.has(String(info.full_name ?? this.repo).toLowerCase())) {
+      throw new WalletError(`${this.repo} is a repository of the archive, which is public: a wallet is a repository of its own`);
+    }
+    this.checked = true;
+  }
+  async read(owner, kid) {
+    this.checkName();
+    const got = await this.api("GET", this.contents(entryPath(owner, kid)));
+    if (!got || typeof got !== "object" || Array.isArray(got) || !("content" in got)) return null;
+    try {
+      return new TextDecoder("utf-8", {
+        fatal: true
+      }).decode(unbase64(String(got.content).replace(/\s+/g, "")));
+    } catch {
+      throw new WalletError(`${this.name}: ${entryPath(owner, kid)} is not a key file`);
+    }
+  }
+  async write(owner, kid, kind, text3) {
+    await this.checkWritable();
+    const path = entryPath(owner, kid);
+    const old = await this.api("GET", this.contents(path));
+    const body = {
+      message: `opensheaf: ${kind} key ${kid} of ${owner}`,
+      content: base64(utf8(text3))
+    };
+    if (old?.sha) body.sha = old.sha;
+    if (await this.api("PUT", this.contents(path), body) === null) throw new WalletError(`${this.repo} refused ${path}`);
+  }
+  async entries(owner = null) {
+    this.checkName();
+    const listing2 = async (p) => {
+      const got = await this.api("GET", this.contents(p));
+      return Array.isArray(got) ? got : [];
+    };
+    const folders = owner ? [
+      owner
+    ] : (await listing2("")).filter((x) => x.type === "dir" && OWNER_NAME.test(x.name)).map((x) => x.name);
+    const out = [];
+    for (const o of folders) {
+      for (const x of await listing2(o)) {
+        if (x.type === "file" && x.name.endsWith(ENTRY_SUFFIX)) out.push([
+          o,
+          x.name.slice(0, -ENTRY_SUFFIX.length)
+        ]);
+      }
+    }
+    return out;
+  }
+  async forget(owner, kid, kind) {
+    await this.checkWritable();
+    const path = entryPath(owner, kid);
+    const old = await this.api("GET", this.contents(path));
+    if (old?.sha) await this.api("DELETE", this.contents(path), {
+      message: `opensheaf: forget ${kind} key ${kid} of ${owner}`,
+      sha: old.sha
+    });
+  }
+};
+var CommandWallet = class {
+  constructor(config, wallets) {
+    this.name = "command";
+    this.config = config;
+    this.wallets = wallets;
+    if (!config.read || !config.write) {
+      throw new WalletError(`a command wallet needs "read" and "write" commands, in "keys" of ${wallets.userConfigPath()} or in ${WALLET}`);
+    }
+  }
+  async run(what, owner = "", kid = "", kind = "", text3 = null) {
+    if (owner || kid) entryPath(owner, kid);
+    if (kind && !KINDS2.includes(kind)) throw new WalletError(`unknown kind of key: ${kind}`);
+    const command = this.config[what].replaceAll("{owner}", owner).replaceAll("{k}", kid).replaceAll("{kind}", kind);
+    return this.wallets.run(command, text3);
+  }
+  async checkWritable() {
+  }
+  async read(owner, kid, kind) {
+    const r = await this.run("read", owner, kid, kind);
+    return r.status === 0 && r.stdout.trim() ? r.stdout : null;
+  }
+  async write(owner, kid, kind, text3) {
+    const r = await this.run("write", owner, kid, kind, text3);
+    if (r.status !== 0) throw new WalletError(`the write command of the wallet failed: ${r.stderr.trim()}`);
+  }
+  async entries(owner = null) {
+    if (!this.config.list) throw new WalletError('this command wallet has no "list" command');
+    const r = await this.run("list");
+    if (r.status !== 0) throw new WalletError(`the list command of the wallet failed: ${r.stderr.trim()}`);
+    const out = [];
+    for (const line of r.stdout.split(/\r\n|\r|\n/)) {
+      const parts = line.replaceAll("/", " ").split(/\s+/).filter(Boolean);
+      if (parts.length >= 2 && OWNER_NAME.test(parts[0]) && (owner === null || owner === parts[0])) {
+        out.push([
+          parts[0],
+          parts[1].endsWith(ENTRY_SUFFIX) ? parts[1].slice(0, -ENTRY_SUFFIX.length) : parts[1]
+        ]);
+      }
+    }
+    return out;
+  }
+  async forget(owner, kid, kind) {
+    if (!this.config.forget) {
+      throw new WalletError('this command wallet has no "forget" command: remove the key with your password manager');
+    }
+    const r = await this.run("forget", owner, kid, kind);
+    if (r.status !== 0) throw new WalletError(`the forget command of the wallet failed: ${r.stderr.trim()}`);
+  }
+};
+async function putKey(wallet, owner, key, kind, version, passphrase, passkeys = [], cost = {}) {
+  if ((passphrase === null || passphrase === void 0) && kind === ROTATION) {
+    throw new WalletError("a rotation key is kept in a wallet only locked with a passphrase");
+  }
+  const text3 = await keyFileText(key, owner, kind, version, passphrase, {
+    passkeys,
+    cost
+  });
+  await wallet.write(owner, key.id, kind, text3);
+  if ((await wallet.read(owner, key.id, kind) || "").trim() !== text3.trim()) {
+    throw new WalletError(`${wallet.name} did not keep the ${kind} key ${key.did}`);
+  }
+}
+async function readAny(wallet, owner, kid) {
+  for (const kind of KINDS2) {
+    const t = await wallet.read(owner, kid, kind);
+    if (t) return t;
+  }
+  return "";
+}
+async function addPasskey2(wallet, owner, kid, passphrase, passkey, cost = {}) {
+  const text3 = await readAny(wallet, owner, kid);
+  const where2 = `${wallet.name} ${entryPath(owner, kid)}`;
+  let before, fresh, after;
+  try {
+    before = await readKey(text3, passphrase);
+    fresh = await addPasskey(text3, passphrase, passkey, cost);
+    after = await readKey(fresh, null, {
+      [passkey.cred]: passkey.kek
+    });
+  } catch (error) {
+    if (error instanceof KeyError) throw new WalletError(`${where2}: ${error.message}`);
+    throw error;
+  }
+  if (after.key.did !== before.key.did || after.kind !== before.kind) {
+    throw new WalletError(`${where2}: the key changed when the passkey lock was added`);
+  }
+  await wallet.write(owner, kid, before.kind, fresh);
+  if ((await wallet.read(owner, kid, before.kind) || "").trim() !== fresh.trim()) {
+    throw new WalletError(`${wallet.name} did not keep the ${before.kind} key ${before.key.did}`);
+  }
+  return [
+    before.kind,
+    before.key.did
+  ];
+}
+function describeEntry(text3) {
+  const fields = {};
+  for (const line of text3.split(/\r\n|\r|\n/)) {
+    const t = line.trim();
+    const k = t.indexOf(" ");
+    const name2 = k < 0 ? t : t.slice(0, k);
+    if ([
+      "encryption",
+      "wrap",
+      "seed"
+    ].includes(name2)) break;
+    if (!(name2 in fields)) fields[name2] = k < 0 ? "" : t.slice(k + 1).trim();
+  }
+  return fields;
+}
+
+// web/manager.js
+init_crypto();
+
+// core/github.js
+init_keys();
+init_crypto();
+init_storage();
+var GITHUB_API = "https://api.github.com";
+var GitHubError = class extends Error {
+  constructor(message2, status = 0) {
+    super(message2);
+    this.status = status;
+  }
+};
+var CommitConflict = class extends GitHubError {
+};
+var GitHub = class {
+  constructor({ api = GITHUB_API, fetch: fetch2 = globalThis.fetch?.bind(globalThis), token = null } = {}) {
+    this.api = api.replace(/\/$/, "");
+    this.fetch = fetch2;
+    this.token = token;
+  }
+  async request(method, path, body = null, { raw = false, fresh = false } = {}) {
+    const token = typeof this.token === "function" ? await this.token() : this.token;
+    const headers = {
+      Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (body !== null) headers["Content-Type"] = "application/json";
+    let r;
+    try {
+      r = await this.fetch(`${this.api}/${path}`, {
+        method,
+        headers,
+        body: body === null ? void 0 : JSON.stringify(body),
+        ...fresh ? {
+          cache: "no-store"
+        } : {}
+      });
+    } catch (error) {
+      throw new GitHubError(`GitHub API ${path}: ${error.message}`);
+    }
+    if (r.ok && raw) return new Uint8Array(await r.arrayBuffer());
+    const text3 = await r.text();
+    let data2 = null;
+    try {
+      data2 = text3 ? JSON.parse(text3) : null;
+    } catch {
+      data2 = null;
+    }
+    if (!r.ok) throw new GitHubError(`GitHub API ${path}: ${data2?.message || text3.slice(0, 200) || r.status}`, r.status);
+    return data2;
+  }
+};
+var REPOSITORY = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9._-]+$/;
+function checkRepository(repo) {
+  if (!REPOSITORY.test(repo || "") || /\/\.\.?$/.test(repo)) throw new GitHubError(`not a repository: ${repo}`);
+  return repo;
+}
+function encodePath(path) {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+async function gitBlobSha(bytes) {
+  const header = utf8(`blob ${bytes.length}\0`);
+  const all = new Uint8Array(header.length + bytes.length);
+  all.set(header);
+  all.set(bytes, header.length);
+  return hex(new Uint8Array(await crypto.subtle.digest("SHA-1", all)));
+}
+async function inTurn(items, work, concurrency = 6) {
+  const queue = [
+    ...items
+  ];
+  const workers = Array.from({
+    length: Math.min(concurrency, queue.length)
+  }, async () => {
+    while (queue.length) await work(queue.shift());
+  });
+  await Promise.all(workers);
+}
+var FILE = "100644";
+var LINK = "120000";
+var GitHubStorage = class _GitHubStorage {
+  static async open(repo, github, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
+    const s = new _GitHubStorage(checkRepository(repo), github, {
+      cache,
+      mirror
+    });
+    s.branch = branch || (await github.request("GET", `repos/${repo}`)).default_branch;
+    await s.readHead();
+    return s;
+  }
+  constructor(repo, github, { cache = /* @__PURE__ */ new Map(), mirror = null } = {}) {
+    Object.assign(this, {
+      repo,
+      github,
+      cache,
+      mirror: mirror && (mirror.endsWith("/") ? mirror : mirror + "/")
+    });
+    this.base = /* @__PURE__ */ new Map();
+    this.files = /* @__PURE__ */ new Map();
+    this.dirs = /* @__PURE__ */ new Map([
+      [
+        "",
+        /* @__PURE__ */ new Map()
+      ]
+    ]);
+    this.reads = {
+      cache: 0,
+      mirror: 0,
+      api: 0
+    };
+  }
+  async readHead() {
+    const r = `repos/${this.repo}/git`;
+    const ref = await this.github.request("GET", `${r}/ref/heads/${encodePath(this.branch)}`, null, {
+      fresh: true
+    });
+    if (ref?.object?.type !== "commit") throw new GitHubError(`${this.repo}: the branch ${this.branch} is not a commit`);
+    this.head = ref.object.sha;
+    this.tree = (await this.github.request("GET", `${r}/commits/${this.head}`)).tree.sha;
+    const entries = [];
+    const walk = async (sha, prefix) => {
+      const t = await this.github.request("GET", `${r}/trees/${sha}${prefix === null ? "?recursive=1" : ""}`);
+      if (prefix === null && !t.truncated) {
+        entries.push(...t.tree);
+        return;
+      }
+      for (const e of t.tree) {
+        const path = prefix ? `${prefix}/${e.path}` : e.path;
+        if (e.type === "tree") await walk(e.sha, path);
+        else entries.push({
+          ...e,
+          path
+        });
+      }
+    };
+    await walk(this.tree, null);
+    this.base = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      if (e.type === "blob") this.base.set(e.path, {
+        sha: e.sha,
+        mode: e.mode,
+        size: e.size ?? null
+      });
+    }
+    this.files = /* @__PURE__ */ new Map();
+    this.dirs = /* @__PURE__ */ new Map([
+      [
+        "",
+        /* @__PURE__ */ new Map()
+      ]
+    ]);
+    for (const [path, e] of this.base) this.put(path, {
+      ...e
+    });
+  }
+  put(path, entry) {
+    this.files.set(path, entry);
+    let p = path, kind = entry.mode === LINK ? "link" : "file";
+    for (; ; ) {
+      const parent = parentOf(p), name2 = p.slice(parent ? parent.length + 1 : 0);
+      const fresh = !this.dirs.has(parent);
+      if (fresh) this.dirs.set(parent, /* @__PURE__ */ new Map());
+      this.dirs.get(parent).set(name2, kind);
+      if (!fresh || parent === "") return;
+      p = parent;
+      kind = "dir";
+    }
+  }
+  drop(path) {
+    this.files.delete(path);
+    let p = path;
+    while (p) {
+      const parent = parentOf(p), entries = this.dirs.get(parent);
+      entries.delete(p.slice(parent ? parent.length + 1 : 0));
+      if (entries.size || parent === "") return;
+      this.dirs.delete(parent);
+      p = parent;
+    }
+  }
+  async read(path) {
+    checkPath(path);
+    const e = this.files.get(path);
+    if (!e || e.mode === LINK) return null;
+    if (e.bytes) return e.bytes.slice();
+    return (await this.blob(e.sha, path)).slice();
+  }
+  async write(path, bytes, { exclusive = false } = {}) {
+    checkPath(path);
+    const old = this.files.get(path);
+    if (exclusive && old) throw new StorageError(`${path} exists already`);
+    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder`);
+    for (let p = parentOf(path); p; p = parentOf(p)) {
+      if (this.files.has(p)) throw new StorageError(`${p} is a file`);
+    }
+    this.put(path, {
+      bytes: Uint8Array.from(bytes),
+      mode: old && old.mode !== LINK ? old.mode : FILE,
+      sha: null
+    });
+  }
+  async kind(path) {
+    checkPath(path, {
+      folder: true
+    });
+    if (this.dirs.has(path)) return "dir";
+    const e = this.files.get(path);
+    return e ? e.mode === LINK ? "link" : "file" : null;
+  }
+  async list(path) {
+    checkPath(path, {
+      folder: true
+    });
+    const entries = this.dirs.get(path);
+    if (!entries) return null;
+    return [
+      ...entries
+    ].map(([name2, kind]) => ({
+      name: name2,
+      kind
+    })).sort((a, b) => compareText(a.name, b.name));
+  }
+  async rename(from, to) {
+    checkPath(from);
+    checkPath(to);
+    const what = await this.kind(from);
+    if (!what) throw new StorageError(`no ${from} to move`);
+    if (this.dirs.has(to)) throw new StorageError(`${to} exists already`);
+    if (what !== "dir") {
+      const e = this.files.get(from);
+      this.drop(from);
+      if (this.files.has(to)) this.drop(to);
+      this.put(to, e);
+      return;
+    }
+    for (const k of [
+      ...this.files.keys()
+    ]) {
+      if (k.startsWith(from + "/")) {
+        const e = this.files.get(k);
+        this.drop(k);
+        this.put(to + k.slice(from.length), e);
+      }
+    }
+  }
+  async remove(path) {
+    checkPath(path);
+    if (this.dirs.has(path)) throw new StorageError(`${path} is a folder that is not empty`);
+    if (this.files.has(path)) this.drop(path);
+  }
+  async size(path) {
+    const e = this.files.get(checkPath(path));
+    if (!e || e.mode === LINK) return null;
+    return e.bytes ? e.bytes.length : e.size;
+  }
+  async blob(sha, path = null) {
+    const known = this.cache.get(sha);
+    if (known) {
+      this.reads.cache++;
+      return known;
+    }
+    let bytes = null;
+    if (this.mirror && path) {
+      try {
+        const r = await this.github.fetch(this.mirror + encodePath(path));
+        if (r.ok) {
+          const got = new Uint8Array(await r.arrayBuffer());
+          if (await gitBlobSha(got) === sha) bytes = got;
+        }
+      } catch {
+        bytes = null;
+      }
+      if (bytes) this.reads.mirror++;
+    }
+    if (!bytes) {
+      bytes = await this.github.request("GET", `repos/${this.repo}/git/blobs/${sha}`, null, {
+        raw: true
+      });
+      if (await gitBlobSha(bytes) !== sha) throw new GitHubError(`${this.repo}: the blob ${sha} read is not ${sha}`);
+      this.reads.api++;
+    }
+    this.cache.set(sha, bytes);
+    return bytes;
+  }
+  async prefetch({ maxSize = 1 << 20, skip = () => false, concurrency = 6 } = {}) {
+    const todo = /* @__PURE__ */ new Map();
+    for (const [path, e] of this.base) {
+      if (e.mode === LINK || this.cache.has(e.sha) || todo.has(e.sha)) continue;
+      if (e.size !== null && e.size > maxSize) continue;
+      if (!skip(path, e.size)) todo.set(e.sha, path);
+    }
+    await inTurn([
+      ...todo
+    ], async ([sha, path]) => {
+      try {
+        await this.blob(sha, path);
+      } catch {
+      }
+    }, concurrency);
+    return todo.size;
+  }
+  async changes() {
+    const changed = [], removed2 = [];
+    for (const [path, e] of this.files) {
+      if (e.bytes && e.sha === null) e.sha = await gitBlobSha(e.bytes);
+      const b = this.base.get(path);
+      if (!b || b.sha !== e.sha || b.mode !== e.mode) changed.push({
+        path,
+        ...e
+      });
+    }
+    for (const [path, b] of this.base) if (!this.files.has(path)) removed2.push({
+      path,
+      ...b
+    });
+    const order = (a, b) => compareText(a.path, b.path);
+    return {
+      changed: changed.sort(order),
+      removed: removed2.sort(order)
+    };
+  }
+  async commit(message2, { author = null } = {}) {
+    const { changed, removed: removed2 } = await this.changes();
+    if (!changed.length && !removed2.length) return null;
+    const r = `repos/${this.repo}/git`;
+    const held2 = new Set([
+      ...this.base.values()
+    ].map((e) => e.sha));
+    const upload = /* @__PURE__ */ new Map();
+    for (const e of changed) if (e.bytes && !held2.has(e.sha)) upload.set(e.sha, e.bytes);
+    await inTurn([
+      ...upload
+    ], async ([sha, bytes]) => {
+      const made2 = await this.github.request("POST", `${r}/blobs`, {
+        content: base64(bytes),
+        encoding: "base64"
+      });
+      if (made2.sha !== sha) throw new GitHubError(`${this.repo}: GitHub named a blob ${made2.sha}, not ${sha}`);
+    }, 4);
+    const tree = await this.github.request("POST", `${r}/trees`, {
+      base_tree: this.tree,
+      tree: [
+        ...changed.map((e) => ({
+          path: e.path,
+          mode: e.mode,
+          type: "blob",
+          sha: e.sha
+        })),
+        ...removed2.map((e) => ({
+          path: e.path,
+          mode: e.mode,
+          type: "blob",
+          sha: null
+        }))
+      ]
+    });
+    const made = await this.github.request("POST", `${r}/commits`, {
+      message: message2,
+      tree: tree.sha,
+      parents: [
+        this.head
+      ],
+      ...author ? {
+        author
+      } : {}
+    });
+    try {
+      await this.github.request("PATCH", `${r}/refs/heads/${encodePath(this.branch)}`, {
+        sha: made.sha,
+        force: false
+      });
+    } catch (error) {
+      if (error.status === 422 || error.status === 409) {
+        throw new CommitConflict(`${this.repo}: the branch ${this.branch} has moved since ${this.head.slice(0, 7)} was read`, error.status);
+      }
+      throw error;
+    }
+    for (const e of changed) if (e.bytes) this.cache.set(e.sha, e.bytes);
+    this.head = made.sha;
+    this.tree = tree.sha;
+    this.base = new Map([
+      ...this.files
+    ].map(([path, e]) => [
+      path,
+      {
+        sha: e.sha,
+        mode: e.mode,
+        size: e.bytes?.length ?? e.size
+      }
+    ]));
+    for (const e of this.files.values()) {
+      if (e.bytes) {
+        e.size = e.bytes.length;
+        delete e.bytes;
+      }
+    }
+    return {
+      sha: made.sha,
+      url: made.html_url ?? null,
+      changed: changed.length,
+      removed: removed2.length
+    };
+  }
+};
+async function oneCommit(repo, github, run, { branch = null, cache = /* @__PURE__ */ new Map(), mirror = null, attempts = 3, prepare: prepare2 = null } = {}) {
+  for (let k = 1; ; k++) {
+    const storage = await GitHubStorage.open(repo, github, {
+      branch,
+      cache,
+      mirror
+    });
+    if (prepare2) await prepare2(storage);
+    const { message: message2, ...rest } = await run(storage);
+    if (message2 === null || message2 === void 0) return {
+      ...rest,
+      commit: null,
+      storage
+    };
+    try {
+      return {
+        ...rest,
+        commit: await storage.commit(message2),
+        storage,
+        attempts: k
+      };
+    } catch (error) {
+      if (!(error instanceof CommitConflict) || k >= attempts) throw error;
+    }
+  }
+}
+
+// core/requests.js
+init_folder();
+init_deposit();
+init_collect();
+init_describe();
+init_collections();
+init_discovery();
 
 // core/website.js
+init_names();
+init_versions();
+init_signatures();
+init_http();
+init_paths();
+init_write();
+init_storage();
+init_folder();
+init_deposit();
 function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
 }
@@ -18693,6 +19110,13 @@ function abstractHtml(dc) {
   }
   return "";
 }
+var TEMPLATES = [
+  "collection.html",
+  "index.html",
+  "owner.html",
+  "paper.html",
+  "style.css"
+];
 async function template(f, name2) {
   const html = f.index.html && typeof f.index.html === "object" ? f.index.html : {};
   const dir = html.templates || f.index.templates || "templates";
@@ -19234,7 +19658,20 @@ async function present(f) {
   }
 }
 
+// core/check.js
+init_http();
+init_archive();
+
+// core/verify.js
+init_http();
+init_archive();
+init_versions();
+init_paths();
+
 // core/rules.js
+init_schema();
+init_versions();
+init_names();
 function finding(level2, place3, message2, { object = null, ver = null } = {}) {
   const section = /\(sections? ([0-9A-Z][^)]*)\)/.exec(message2)?.[1]?.split(/,| and /)[0].trim() ?? null;
   return {
@@ -19388,7 +19825,17 @@ function indexEntries2(objects) {
   return out;
 }
 
+// core/verify.js
+init_names();
+init_owners();
+init_signatures();
+
 // core/branches.js
+init_http();
+init_names();
+init_owners();
+init_signatures();
+init_versions();
 var INCONSISTENT = "inconsistent";
 var CONFIRMED2 = "confirmed";
 var UNCHECKED2 = "unchecked";
@@ -19559,6 +20006,8 @@ async function verdict(lv, obj, genesis, logs, depth = 0) {
 }
 
 // core/verify.js
+init_resolve();
+init_schema();
 var Report = class {
   constructor(archive, options) {
     this.archive = archive;
@@ -20678,6 +21127,12 @@ function py(value) {
 }
 
 // core/check.js
+init_storage();
+init_keys();
+init_crypto();
+init_names();
+init_versions();
+init_folder();
 async function verifyFolder(storage, { schemas: schemas2, remote = false, fetch: fetch2 = globalThis.fetch, digests = true, fetchJson = null } = {}) {
   let base = ORIGIN;
   try {
@@ -20871,6 +21326,807 @@ async function lookForKeys(storage) {
   };
   await walk("");
   return found2;
+}
+
+// core/requests.js
+init_storage();
+init_write();
+init_inputs();
+
+// core/init.js
+init_names();
+init_keys();
+init_write();
+init_storage();
+init_folder();
+init_collect();
+init_discovery();
+
+// core/owner.js
+init_names();
+init_crypto();
+init_keys();
+init_signatures();
+init_write();
+init_storage();
+init_folder();
+
+// core/keylogs.js
+init_crypto();
+init_names();
+init_owners();
+init_signatures();
+init_write();
+init_storage();
+var OwnerError = class extends Error {
+};
+var OBJ3 = "object.json";
+var KEYS2 = "keys.json";
+var KEYS_FORMAT2 = "opensheaf-keys/0.2";
+function keysFile({ keys = null, threshold = null, next = null, nextThreshold = null, extensions = null, exposed = null, ended = false, successor = null } = {}) {
+  const d = {
+    format: KEYS_FORMAT2
+  };
+  if (ended) {
+    if ([
+      keys,
+      threshold,
+      next,
+      nextThreshold
+    ].some((v) => v !== null && v !== void 0)) {
+      throw new OwnerError("an ending version has no keys, threshold, next or nextThreshold (section 6.3)");
+    }
+    d.ended = true;
+    if (successor !== null && successor !== void 0) d.successor = successor;
+  } else {
+    if (successor !== null && successor !== void 0) throw new OwnerError("only an ending version names a successor (section 6.3)");
+    Object.assign(d, {
+      keys: [
+        ...keys
+      ],
+      threshold,
+      next: [
+        ...next
+      ],
+      nextThreshold
+    });
+  }
+  if (extensions && Object.keys(extensions).length) d.extensions = extensions;
+  if (exposed && exposed.length) d.exposed = [
+    ...exposed
+  ];
+  return jsonBytes(d);
+}
+async function extendInventory(prev, id, number, files, created, message2 = null, user = null) {
+  const v = `v${number}`;
+  if (prev.head !== `v${number - 1}` || prev.id !== id) throw new OwnerError(`${v} must follow v${number - 1} of ${id}`);
+  const inv = JSON.parse(JSON.stringify(prev));
+  const content = inv.contentDirectory || "content";
+  inv.head = v;
+  const state = {};
+  for (const path of [
+    ...files.keys()
+  ].sort()) {
+    const d = await sha512hex(files.get(path));
+    if (!(d in inv.manifest)) inv.manifest[d] = [
+      `${v}/${content}/${path}`
+    ];
+    (state[d] ||= []).push(path);
+  }
+  const entry = {
+    created,
+    state
+  };
+  if (message2 !== null) entry.message = message2;
+  if (user !== null) entry.user = user;
+  inv.versions[v] = entry;
+  return orderedInventory(inv);
+}
+function keyOf(k) {
+  return typeof k === "string" ? k : k.did;
+}
+async function digestOf(k) {
+  if (typeof k !== "string") return k.digest;
+  if (k.startsWith("did:key:")) {
+    didKeyPublic(k);
+    return keyDigest(k);
+  }
+  if (!OWNER_NAME.test(k)) throw new OwnerError(`not a key, a did:key URI or the digest of a key: '${k}'`);
+  return k;
+}
+async function checked(log) {
+  log.checked = null;
+  return log.check();
+}
+async function prepare(log, signers2) {
+  const { errors } = await checked(log);
+  if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
+  if (log.ended) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
+  const side = log.side();
+  const prev = side[side.length - 1];
+  const rotation = new Set(prev.keys.next);
+  for (const key of signers2) {
+    if (!rotation.has(key.digest)) throw new OwnerError(`${key.did} is not a rotation key of v${prev.number} (section 6.1)`);
+  }
+  const need = prev.keys.nextThreshold, have = new Set(signers2.map((k) => k.did)).size;
+  if (have < need) throw new OwnerError(`v${prev.number} needs ${need} rotation keys to sign the next version, ${have} given`);
+  return prev;
+}
+async function append(log, version) {
+  log.versions.push(version);
+  const { errors } = await checked(log);
+  if (errors.length) {
+    log.versions.pop();
+    await checked(log);
+    throw new OwnerError("the new version would not be a version of the key log: " + errors.join("; "));
+  }
+  return version;
+}
+async function addVersion(log, keysBytes, signers2, { message: message2, user, created = null, files = null }) {
+  const prev = await prepare(log, signers2);
+  const problems = await keyRules(jsonOrNull(keysBytes, {
+    integers: true
+  }), log.side().map((v) => v.keys), log.owner);
+  if (problems.length) throw new OwnerError(problems.join("; "));
+  for (const path of (files || /* @__PURE__ */ new Map()).keys()) {
+    if (RESERVED.includes(path.split("/")[0])) throw new OwnerError(`${path}: a name reserved by section 4.1`);
+  }
+  const n = prev.number + 1;
+  const content = new Map([
+    [
+      GENESIS,
+      log.genesis
+    ],
+    [
+      OBJ3,
+      jcsBytes(ownerObject(log.owner, prev.digest))
+    ],
+    [
+      KEYS2,
+      keysBytes
+    ],
+    ...files || /* @__PURE__ */ new Map()
+  ]);
+  const inv = await extendInventory(JSON.parse(new TextDecoder().decode(prev.inventory)), log.id, n, content, created || utcNow(), message2, user);
+  const invBytes = inventoryFile(inv);
+  const digest = await sha512hex(invBytes);
+  const pin = log.pin(prev.number);
+  const witnesses = /* @__PURE__ */ new Map();
+  for (const key of signers2) {
+    witnesses.set(await fileName(key.did), await signatureFile(key, log.id, `v${n}`, digest, log.owner, pin));
+  }
+  return append(log, await Version.make(n, content, invBytes, await sidecar(invBytes), witnesses));
+}
+async function rotate(log, signers2, { nextKeys, nextThreshold, add: add2 = [], retire = [], exposed = [], threshold = null, extensions = void 0, message: message2 = "Keys changed", user, created = null }) {
+  await checked(log);
+  const prev = log.latest();
+  if (!prev) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
+  const current = prev.keys.keys;
+  for (const did of retire) if (!current.includes(did)) throw new OwnerError(`${did} is not a current key of ${log.owner}`);
+  const keys = current.filter((k) => !retire.includes(k) && !exposed.includes(k));
+  for (const k of add2) if (!keys.includes(keyOf(k))) keys.push(keyOf(k));
+  if (extensions === void 0) extensions = log.extensions();
+  const next = [];
+  for (const k of nextKeys) next.push(await digestOf(k));
+  const data2 = keysFile({
+    keys,
+    threshold: threshold || prev.keys.threshold,
+    next,
+    nextThreshold,
+    extensions,
+    exposed: exposed.length ? exposed : null
+  });
+  return addVersion(log, data2, signers2, {
+    message: message2,
+    user,
+    created
+  });
+}
+function contentPath2(cp, inv, n) {
+  const cd = isObject(inv) && typeof inv.contentDirectory === "string" ? inv.contentDirectory : "content";
+  const safe = (p) => typeof p === "string" && p !== "" && !p.startsWith("/") && !p.includes("\\") && p.split("/").every((x) => ![
+    "",
+    ".",
+    ".."
+  ].includes(x));
+  if (!safe(cp) || !safe(cd) || cd.includes("/")) return false;
+  const parts = cp.split("/");
+  return parts.length >= 3 && /^v[1-9][0-9]*$/.test(parts[0]) && parts[1] === cd && Number(parts[0].slice(1)) <= n;
+}
+async function loadKeyLog(storage, dir, where2 = dir) {
+  const problems = [], versions2 = [];
+  const root = await storage.read(joinPath(dir, "inventory.json"));
+  const rootInv = jsonOrNull(root);
+  const head = typeof rootInv?.head === "string" && /^v[0-9]+$/.test(rootInv.head) ? Number(rootInv.head.slice(1)) : NaN;
+  if (!root || !Number.isInteger(head)) throw new OwnerError(`${where2}: not an OCFL object with an inventory`);
+  for (let n = 1; n <= head; n++) {
+    const vdir = joinPath(dir, `v${n}`);
+    const invBytes = await storage.read(joinPath(vdir, "inventory.json"));
+    const entry = jsonOrNull(invBytes);
+    if (!invBytes || !isObject(entry?.manifest) || !isObject(entry?.versions?.[`v${n}`]?.state)) {
+      problems.push(`v${n}: no readable inventory in the version folder (section 4.1)`);
+      break;
+    }
+    const sc = await storage.read(joinPath(vdir, "inventory.json.sha512")) || new Uint8Array();
+    if (sidecarDigest(sc) !== await sha512hex(invBytes)) problems.push(`v${n}: the checksum file does not state the digest of the inventory`);
+    const files = /* @__PURE__ */ new Map();
+    for (const [d, paths] of Object.entries(entry.versions[`v${n}`].state)) {
+      if (!Array.isArray(paths) || !paths.length) continue;
+      let bytes = new Uint8Array();
+      const cp = entry.manifest[d]?.[0];
+      if (!contentPath2(cp, entry, n)) {
+        problems.push(`v${n}: a content path out of the object: '${cp}'`);
+        problems.push(`v${n}: the content of ${paths[0]} is missing`);
+      } else {
+        bytes = await storage.read(joinPath(dir, cp)) ?? (problems.push(`v${n}: the content of ${paths[0]} is missing`), new Uint8Array());
+      }
+      if (await sha512hex(bytes) !== d) problems.push(`v${n}: ${paths[0]} does not have the digest its inventory states`);
+      for (const p of paths) files.set(p, bytes);
+    }
+    const witnesses = /* @__PURE__ */ new Map();
+    const wdir = joinPath(dir, WITNESSES, `v${n}`);
+    for (const { name: name2, kind } of await storage.list(wdir) || []) {
+      if (kind === "file") witnesses.set(name2, await storage.read(joinPath(wdir, name2)));
+    }
+    versions2.push(await Version.make(n, files, invBytes, sc, witnesses));
+  }
+  if (!versions2.length || !versions2[0].files.has(GENESIS)) throw new OwnerError(`${where2}: no genesis record in the first version`);
+  if (versions2[versions2.length - 1].number === head && !sameBytes(root, versions2[versions2.length - 1].inventory)) {
+    problems.push("the root inventory differs from that of the head version");
+  }
+  const log = await KeyLog.of(versions2[0].files.get(GENESIS), versions2, problems);
+  if (rootInv.id !== log.id) problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
+  return log;
+}
+
+// core/passkey.js
+init_crypto();
+init_keys();
+init_names();
+var UNLOCK_PAGE = `https://${PASSKEY_RP}/`;
+var UnlockFailed = class extends Error {
+};
+function b64url(bytes) {
+  return base64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+function fromB64url(text3) {
+  if (typeof text3 !== "string" || !/^[A-Za-z0-9_-]+$/.test(text3) || text3.length % 4 === 1) throw new Error("not base64url");
+  const b = text3.replaceAll("-", "+").replaceAll("_", "/");
+  return unbase64(b + "=".repeat((4 - b.length % 4) % 4));
+}
+function randomState() {
+  return b64url(crypto.getRandomValues(new Uint8Array(16)));
+}
+var CODE_LABEL = utf8("opensheaf unlock code v1");
+async function confirmationCode(state, pk) {
+  const d = await sha256(new Uint8Array([
+    ...CODE_LABEL,
+    ...utf8(state),
+    ...pk
+  ]));
+  const n = (d[0] << 24 >>> 0) + (d[1] << 16) + (d[2] << 8) + d[3];
+  const digits = String(n % 1e6).padStart(6, "0");
+  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+}
+var HAND_OFF_INFO = utf8("opensheaf unlock hand-off v2");
+async function withPublic(privateKey) {
+  const jwk = await crypto.subtle.exportKey("jwk", privateKey);
+  return {
+    privateKey,
+    publicKey: fromB64url(jwk.x)
+  };
+}
+async function newKeyPair() {
+  const pair = await crypto.subtle.generateKey({
+    name: "X25519"
+  }, true, [
+    "deriveBits"
+  ]);
+  return withPublic(pair.privateKey);
+}
+async function handOffKeys(pair, other, state) {
+  const pub = await crypto.subtle.importKey("raw", other, {
+    name: "X25519"
+  }, true, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({
+    name: "X25519",
+    public: pub
+  }, pair.privateKey, 256));
+  const both = await hkdf(shared, utf8(state), HAND_OFF_INFO, 64);
+  return [
+    both.slice(0, 32),
+    both.slice(32)
+  ];
+}
+function associatedData(mode, owner, cred, pk, epk) {
+  return utf8(`${mode}|${owner}|${cred}|${b64url(pk)}|${b64url(epk)}`);
+}
+function sameSecret(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let k = 0; k < a.length; k++) diff |= a[k] ^ b[k];
+  return diff === 0;
+}
+var xor = (a, b) => a.map((x, k) => x ^ b[k]);
+async function unseal2(pair, epk, ct, tag, state, mode, owner, cred) {
+  if (epk.length !== 32 || ct.length !== 32 || tag.length !== 32) throw new Error("not a hand-off of 32 bytes");
+  const [enc, mac] = await handOffKeys(pair, epk, state);
+  const aad = associatedData(mode, owner, cred, pair.publicKey, epk);
+  if (!sameSecret(await hmacSha256(mac, new Uint8Array([
+    ...aad,
+    ...ct
+  ])), tag)) {
+    throw new Error("the answer of the page is not authentic");
+  }
+  return xor(ct, enc);
+}
+var NO_X25519 = "this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase";
+function failure(result) {
+  const error = result.error;
+  return new UnlockFailed(error === "x25519-unavailable" ? NO_X25519 : `the page says: ${error.slice(0, 200)}`);
+}
+function answerOf(result, creds = []) {
+  const secret = result.secret || new Uint8Array(), cred = result.cred ?? null;
+  if (secret.length !== 32) throw new UnlockFailed("the page sent a secret that is not 32 bytes");
+  if (creds.length && cred !== null && !creds.includes(cred)) throw new UnlockFailed("the page used another passkey than those asked for");
+  return [
+    cred,
+    secret
+  ];
+}
+var POPUP = "popup";
+var POPUP_ENROLL = "popup-enroll";
+var UNLOCK_ORIGIN = new URL(UNLOCK_PAGE).origin;
+var POPUP_MESSAGES = {
+  ready: "opensheaf-unlock-ready",
+  request: "opensheaf-unlock-request",
+  answer: "opensheaf-unlock-answer",
+  done: "opensheaf-unlock-done"
+};
+function popupMode(mode) {
+  if (mode !== POPUP && mode !== POPUP_ENROLL) throw new UnlockFailed(`not a mode of the popup: ${mode}`);
+  return mode;
+}
+function popupUrl(origin, mode = POPUP) {
+  return UNLOCK_PAGE + "#" + new URLSearchParams({
+    mode: popupMode(mode),
+    origin
+  }).toString();
+}
+async function popupRequest(owner, creds, pair = null, state = null, mode = POPUP) {
+  if (!OWNER_NAME.test(owner || "")) throw new UnlockFailed(`not an owner name: ${owner}`);
+  if (!creds.length && popupMode(mode) === POPUP) {
+    throw new UnlockFailed("no passkey is enrolled for the keys of this owner (osheaf key enroll)");
+  }
+  pair ||= await newKeyPair();
+  state ||= randomState();
+  return {
+    owner,
+    mode,
+    creds: [
+      ...creds
+    ],
+    state,
+    pair,
+    code: await confirmationCode(state, pair.publicKey),
+    message: {
+      type: POPUP_MESSAGES.request,
+      state,
+      pk: b64url(pair.publicKey),
+      owner,
+      cred: creds.join(",")
+    }
+  };
+}
+function sameCode(typed, code) {
+  const digits = (t) => utf8(String(t ?? "").replace(/[^0-9]/g, ""));
+  return digits(typed).length === 6 && sameSecret(digits(typed), digits(code));
+}
+async function openPopupAnswer(request, data2, typed) {
+  if (!data2 || data2.type !== POPUP_MESSAGES.answer || typeof data2.state !== "string" || !sameSecret(utf8(data2.state), utf8(request.state))) {
+    throw new UnlockFailed("this is not the answer to this request");
+  }
+  if (typeof data2.error === "string") throw failure({
+    error: data2.error
+  });
+  if (!sameCode(typed, request.code)) {
+    throw new UnlockFailed("the code typed is not the code of this request: close the window of the passkey, and unlock again");
+  }
+  let secret;
+  try {
+    const [epk, ct, tag] = [
+      fromB64url(data2.epk),
+      fromB64url(data2.ct),
+      fromB64url(data2.tag)
+    ];
+    fromB64url(data2.cred);
+    secret = await unseal2(request.pair, epk, ct, tag, request.state, request.mode || POPUP, request.owner, data2.cred);
+  } catch {
+    throw new UnlockFailed("the page sent a damaged answer");
+  }
+  if (request.mode === POPUP_ENROLL) {
+    if (request.creds.includes(data2.cred)) throw new UnlockFailed("the page sent no new credential");
+    return answerOf({
+      cred: data2.cred,
+      secret
+    });
+  }
+  return answerOf({
+    cred: data2.cred,
+    secret
+  }, request.creds);
+}
+
+// core/owner.js
+init_discovery();
+init_describe();
+function theKeys(n, noun = "key") {
+  return n === 1 ? `the ${noun}` : `the ${n} ${noun}s`;
+}
+function walletStop(error) {
+  if (error instanceof WalletError || error instanceof KeyError || error instanceof OwnerError) stop(error.message);
+  throw error;
+}
+async function forbiddenRepositories(f) {
+  if (!f) return /* @__PURE__ */ new Set();
+  return archiveRepositories(f.env.wallets?.remotes ? await f.env.wallets.remotes() : "", f.archive.baseUrl);
+}
+async function configured(f, env = f.env) {
+  try {
+    return configuredWallet(f?.archive.keys, env, {
+      forbidden: await forbiddenRepositories(f)
+    });
+  } catch (error) {
+    return walletStop(error);
+  }
+}
+async function levelWallet(f, args, env = f.env) {
+  const spec = args.keys || args.wallet || OFFLINE;
+  if (spec === OFFLINE) return null;
+  try {
+    if (spec === "command") {
+      const w = await configured(f, env);
+      return w instanceof CommandWallet ? w : parseWallet(spec, env);
+    }
+    return parseWallet(spec, env, {
+      forbidden: await forbiddenRepositories(f)
+    });
+  } catch (error) {
+    return walletStop(error);
+  }
+}
+function walletConfig(args) {
+  const spec = args.keys || "";
+  return spec.startsWith("github:") ? {
+    wallet: spec
+  } : null;
+}
+function keptWhere(args, w, resolved) {
+  return [
+    ...args.export ? [
+      resolved
+    ] : [],
+    ...w ? [
+      w.name
+    ] : []
+  ].join(" and in ");
+}
+async function keepInWallet(f, w, owner, rotation, version, args, current = []) {
+  const env = f.env;
+  env.warn(risk(w.name, owner));
+  const unlocked = await unlockedPasskeys(env, owner);
+  const secret = unlocked.length ? await walletPassphrase(env, w, owner) : await env.passphrase({
+    where: w.name
+  });
+  try {
+    await w.checkWritable();
+    const todo = rotation.map((key) => [
+      key,
+      ROTATION,
+      version
+    ]);
+    for (const [key, v] of current) if (await w.read(owner, key.id, CURRENT) === null) todo.push([
+      key,
+      CURRENT,
+      v
+    ]);
+    const n = todo.length;
+    env.err(`Saving ${theKeys(n)} of ${short(owner)} to ${w.name}\u2026`);
+    let i = 0;
+    for (const [key, kind, v] of todo) {
+      const plain = kind === CURRENT && args.plainCurrent;
+      await putKey(w, owner, key, kind, v, plain ? null : secret, unlocked, env.cost);
+      env.err(`  ${++i}/${n} ${keyLabel(kind, key.did)}  saved`);
+    }
+  } catch (error) {
+    if (error instanceof WalletError || error instanceof KeyError) stop(`${error.message}: nothing was written to the key log`);
+    throw error;
+  }
+  enrollHint(env, owner, unlocked);
+}
+function askedOf(env) {
+  env.asked ??= {};
+  const a = env.asked;
+  a.passkeys ??= /* @__PURE__ */ new Map();
+  a.seen ??= /* @__PURE__ */ new Set();
+  a.failed ??= /* @__PURE__ */ new Set();
+  a.oldRp ??= /* @__PURE__ */ new Set();
+  return a;
+}
+async function unlockedPasskeys(env, owner) {
+  const salt = await passkeySalt(owner);
+  return [
+    ...askedOf(env).passkeys.values()
+  ].filter((p) => sameBytes(p.salt, salt));
+}
+async function walletEntries(w, owner) {
+  try {
+    const out = [];
+    for (const [o, kid] of await w.entries(owner)) out.push([
+      kid,
+      await readAny(w, o, kid)
+    ]);
+    return out;
+  } catch (error) {
+    return walletStop(error);
+  }
+}
+async function walletPassphrase(env, w, owner) {
+  if (env.passphrase.known?.()) return env.passphrase({
+    where: w.name
+  });
+  let texts = [];
+  try {
+    texts = (await walletEntries(w, owner)).map(([, t]) => t).filter((t) => wrapsOf(t).length);
+  } catch {
+    texts = [];
+  }
+  if (!texts.length) return env.passphrase({
+    where: w.name
+  });
+  const secret = await env.passphrase({
+    confirm: false,
+    where: w.name
+  });
+  try {
+    await readKey(texts[0], secret);
+  } catch (error) {
+    if (error instanceof KeyError) stop(`${error.message}: this is not the passphrase of the keys of ${short(owner)} in ${w.name}`);
+    throw error;
+  }
+  return secret;
+}
+function enrollHint(env, owner, unlocked) {
+  if (!unlocked.length && askedOf(env).seen.has(owner)) {
+    env.err(`The new keys of ${short(owner)} open with your passphrase only: run osheaf key enroll so that your passkey opens them too.`);
+  }
+}
+
+// core/init.js
+var SINGLE_ROTATION_RISK = "With a single rotation key, its loss leaves the owner unable ever to change its keys or end, and its theft lets the thief take the owner over (sections 6.2 and 15.1).";
+var ROTATION_KEYS_WARNING = "Keep the rotation keys safe: an owner left with fewer of them than the next version of its key log needs to sign can never change its keys or end (section 6.2).";
+function keyLabel(kind, did) {
+  return `${kind} key`.padEnd(14) + short(did);
+}
+function rotationLine(n, nextThreshold, where2, isNew = false) {
+  const verb = nextThreshold === 1 ? "signs" : "sign";
+  const more = n === 1 ? "" : `; any ${nextThreshold} of them ${verb} the next version of the key log`;
+  return `  rotation keys  ${n}${isNew ? " new" : ""}, kept in ${where2}${more}`;
+}
+async function exportAndConfirm(f, rotation, owner, version, args) {
+  const env = f.env;
+  const secret = args.noPassphrase ? null : await env.passphrase({
+    confirm: true
+  });
+  const ex = env.exportFolder;
+  const inside = await ex.inside(args.export);
+  if (inside) stop(`${args.export} is inside the archive ${inside}: keys are never kept in an archive (section 15.4)`);
+  const paths = [];
+  try {
+    for (const key of rotation) {
+      const path = await ex.write(args.export, rotationFileName(owner, key), await rotationKeyText(key, owner, version, secret, args.cost || env.cost));
+      if ((await readRotationKey(await ex.read(path), secret)).key.did !== key.did) {
+        throw new KeyError(`${path} does not read back`);
+      }
+      paths.push(path);
+    }
+  } catch (error) {
+    if (error instanceof KeyError) stop(error.message);
+    throw error;
+  }
+  const lock = secret !== null ? "locked with your passphrase" : "with no lock (--no-passphrase)";
+  env.out(`Exported ${plural(rotation.length, "rotation key")} of ${short(owner)} to ${args.export}, ${lock}:`);
+  for (const key of rotation) {
+    env.out(`  ${keyLabel("rotation", key.did)}  ${rotationFileName(owner, key)}  check ${await sheetCheck(key.seed)}`);
+  }
+  if (args.print) for (const key of rotation) env.out(await rotationKeySheet(key, owner, version));
+  if (args.yes) return paths;
+  env.out("Put the files (or the printed sheets) away, apart from this computer and from each other.");
+  for (const key of rotation) {
+    const typed = (await env.input(`Type the check of ${rotationFileName(owner, key)} to confirm: `)).trim().toUpperCase();
+    if (typed !== await sheetCheck(key.seed)) {
+      stop("not confirmed: nothing was written to the key log (the exported files may be deleted)");
+    }
+  }
+  return paths;
+}
+async function ownerInit(f, args, { done = true } = {}) {
+  const env = f.env;
+  const single = Boolean(args.singleRotationKey);
+  const nRot = single ? 1 : Number(args.rotation || 3);
+  const nextThreshold = single ? 1 : Number(args.nextThreshold || Math.floor(nRot / 2) + 1);
+  const others = [
+    ...args.key || []
+  ];
+  const threshold = Number(args.threshold || 1);
+  if (!(nextThreshold >= 1 && nextThreshold <= nRot) || !(threshold >= 1 && threshold <= 1 + others.length)) {
+    stop("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)");
+  }
+  if (args.keeper && !keeperValid(args.keeper)) {
+    stop(`a keeper is an ORCID iD (with its check digit) or https://<domain>/: ${args.keeper}`);
+  }
+  const w = await levelWallet(f, args);
+  if (!w && !args.export) {
+    stop("give --export DIR, a folder outside the archive where the rotation keys are written (or keep them in a wallet, a lower security level: --keys github:OWNER/REPO|command)");
+  }
+  if (w && args.noPassphrase) stop("--no-passphrase: the keys in a wallet are always locked with a passphrase");
+  if (!w && !env.keyStore.keptOnDevice()) {
+    stop("OPENSHEAF_KEY_STORE=none keeps no current key on this computer: keep the keys in a wallet (--keys github:OWNER/REPO|command)");
+  }
+  for (const did of others) {
+    try {
+      didKeyPublic(did);
+    } catch {
+      stop(`not a did:key URI of an Ed25519 key: ${did}`);
+    }
+  }
+  const current = await env.newKey();
+  const rotation = [];
+  for (let k = 0; k < nRot; k++) rotation.push(await env.newKey());
+  let log;
+  for (; ; ) {
+    try {
+      log = await newOwner([
+        current,
+        ...others
+      ], rotation, {
+        threshold,
+        nextThreshold,
+        keeper: args.keeper || null
+      });
+    } catch (error) {
+      stop(error.message);
+    }
+    if (!await f.storage.kind(await f.dirOf(log.id))) break;
+  }
+  if (nextThreshold === 1) env.warn(SINGLE_ROTATION_RISK);
+  if (args.export) await exportAndConfirm(f, rotation, log.owner, 1, args);
+  if (w) await keepInWallet(f, w, log.owner, rotation, 1, args, [
+    [
+      current,
+      1
+    ]
+  ]);
+  let store;
+  try {
+    store = await env.keyStore.keep(log.owner, current);
+  } catch (error) {
+    if (error instanceof KeyError || error.code) stop(error.message);
+    throw error;
+  }
+  await writeKeyLog(f.storage, await f.dirOf(log.id), log);
+  f.changed();
+  const kept = store === "none" ? `${w.name} only (OPENSHEAF_KEY_STORE=none)` : env.keyStore.storeName(store);
+  env.out(`${done ? "Done: the" : "The"} owner ${short(log.owner)} is made, with v1 of its key log:`);
+  env.out(`  owner          ${log.owner}`);
+  env.out(`  current key    ${current.did}, kept in ${kept}`);
+  for (const did of others) env.out(`  current key    ${did}, of another device`);
+  const resolved = args.export ? await env.exportFolder.resolve(args.export) : null;
+  env.out(rotationLine(nRot, nextThreshold, keptWhere(args, w, resolved)));
+  env.warn(ROTATION_KEYS_WARNING);
+  return log;
+}
+var GITATTRIBUTES = `# OpenSheaf archive files: stored and checked out byte for byte,
+# never merged as text (OpenSheaf archives in git, section 4.1). Every
+# attribute is named, so that no attribute of the user's own settings (a
+# user-wide \`*.pdf filter=lfs\`, for instance) applies to them.
+opensheaf.json -text -filter -ident -working-tree-encoding -export-subst -merge
+ocfl/**        -text -filter -ident -working-tree-encoding -export-subst -merge
+indexes.json   -text -filter -ident -working-tree-encoding -export-subst -merge
+names/**       -text -filter -ident -working-tree-encoding -export-subst -merge
+owners/**      -text -filter -ident -working-tree-encoding -export-subst -merge
+sha512/**      -text -filter -ident -working-tree-encoding -export-subst -merge
+*.pdf binary
+`;
+async function init(storage, env, args, where2) {
+  for (const n of CONFIG_NAMES) if (await storage.kind(n)) exit(`${where2} has a configuration already`);
+  const layout = LAYOUTS[args.layout || "owner-name"];
+  if (!layout) exit(`--layout is one of ${Object.keys(LAYOUTS).join(", ")}`);
+  if (Boolean(args.newOwner) === Boolean(args.owner)) stop("init: give --new-owner, or --owner NAME --key-log DIR");
+  if (args.index && args.index !== "website") {
+    stop(`--index ${args.index}: the TeXmacs index is made by opensheaf-py`);
+  }
+  if (!args.name || !args.baseUrl || !args.curator) stop("init: give --name, --base-url and --curator");
+  const [family, given] = (() => {
+    const k = args.curator.indexOf(",");
+    return k < 0 ? [
+      args.curator.trim(),
+      ""
+    ] : [
+      args.curator.slice(0, k).trim(),
+      args.curator.slice(k + 1).trim()
+    ];
+  })();
+  const cfg = {
+    owner: null,
+    name: args.name,
+    contact: args.contact || args.baseUrl,
+    baseUrl: args.baseUrl.endsWith("/") ? args.baseUrl : args.baseUrl + "/",
+    profiles: [
+      "website"
+    ],
+    storageLayout: layout,
+    mainCollection: "main",
+    curator: {
+      name: given ? `${family}, ${given}` : family,
+      givenName: given,
+      familyName: family,
+      affiliation: args.affiliation || ""
+    },
+    depositor: {
+      name: `${given} ${family}`.trim(),
+      address: args.contact || args.baseUrl
+    },
+    index: {
+      html: {
+        templates: "templates"
+      }
+    }
+  };
+  const f = new ArchiveFolder(storage, env);
+  f.archive = {
+    ...cfg
+  };
+  f.layout = layout;
+  await f.initStorageRoot();
+  let log;
+  if (args.newOwner) {
+    log = await ownerInit(f, args, {
+      done: false
+    });
+  } else {
+    if (!args.keyLog) stop("init --owner NAME needs --key-log DIR, the folder of its owner object");
+    try {
+      const { storage: from, dir, where: shown } = args.keyLogSource;
+      log = await loadKeyLog(from, dir, shown);
+    } catch (error) {
+      if (error instanceof OwnerError) stop(error.message);
+      throw error;
+    }
+    const { errors } = await log.check();
+    if (log.owner !== args.owner || errors.length) {
+      stop(`${args.keyLog} is not a valid key log of ${short(args.owner)}: ` + errors.join("; "));
+    }
+    if (log.ended) stop(`the owner ${short(log.owner)} has ended (section 6.3)`);
+    await writeKeyLog(storage, await f.dirOf(log.id), log);
+    f.changed();
+  }
+  cfg.owner = log.owner;
+  if (args.newOwner && walletConfig(args)) cfg.keys = walletConfig(args);
+  await writeText(storage, CONFIG_NAME, jsonText(cfg));
+  if (!await storage.kind(".gitattributes")) await writeText(storage, ".gitattributes", GITATTRIBUTES);
+  for (const name2 of TEMPLATES) {
+    if (!await storage.kind(`templates/${name2}`)) await storage.write(`templates/${name2}`, await env.template(name2));
+  }
+  await f.configure();
+  await collect2(f, {
+    curated: args.curated
+  });
+  await writeDiscovery(f);
+  await readableIndex(f);
+  env.out(`Done: the archive is made in ${where2}, owned by ${short(log.owner)}. Edit ${CONFIG_NAME} and templates/, then deposit a paper: osheaf deposit --new LABEL ...`);
+  env.err("Note: OpenSheaf 0.2 is a draft; until version 1.0 a revision may change the format in incompatible ways, and archives may have to be rebuilt.");
+  return f;
 }
 
 // core/requests.js
@@ -21316,16 +22572,16 @@ async function inflate(bytes) {
 }
 async function readZip(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let end = -1;
+  let end2 = -1;
   for (let k = bytes.length - 22; k >= Math.max(0, bytes.length - 22 - 65535); k--) {
     if (view.getUint32(k, true) === 101010256) {
-      end = k;
+      end2 = k;
       break;
     }
   }
-  if (end < 0) throw new Problem("The zip of the sources cannot be read (no central directory).");
-  const count = view.getUint16(end + 10, true);
-  let at = view.getUint32(end + 16, true);
+  if (end2 < 0) throw new Problem("The zip of the sources cannot be read (no central directory).");
+  const count = view.getUint16(end2 + 10, true);
+  let at = view.getUint32(end2 + 16, true);
   const out = [];
   const text3 = new TextDecoder("utf-8");
   for (let n = 0; n < count; n++) {
@@ -21690,7 +22946,125 @@ async function removeOp(r, form, origin) {
     `${text3} was removed from \`${cid}\``
   ];
 }
+var KEY_LOG = "key-log";
+function siteUrl(url) {
+  url = url.trim().replace(/^http:\/\//, "https://");
+  return url.endsWith("/") ? url : url + "/";
+}
+async function keyLogFolder(r, form) {
+  const zips = attached(form, "Key log of the owner");
+  if (zips.length) {
+    if (zips.length !== 1 || suffix(zips[0].name) !== ".zip") {
+      throw new Problem("Attach the key log of the owner as one zip of its folder.");
+    }
+    const { names, bytesOf } = await unpack(zips[0].bytes);
+    const storage = new MemoryStorage();
+    for (const n of names) await storage.write(n, bytesOf(n));
+    return {
+      storage,
+      dir: "",
+      where: zips[0].name
+    };
+  }
+  if (r.keyLog) return {
+    where: "the key log given",
+    ...r.keyLog
+  };
+  if (await r.storage.kind(KEY_LOG) === "dir") return {
+    storage: r.storage,
+    dir: KEY_LOG,
+    where: KEY_LOG
+  };
+  throw new Problem("The archive needs its owner's key log, made on your computer by the key ceremony of the README (`osheaf init` with `--new-owner`, then a key for GitHub's workflows): add the folder of the owner object (`ocfl/<owner>/<owner>/` of the archive where it was made) to the repository as `key-log/`, or attach it as a zip. The repository secret `OPENSHEAF_SIGNING_KEY` must hold the current key made for the workflows.");
+}
+async function removeTree2(storage, dir) {
+  for (const e of await storage.list(dir) || []) {
+    const p = joinPath(dir, e.name);
+    if (e.kind === "dir") await removeTree2(storage, p);
+    else await storage.remove(p);
+  }
+}
+async function initCommand(r, args) {
+  const start = r.said.length;
+  try {
+    await init(r.storage, r.env, args, ".");
+  } catch (error) {
+    if (!(error instanceof Stop)) throw error;
+    throw new Problem("osheaf stopped with this message:\n\n```\n" + error.message.split("\n").slice(-15).join("\n") + "\n```");
+  }
+  for (const line of r.said.slice(start)) if (ADDED.test(line.trim())) r.added.push(line.trim());
+}
+async function setupOp(r, form, origin) {
+  if (await exists(r, "osheaf.json")) throw new Problem("The archive is already set up.");
+  let base, rule;
+  const given = field(form, "Base URL");
+  if (given) {
+    [base, rule] = [
+      siteUrl(given),
+      "as given"
+    ];
+  } else if (r.defaultBase) {
+    ({ url: base, rule } = await r.defaultBase());
+  } else {
+    throw new Problem("Give the address where the site will be served in the field **Base URL**.");
+  }
+  const title = field(form, "Name", true);
+  const folder = await keyLogFolder(r, form);
+  let owner;
+  try {
+    const inv = await readJson(folder.storage, joinPath(folder.dir, "inventory.json"));
+    const [, o, again] = String(inv.id).split(":");
+    if (!o || o !== again || String(inv.id).split(":").length !== 3) throw new Error("not an owner");
+    owner = o;
+  } catch {
+    throw new Problem("The key log given is not the folder of an owner object: it should hold the `inventory.json` of `sheaf:<owner>:<owner>` (copy `ocfl/<owner>/<owner>/` of the archive where the owner was made).");
+  }
+  const named = field(form, "Owner");
+  if (named && named !== owner) throw new Problem(`The key log given is that of the owner \`${owner}\`, not \`${named}\`.`);
+  const args = {
+    owner,
+    keyLog: folder.where,
+    keyLogSource: folder,
+    name: title,
+    baseUrl: base,
+    curator: field(form, "Curator", true)
+  };
+  for (const [label, option] of [
+    [
+      "Affiliation",
+      "affiliation"
+    ],
+    [
+      "Contact",
+      "contact"
+    ]
+  ]) {
+    const value = field(form, label);
+    if (value) args[option] = value;
+  }
+  await initCommand(r, args);
+  if (await r.storage.kind(KEY_LOG) === "dir") await removeTree2(r.storage, KEY_LOG);
+  const purpose = field(form, "Purpose").toLowerCase() || "papers";
+  let done;
+  if (purpose === "selection" || purpose === "catalogue") {
+    let label = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32).replace(/^-+|-+$/g, "") || "collection";
+    if (label === (await settings(r)).mainCollection) label += "-collection";
+    await makeCollection(r, label, title, purpose, field(form, "Description"), `The collection is set up (${origin})`);
+    await feature(r, label);
+    done = `the archive was set up, owned by \`${owner}\`, with the collection \`${label}\` featured on its home page`;
+  } else {
+    done = `the archive was set up, owned by \`${owner}\``;
+  }
+  done += `. Its base URL is ${base} (${rule}); if that is not where its site is served, change \`baseUrl\` in \`osheaf.json\` and run \`osheaf index\``;
+  return [
+    "",
+    `Set up the archive: ${title} (${origin})`,
+    `Setup: ${title}`,
+    done
+  ];
+}
 var OPERATIONS = {
+  setup: setupOp,
   deposit: depositOp,
   notice: noticeOp,
   withdraw: withdrawOp,
@@ -21701,15 +23075,16 @@ var OPERATIONS = {
   remove: removeOp
 };
 var WORKFLOW_ONLY = [
-  "setup",
   "arxiv"
 ];
-async function carryOut(storage, env, operation, fields, files = {}, { origin = "the OpenSheaf manager", schemas: schemas2 = null, digests = true } = {}) {
+async function carryOut(storage, env, operation, fields, files = {}, { origin = "the OpenSheaf manager", schemas: schemas2 = null, digests = true, keyLog = null, defaultBase = null } = {}) {
   const said = [];
   const r = {
     storage,
     said,
     added: [],
+    keyLog,
+    defaultBase,
     env: {
       ...env,
       out: (line) => said.push(line),
@@ -21729,7 +23104,7 @@ async function carryOut(storage, env, operation, fields, files = {}, { origin = 
     }
     const op = OPERATIONS[operation];
     if (!op) throw new Problem(`Unknown operation \`${operation}\`.`);
-    if (!await exists(r, "osheaf.json")) {
+    if (operation !== "setup" && !await exists(r, "osheaf.json")) {
       throw new Problem("The archive is not set up yet: set it up first (the workflow **Set up the archive** in the Actions tab, or the manager's setup).");
     }
     let [cid, message2, title, done] = await op(r, form, origin);
@@ -21793,404 +23168,15 @@ async function verified(r, schemas2, digests) {
   throw new Problem("osheaf stopped with this message:\n\n```\n" + out.slice(-15).join("\n") + "\n```");
 }
 
-// core/keylogs.js
-var OwnerError = class extends Error {
-};
-var OBJ3 = "object.json";
-var KEYS2 = "keys.json";
-var KEYS_FORMAT2 = "opensheaf-keys/0.2";
-function keysFile({ keys = null, threshold = null, next = null, nextThreshold = null, extensions = null, exposed = null, ended = false, successor = null } = {}) {
-  const d = {
-    format: KEYS_FORMAT2
-  };
-  if (ended) {
-    if ([
-      keys,
-      threshold,
-      next,
-      nextThreshold
-    ].some((v) => v !== null && v !== void 0)) {
-      throw new OwnerError("an ending version has no keys, threshold, next or nextThreshold (section 6.3)");
-    }
-    d.ended = true;
-    if (successor !== null && successor !== void 0) d.successor = successor;
-  } else {
-    if (successor !== null && successor !== void 0) throw new OwnerError("only an ending version names a successor (section 6.3)");
-    Object.assign(d, {
-      keys: [
-        ...keys
-      ],
-      threshold,
-      next: [
-        ...next
-      ],
-      nextThreshold
-    });
-  }
-  if (extensions && Object.keys(extensions).length) d.extensions = extensions;
-  if (exposed && exposed.length) d.exposed = [
-    ...exposed
-  ];
-  return jsonBytes(d);
-}
-async function extendInventory(prev, id, number, files, created, message2 = null, user = null) {
-  const v = `v${number}`;
-  if (prev.head !== `v${number - 1}` || prev.id !== id) throw new OwnerError(`${v} must follow v${number - 1} of ${id}`);
-  const inv = JSON.parse(JSON.stringify(prev));
-  const content = inv.contentDirectory || "content";
-  inv.head = v;
-  const state = {};
-  for (const path of [
-    ...files.keys()
-  ].sort()) {
-    const d = await sha512hex(files.get(path));
-    if (!(d in inv.manifest)) inv.manifest[d] = [
-      `${v}/${content}/${path}`
-    ];
-    (state[d] ||= []).push(path);
-  }
-  const entry = {
-    created,
-    state
-  };
-  if (message2 !== null) entry.message = message2;
-  if (user !== null) entry.user = user;
-  inv.versions[v] = entry;
-  return orderedInventory(inv);
-}
-function keyOf(k) {
-  return typeof k === "string" ? k : k.did;
-}
-async function digestOf(k) {
-  if (typeof k !== "string") return k.digest;
-  if (k.startsWith("did:key:")) {
-    didKeyPublic(k);
-    return keyDigest(k);
-  }
-  if (!OWNER_NAME.test(k)) throw new OwnerError(`not a key, a did:key URI or the digest of a key: '${k}'`);
-  return k;
-}
-async function checked(log) {
-  log.checked = null;
-  return log.check();
-}
-async function prepare(log, signers2) {
-  const { errors } = await checked(log);
-  if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
-  if (log.ended) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
-  const side = log.side();
-  const prev = side[side.length - 1];
-  const rotation = new Set(prev.keys.next);
-  for (const key of signers2) {
-    if (!rotation.has(key.digest)) throw new OwnerError(`${key.did} is not a rotation key of v${prev.number} (section 6.1)`);
-  }
-  const need = prev.keys.nextThreshold, have = new Set(signers2.map((k) => k.did)).size;
-  if (have < need) throw new OwnerError(`v${prev.number} needs ${need} rotation keys to sign the next version, ${have} given`);
-  return prev;
-}
-async function append(log, version) {
-  log.versions.push(version);
-  const { errors } = await checked(log);
-  if (errors.length) {
-    log.versions.pop();
-    await checked(log);
-    throw new OwnerError("the new version would not be a version of the key log: " + errors.join("; "));
-  }
-  return version;
-}
-async function addVersion(log, keysBytes, signers2, { message: message2, user, created = null, files = null }) {
-  const prev = await prepare(log, signers2);
-  const problems = await keyRules(jsonOrNull(keysBytes, {
-    integers: true
-  }), log.side().map((v) => v.keys), log.owner);
-  if (problems.length) throw new OwnerError(problems.join("; "));
-  for (const path of (files || /* @__PURE__ */ new Map()).keys()) {
-    if (RESERVED.includes(path.split("/")[0])) throw new OwnerError(`${path}: a name reserved by section 4.1`);
-  }
-  const n = prev.number + 1;
-  const content = new Map([
-    [
-      GENESIS,
-      log.genesis
-    ],
-    [
-      OBJ3,
-      jcsBytes(ownerObject(log.owner, prev.digest))
-    ],
-    [
-      KEYS2,
-      keysBytes
-    ],
-    ...files || /* @__PURE__ */ new Map()
-  ]);
-  const inv = await extendInventory(JSON.parse(new TextDecoder().decode(prev.inventory)), log.id, n, content, created || utcNow(), message2, user);
-  const invBytes = inventoryFile(inv);
-  const digest = await sha512hex(invBytes);
-  const pin = log.pin(prev.number);
-  const witnesses = /* @__PURE__ */ new Map();
-  for (const key of signers2) {
-    witnesses.set(await fileName(key.did), await signatureFile(key, log.id, `v${n}`, digest, log.owner, pin));
-  }
-  return append(log, await Version.make(n, content, invBytes, await sidecar(invBytes), witnesses));
-}
-async function rotate(log, signers2, { nextKeys, nextThreshold, add: add2 = [], retire = [], exposed = [], threshold = null, extensions = void 0, message: message2 = "Keys changed", user, created = null }) {
-  await checked(log);
-  const prev = log.latest();
-  if (!prev) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
-  const current = prev.keys.keys;
-  for (const did of retire) if (!current.includes(did)) throw new OwnerError(`${did} is not a current key of ${log.owner}`);
-  const keys = current.filter((k) => !retire.includes(k) && !exposed.includes(k));
-  for (const k of add2) if (!keys.includes(keyOf(k))) keys.push(keyOf(k));
-  if (extensions === void 0) extensions = log.extensions();
-  const next = [];
-  for (const k of nextKeys) next.push(await digestOf(k));
-  const data2 = keysFile({
-    keys,
-    threshold: threshold || prev.keys.threshold,
-    next,
-    nextThreshold,
-    extensions,
-    exposed: exposed.length ? exposed : null
-  });
-  return addVersion(log, data2, signers2, {
-    message: message2,
-    user,
-    created
-  });
-}
-function contentPath2(cp, inv, n) {
-  const cd = isObject(inv) && typeof inv.contentDirectory === "string" ? inv.contentDirectory : "content";
-  const safe = (p) => typeof p === "string" && p !== "" && !p.startsWith("/") && !p.includes("\\") && p.split("/").every((x) => ![
-    "",
-    ".",
-    ".."
-  ].includes(x));
-  if (!safe(cp) || !safe(cd) || cd.includes("/")) return false;
-  const parts = cp.split("/");
-  return parts.length >= 3 && /^v[1-9][0-9]*$/.test(parts[0]) && parts[1] === cd && Number(parts[0].slice(1)) <= n;
-}
-async function loadKeyLog(storage, dir, where2 = dir) {
-  const problems = [], versions2 = [];
-  const root = await storage.read(joinPath(dir, "inventory.json"));
-  const rootInv = jsonOrNull(root);
-  const head = typeof rootInv?.head === "string" && /^v[0-9]+$/.test(rootInv.head) ? Number(rootInv.head.slice(1)) : NaN;
-  if (!root || !Number.isInteger(head)) throw new OwnerError(`${where2}: not an OCFL object with an inventory`);
-  for (let n = 1; n <= head; n++) {
-    const vdir = joinPath(dir, `v${n}`);
-    const invBytes = await storage.read(joinPath(vdir, "inventory.json"));
-    const entry = jsonOrNull(invBytes);
-    if (!invBytes || !isObject(entry?.manifest) || !isObject(entry?.versions?.[`v${n}`]?.state)) {
-      problems.push(`v${n}: no readable inventory in the version folder (section 4.1)`);
-      break;
-    }
-    const sc = await storage.read(joinPath(vdir, "inventory.json.sha512")) || new Uint8Array();
-    if (sidecarDigest(sc) !== await sha512hex(invBytes)) problems.push(`v${n}: the checksum file does not state the digest of the inventory`);
-    const files = /* @__PURE__ */ new Map();
-    for (const [d, paths] of Object.entries(entry.versions[`v${n}`].state)) {
-      if (!Array.isArray(paths) || !paths.length) continue;
-      let bytes = new Uint8Array();
-      const cp = entry.manifest[d]?.[0];
-      if (!contentPath2(cp, entry, n)) {
-        problems.push(`v${n}: a content path out of the object: '${cp}'`);
-        problems.push(`v${n}: the content of ${paths[0]} is missing`);
-      } else {
-        bytes = await storage.read(joinPath(dir, cp)) ?? (problems.push(`v${n}: the content of ${paths[0]} is missing`), new Uint8Array());
-      }
-      if (await sha512hex(bytes) !== d) problems.push(`v${n}: ${paths[0]} does not have the digest its inventory states`);
-      for (const p of paths) files.set(p, bytes);
-    }
-    const witnesses = /* @__PURE__ */ new Map();
-    const wdir = joinPath(dir, WITNESSES, `v${n}`);
-    for (const { name: name2, kind } of await storage.list(wdir) || []) {
-      if (kind === "file") witnesses.set(name2, await storage.read(joinPath(wdir, name2)));
-    }
-    versions2.push(await Version.make(n, files, invBytes, sc, witnesses));
-  }
-  if (!versions2.length || !versions2[0].files.has(GENESIS)) throw new OwnerError(`${where2}: no genesis record in the first version`);
-  if (versions2[versions2.length - 1].number === head && !sameBytes(root, versions2[versions2.length - 1].inventory)) {
-    problems.push("the root inventory differs from that of the head version");
-  }
-  const log = await KeyLog.of(versions2[0].files.get(GENESIS), versions2, problems);
-  if (rootInv.id !== log.id) problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
-  return log;
-}
-
-// core/passkey.js
-var UNLOCK_PAGE = `https://${PASSKEY_RP}/`;
-var UnlockFailed = class extends Error {
-};
-function b64url(bytes) {
-  return base64(bytes).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-function fromB64url(text3) {
-  if (typeof text3 !== "string" || !/^[A-Za-z0-9_-]+$/.test(text3) || text3.length % 4 === 1) throw new Error("not base64url");
-  const b = text3.replaceAll("-", "+").replaceAll("_", "/");
-  return unbase64(b + "=".repeat((4 - b.length % 4) % 4));
-}
-function randomState() {
-  return b64url(crypto.getRandomValues(new Uint8Array(16)));
-}
-var CODE_LABEL = utf8("opensheaf unlock code v1");
-async function confirmationCode(state, pk) {
-  const d = await sha256(new Uint8Array([
-    ...CODE_LABEL,
-    ...utf8(state),
-    ...pk
-  ]));
-  const n = (d[0] << 24 >>> 0) + (d[1] << 16) + (d[2] << 8) + d[3];
-  const digits = String(n % 1e6).padStart(6, "0");
-  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
-}
-var HAND_OFF_INFO = utf8("opensheaf unlock hand-off v2");
-async function withPublic(privateKey) {
-  const jwk = await crypto.subtle.exportKey("jwk", privateKey);
-  return {
-    privateKey,
-    publicKey: fromB64url(jwk.x)
-  };
-}
-async function newKeyPair() {
-  const pair = await crypto.subtle.generateKey({
-    name: "X25519"
-  }, true, [
-    "deriveBits"
-  ]);
-  return withPublic(pair.privateKey);
-}
-async function handOffKeys(pair, other, state) {
-  const pub = await crypto.subtle.importKey("raw", other, {
-    name: "X25519"
-  }, true, []);
-  const shared = new Uint8Array(await crypto.subtle.deriveBits({
-    name: "X25519",
-    public: pub
-  }, pair.privateKey, 256));
-  const both = await hkdf(shared, utf8(state), HAND_OFF_INFO, 64);
-  return [
-    both.slice(0, 32),
-    both.slice(32)
-  ];
-}
-function associatedData(mode, owner, cred, pk, epk) {
-  return utf8(`${mode}|${owner}|${cred}|${b64url(pk)}|${b64url(epk)}`);
-}
-function sameSecret(a, b) {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let k = 0; k < a.length; k++) diff |= a[k] ^ b[k];
-  return diff === 0;
-}
-var xor = (a, b) => a.map((x, k) => x ^ b[k]);
-async function unseal2(pair, epk, ct, tag, state, mode, owner, cred) {
-  if (epk.length !== 32 || ct.length !== 32 || tag.length !== 32) throw new Error("not a hand-off of 32 bytes");
-  const [enc, mac] = await handOffKeys(pair, epk, state);
-  const aad = associatedData(mode, owner, cred, pair.publicKey, epk);
-  if (!sameSecret(await hmacSha256(mac, new Uint8Array([
-    ...aad,
-    ...ct
-  ])), tag)) {
-    throw new Error("the answer of the page is not authentic");
-  }
-  return xor(ct, enc);
-}
-var NO_X25519 = "this browser has no X25519 in WebCrypto, and cannot hand the key to osheaf securely (known to work: Safari 17+, Chrome 133+, Firefox 130+); osheaf uses the passphrase";
-function failure(result) {
-  const error = result.error;
-  return new UnlockFailed(error === "x25519-unavailable" ? NO_X25519 : `the page says: ${error.slice(0, 200)}`);
-}
-function answerOf(result, creds = []) {
-  const secret = result.secret || new Uint8Array(), cred = result.cred ?? null;
-  if (secret.length !== 32) throw new UnlockFailed("the page sent a secret that is not 32 bytes");
-  if (creds.length && cred !== null && !creds.includes(cred)) throw new UnlockFailed("the page used another passkey than those asked for");
-  return [
-    cred,
-    secret
-  ];
-}
-var POPUP = "popup";
-var POPUP_ENROLL = "popup-enroll";
-var UNLOCK_ORIGIN = new URL(UNLOCK_PAGE).origin;
-var POPUP_MESSAGES = {
-  ready: "opensheaf-unlock-ready",
-  request: "opensheaf-unlock-request",
-  answer: "opensheaf-unlock-answer",
-  done: "opensheaf-unlock-done"
-};
-function popupMode(mode) {
-  if (mode !== POPUP && mode !== POPUP_ENROLL) throw new UnlockFailed(`not a mode of the popup: ${mode}`);
-  return mode;
-}
-function popupUrl(origin, mode = POPUP) {
-  return UNLOCK_PAGE + "#" + new URLSearchParams({
-    mode: popupMode(mode),
-    origin
-  }).toString();
-}
-async function popupRequest(owner, creds, pair = null, state = null, mode = POPUP) {
-  if (!OWNER_NAME.test(owner || "")) throw new UnlockFailed(`not an owner name: ${owner}`);
-  if (!creds.length && popupMode(mode) === POPUP) {
-    throw new UnlockFailed("no passkey is enrolled for the keys of this owner (osheaf key enroll)");
-  }
-  pair ||= await newKeyPair();
-  state ||= randomState();
-  return {
-    owner,
-    mode,
-    creds: [
-      ...creds
-    ],
-    state,
-    pair,
-    code: await confirmationCode(state, pair.publicKey),
-    message: {
-      type: POPUP_MESSAGES.request,
-      state,
-      pk: b64url(pair.publicKey),
-      owner,
-      cred: creds.join(",")
-    }
-  };
-}
-function sameCode(typed, code) {
-  const digits = (t) => utf8(String(t ?? "").replace(/[^0-9]/g, ""));
-  return digits(typed).length === 6 && sameSecret(digits(typed), digits(code));
-}
-async function openPopupAnswer(request, data2, typed) {
-  if (!data2 || data2.type !== POPUP_MESSAGES.answer || typeof data2.state !== "string" || !sameSecret(utf8(data2.state), utf8(request.state))) {
-    throw new UnlockFailed("this is not the answer to this request");
-  }
-  if (typeof data2.error === "string") throw failure({
-    error: data2.error
-  });
-  if (!sameCode(typed, request.code)) {
-    throw new UnlockFailed("the code typed is not the code of this request: close the window of the passkey, and unlock again");
-  }
-  let secret;
-  try {
-    const [epk, ct, tag] = [
-      fromB64url(data2.epk),
-      fromB64url(data2.ct),
-      fromB64url(data2.tag)
-    ];
-    fromB64url(data2.cred);
-    secret = await unseal2(request.pair, epk, ct, tag, request.state, request.mode || POPUP, request.owner, data2.cred);
-  } catch {
-    throw new UnlockFailed("the page sent a damaged answer");
-  }
-  if (request.mode === POPUP_ENROLL) {
-    if (request.creds.includes(data2.cred)) throw new UnlockFailed("the page sent no new credential");
-    return answerOf({
-      cred: data2.cred,
-      secret
-    });
-  }
-  return answerOf({
-    cred: data2.cred,
-    secret
-  }, request.creds);
-}
-
 // web/manager.js
+init_names();
+init_write();
+init_storage();
+init_keys();
+init_discovery();
+init_folder();
+init_keys();
+init_folder();
 function browserEnvironment({ assets, keys = /* @__PURE__ */ new Map(), fetch: fetch2 = globalThis.fetch?.bind(globalThis) } = {}) {
   const refuse = (what) => async () => {
     throw new Error(`the Manager does not ${what}: use osheaf on your computer`);
@@ -22298,10 +23284,10 @@ async function sealedKey(key) {
   key.seed.fill(0);
   return new Key(null, signing2, key.publicKey, key.did, key.digest);
 }
-async function openLocks(locks, owner, cred, prf) {
+async function openLocks(locks2, owner, cred, prf) {
   const kek = await passkeyKek(prf);
   const keys = [];
-  for (const lock of locks) {
+  for (const lock of locks2) {
     if (!lock.creds.includes(cred)) continue;
     const rk = await readKey(lock.text, null, {
       [cred]: kek
@@ -22349,7 +23335,7 @@ async function checkWallet(wallet) {
   wallet.checked = true;
   return info;
 }
-async function walletEntries(wallet, owner) {
+async function walletEntries2(wallet, owner) {
   const out = [];
   for (const [o, kid] of await wallet.entries(owner)) {
     const text3 = await readAny(wallet, o, kid);
@@ -22417,7 +23403,7 @@ var encrypted = (text3) => text3.split(/\r\n|\r|\n/).some((x) => {
   return x.startsWith("encryption ") && p[1] !== "none";
 });
 async function enrollPlan(wallet, owner, { newPasskey = false, entries = null } = {}) {
-  entries = (entries || await walletEntries(wallet, owner)).filter((e) => encrypted(e.text));
+  entries = (entries || await walletEntries2(wallet, owner)).filter((e) => encrypted(e.text));
   if (!entries.length) throw new WalletError(`the wallet ${wallet.name} holds no key of ${owner} locked with a passphrase`);
   const salt = await passkeySalt(owner);
   const ours = (text3) => passkeysOf(text3).filter((p) => sameBytes(p.salt, salt) && p.rp === PASSKEY_RP).map((p) => p.cred);
@@ -22667,17 +23653,126 @@ async function directRotate({ repo, github, env, schemas: schemas2, plan, signer
     commit: done.commit
   };
 }
+var ROTATION_KEYS = 3;
+async function newOwnerKeys({ workflows = true, rotation = ROTATION_KEYS } = {}) {
+  const keys = {
+    current: await newKey(),
+    workflows: workflows ? await newKey() : null,
+    rotation: []
+  };
+  for (let k = 0; k < rotation; k++) keys.rotation.push(await newKey());
+  return keys;
+}
+async function ownerKeyLog(keys, { keeper = null, created = null, nonce = null } = {}) {
+  if (keeper && !keeperValid(keeper)) {
+    throw new OwnerError(`a keeper is an ORCID iD (with its check digit) or https://<domain>/: ${keeper}`);
+  }
+  return newOwner([
+    keys.current,
+    ...keys.workflows ? [
+      keys.workflows
+    ] : []
+  ], keys.rotation, {
+    threshold: 1,
+    nextThreshold: Math.floor(keys.rotation.length / 2) + 1,
+    keeper: keeper || null,
+    created,
+    nonce
+  });
+}
+async function keyLogFolder2(log) {
+  const storage = new MemoryStorage();
+  await writeKeyLog(storage, "", log);
+  return {
+    storage,
+    dir: "",
+    where: `the key log of ${short(log.owner)} made in the page`
+  };
+}
+async function signingCopy(key) {
+  return sealedKey(await Key.fromSeed(Uint8Array.from(key.seed)));
+}
+async function directSetup({ repo, github, fields, keyLog, defaultBase = null, env, schemas: schemas2, mirror = null, cache = /* @__PURE__ */ new Map(), origin = "the OpenSheaf manager", progress = () => {
+}, attempts = 3 }) {
+  return directWrite({
+    repo,
+    github,
+    operation: "setup",
+    fields,
+    env,
+    schemas: schemas2,
+    mirror,
+    cache,
+    origin,
+    progress,
+    attempts,
+    options: {
+      keyLog,
+      defaultBase
+    }
+  });
+}
+function seedLine(key) {
+  return base64(key.seed);
+}
+async function sealedBox(message2, publicKey) {
+  const nacl = (await Promise.resolve().then(() => __toESM(require_nacl_fast()))).default;
+  const { createBLAKE2b: createBLAKE2b2 } = await Promise.resolve().then(() => (init_index_esm(), index_esm_exports));
+  if (publicKey.length !== nacl.box.publicKeyLength) throw new KeyError("not an X25519 public key");
+  const drawn = crypto.getRandomValues(new Uint8Array(nacl.box.secretKeyLength));
+  const pair = nacl.box.keyPair.fromSecretKey(drawn);
+  drawn.fill(0);
+  const h = await createBLAKE2b2(nacl.box.nonceLength * 8);
+  h.init();
+  h.update(pair.publicKey);
+  h.update(publicKey);
+  const nonce = h.digest("binary");
+  const boxed = nacl.box(message2, nonce, publicKey, pair.secretKey);
+  pair.secretKey.fill(0);
+  const out = new Uint8Array(pair.publicKey.length + boxed.length);
+  out.set(pair.publicKey);
+  out.set(boxed, pair.publicKey.length);
+  return out;
+}
+async function openSealedBox(sealed, publicKey, secretKey) {
+  const nacl = (await Promise.resolve().then(() => __toESM(require_nacl_fast()))).default;
+  const { createBLAKE2b: createBLAKE2b2 } = await Promise.resolve().then(() => (init_index_esm(), index_esm_exports));
+  const epk = sealed.slice(0, nacl.box.publicKeyLength);
+  const h = await createBLAKE2b2(nacl.box.nonceLength * 8);
+  h.init();
+  h.update(epk);
+  h.update(publicKey);
+  const opened = nacl.box.open(sealed.slice(epk.length), h.digest("binary"), epk, secretKey);
+  if (!opened) throw new KeyError("the sealed box does not open with this key");
+  return opened;
+}
+var SIGNING_SECRET = "OPENSHEAF_SIGNING_KEY";
+async function storeSecret(github, repo, name2, value) {
+  const pk = await github.request("GET", `repos/${repo}/actions/secrets/public-key`);
+  const bytes = new TextEncoder().encode(value);
+  let sealed;
+  try {
+    sealed = await sealedBox(bytes, unbase64(pk.key));
+  } finally {
+    bytes.fill(0);
+  }
+  await github.request("PUT", `repos/${repo}/actions/secrets/${name2}`, {
+    encrypted_value: base64(sealed),
+    key_id: pk.key_id
+  });
+}
 function prefetched(path, size = null) {
   return size !== null && size < 4096 || path === "osheaf.json" || path === "opensheaf.json" || path.startsWith("collections/") || path.startsWith("templates/") || path.startsWith("ocfl/") && /\.(json|sha512)$/.test(path) || path.startsWith("ocfl/") && !path.includes("/content/");
 }
 async function directWrite({ repo, github, operation, fields, files = {}, env, schemas: schemas2, assets = null, mirror = null, cache = /* @__PURE__ */ new Map(), origin = "the OpenSheaf manager", progress = () => {
-}, attempts = 3 }) {
+}, attempts = 3, options = {} }) {
   const done = await oneCommit(repo, github, async (storage) => {
     progress("carrying out");
     const answer = await carryOut(storage, env, operation, fields, files, {
       origin,
       schemas: schemas2,
-      digests: false
+      digests: false,
+      ...options
     });
     if (answer.ok) progress("committing");
     return {
@@ -22925,6 +24020,8 @@ export {
   POPUP_MESSAGES,
   Problem,
   ROTATION,
+  ROTATION_KEYS,
+  SIGNING_SECRET,
   Stop,
   UNLOCK_ORIGIN,
   UnlockFailed,
@@ -22937,19 +24034,24 @@ export {
   checksConfirmed,
   confirmationCode,
   directRotate,
+  directSetup,
   directWrite,
   enrollPasskey,
   enrollPlan,
   gitBlobSha,
   keepRotationKeys,
   keyFromText,
+  keyLogFolder2 as keyLogFolder,
   keyToPush,
   newKey,
   newKeys,
+  newOwnerKeys,
   oneCommit,
   openLocks,
   openPopupAnswer,
+  openSealedBox,
   openWithPassphrase,
+  ownerKeyLog,
   passphraseConfirmed,
   popupRequest,
   popupUrl,
@@ -22962,10 +24064,15 @@ export {
   rotationKeysFromWallet,
   sameCode,
   schemasOf,
+  sealedBox,
   sealedKey,
+  seedLine,
   sheetCheck,
   signers,
-  walletEntries,
+  signingCopy,
+  storeSecret,
+  verifyFolder,
+  walletEntries2 as walletEntries,
   walletLocks,
   walletRotationKeys
 };

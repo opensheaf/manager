@@ -367,6 +367,191 @@ export function forgetNewKey(pending) {
   Object.assign(pending, { current: null, rotation: null, signing: null, files: null, passphrase: null });
 }
 
+// --- a new archive: its owner made in the page --------------------------------
+
+// For a repository made from the archive template and not set up: the owner
+// made here, as osheaf init --new-owner --key DID makes it (the owner's
+// current key, the current key of the archive's workflows, three rotation
+// keys of which two sign the next version of the key log), and the archive
+// set up with it as the template's setup sets it up (core.directSetup: the
+// same files), in steps that can each be tried again without losing the
+// keys, which are in this page's memory only:
+//
+//   prepareOwner    the wallet checked, the keys and the key log made; at
+//                   the offline level the rotation keys written as the files
+//                   of osheaf init --export, locked with the passphrase, and
+//                   their seeds wiped;
+//   confirmOwner    (offline) the checks of the files typed back: nothing is
+//                   committed before;
+//   setUpArchive    (wallet level) the rotation keys put in the wallet; the
+//                   archive set up and committed, verified first;
+//   createLabels    the labels of the issue forms, if the sign-in may;
+//   putOwnerKey     the owner's current key in the wallet (osheaf key push);
+//   storeWorkflowKey  the workflows' key as the secret OPENSHEAF_SIGNING_KEY,
+//                   if the sign-in may; else shown once, then forgotten;
+//   ownerWalletState, then enrollPasskey (above): the passkey;
+//   turnPagesOn     GitHub Pages, if the sign-in may.
+//
+// forgetOwner wipes everything. The owner's current key that signs here is
+// kept as an unexportable copy (pending.signing), for the page's keys.
+
+export const LEVELS = { offline: "offline", wallet: "wallet" };
+export const LABELS = ["osheaf: deposit", "osheaf: notice", "osheaf: withdraw", "osheaf: licence", "osheaf: collection",
+                       "osheaf: add", "osheaf: vet", "osheaf: remove"];
+export const LABEL_COLOUR = "5e6a78";
+
+// The signers of a key log made here, as signersOf reads them.
+export function signersOfLog(log) {
+  const v = log.latest();
+  return { owner: log.owner, dids: [...v.keys.keys], threshold: v.keys.threshold,
+           versions: Object.fromEntries(v.keys.keys.map((d) => [d, v.number])), number: v.number,
+           next: [...v.keys.next], nextThreshold: v.keys.nextThreshold };
+}
+
+export async function prepareOwner({ gh, archiveRepo, wallet, passphrase, workflows = true, level = LEVELS.offline,
+                                     keeper = "", rotation = core.ROTATION_KEYS, created = null }) {
+  if (!passphrase) throw new core.KeyError("give a passphrase: it locks the keys");
+  if (!Object.values(LEVELS).includes(level)) throw new Error(`no security level ${level}`);
+  const w = walletOf(gh, archiveRepo, wallet);
+  await core.checkWallet(w);
+  const keys = await core.newOwnerKeys({ workflows, rotation });
+  const pending = { level, wallet: w, passphrase, current: keys.current, workflows: keys.workflows, rotation: null,
+                    files: null, log: null, owner: null, keyLog: null, signing: null, confirmed: level === LEVELS.wallet,
+                    walletState: null, done: { rotation: false, archive: null, labels: null, wallet: false, secret: null,
+                                               passkey: false, pages: null } };
+  try {
+    pending.log = await core.ownerKeyLog(keys, { keeper: keeper || null, created });
+    pending.owner = pending.log.owner;
+    pending.keyLog = await core.keyLogFolder(pending.log);
+    pending.signing = await core.signingCopy(keys.current);
+    if (level === LEVELS.wallet) pending.rotation = keys.rotation;
+    else pending.files = await core.rotationFiles(keys.rotation, pending.owner, 1, passphrase);
+  } catch (e) {
+    for (const k of keys.rotation) k.seed.fill(0);
+    forgetOwner(pending);
+    throw e;
+  }
+  return pending;
+}
+
+export function confirmOwner(pending, typed) {
+  if (pending.confirmed) return;
+  if (!pending.files || !core.checksConfirmed(pending.files, typed)) {
+    throw new core.KeyError("the checks typed are not those of the files: nothing was committed");
+  }
+  pending.confirmed = true;
+}
+
+// The archive set up and committed (once): the answer of core.directSetup,
+// with the commit; a refusal (ok false) commits nothing. DEFAULTBASE gives
+// { url, rule } when the form gives no base URL (load.js, baseUrl).
+export async function setUpArchive({ gh, repo, pending, fields, defaultBase = null, cache = new Map(), progress = () => {},
+                                     fetchImpl = globalThis.fetch && globalThis.fetch.bind(globalThis) }) {
+  if (pending.done.archive) return pending.done.archive;
+  if (!pending.confirmed) throw new core.KeyError("the rotation keys are not confirmed yet: nothing was committed");
+  if (pending.rotation) {
+    progress("wallet");
+    await core.keepRotationKeys(pending.wallet, pending.owner, pending.rotation, 1, pending.passphrase);
+    pending.rotation = null;
+    pending.done.rotation = true;
+  }
+  schemas ||= await core.schemasOf(core.ASSETS);
+  const env = core.browserEnvironment({ assets: core.ASSETS, keys: new Map([[pending.owner, [pending.signing]]]), fetch: fetchImpl });
+  const answer = await core.directSetup({ repo, github: gh, fields, keyLog: pending.keyLog, defaultBase, env, schemas, cache,
+                                          origin: ORIGIN, progress });
+  if (answer.ok) {
+    pending.done.archive = answer;
+    pending.files = null;
+  }
+  return answer;
+}
+
+// A refusal of GitHub that means "this sign-in may not" (the app's
+// permission not granted, or not an administrator of the repository).
+const notAllowed = (e) => e instanceof core.GitHubError && [401, 403, 404].includes(e.status);
+
+// The labels of the issue forms, as the template's setup creates them: { made,
+// refused } (refused: the sign-in may not create labels, which needs the
+// permission Issues: write).
+export async function createLabels({ gh, repo }) {
+  let made = 0;
+  for (const name of LABELS) {
+    try {
+      await gh.request("POST", `repos/${repo}/labels`, { name, color: LABEL_COLOUR });
+      made++;
+    } catch (e) {
+      if (e instanceof core.GitHubError && e.status === 422) continue;   // there already
+      if (notAllowed(e)) return { made, refused: true };
+      throw e;
+    }
+  }
+  return { made, refused: false };
+}
+
+// The owner's current key put in the wallet, as osheaf key push puts it (v1
+// of the key log); its seed then wiped (the unexportable copy signs here).
+export async function putOwnerKey({ pending }) {
+  if (pending.done.wallet) return;
+  await core.pushKey(pending.wallet, pending.owner, pending.current, 1, pending.passphrase);
+  pending.current.seed.fill(0);
+  pending.current = null;
+  pending.done.wallet = true;
+}
+
+// The workflows' key stored as the repository secret: "stored", or, when the
+// sign-in may not set secrets (the permission Secrets: read and write, and
+// an administrator of the repository), "refused": the page then shows the
+// line once (workflowKeyLine) for the person to store by hand, and forgets
+// it (forgetWorkflowKey). "none" when the owner has no key for the workflows.
+export async function storeWorkflowKey({ gh, repo, pending }) {
+  if (!pending.workflows) return (pending.done.secret = pending.done.secret || "none");
+  try {
+    await core.storeSecret(gh, repo, core.SIGNING_SECRET, core.seedLine(pending.workflows));
+  } catch (e) {
+    if (notAllowed(e)) return (pending.done.secret = "refused");
+    throw e;
+  }
+  forgetWorkflowKey(pending, "stored");
+  return pending.done.secret;
+}
+
+export function workflowKeyLine(pending) {
+  return pending.workflows ? core.seedLine(pending.workflows) : "";
+}
+
+export function forgetWorkflowKey(pending, how = "shown") {
+  if (pending.workflows) pending.workflows.seed.fill(0);
+  pending.workflows = null;
+  pending.done.secret = how;
+}
+
+// Where the wallet stands for this owner, read before the passkey's popup
+// is opened (in the click): what enrollPasskey (above) takes.
+export async function ownerWalletState({ gh, archiveRepo, pending }) {
+  pending.walletState = await setupState({ gh, archiveRepo, settings: { owner: pending.owner },
+                                           wallet: pending.wallet.name, signers: signersOfLog(pending.log) });
+  return pending.walletState;
+}
+
+// GitHub Pages turned on (branch BRANCH, its root), if the sign-in may (the
+// permission Pages: write, and an administrator): { on, url, refused }.
+export async function turnPagesOn({ gh, repo, branch = "main" }) {
+  try {
+    const got = await gh.request("POST", `repos/${repo}/pages`, { build_type: "legacy", source: { branch, path: "/" } });
+    return { on: true, url: got && got.html_url, refused: false };
+  } catch (e) {
+    if (e instanceof core.GitHubError && e.status === 409) return { on: true, url: null, refused: false };
+    if (notAllowed(e) || (e instanceof core.GitHubError && e.status === 422)) return { on: false, url: null, refused: true };
+    throw e;
+  }
+}
+
+export function forgetOwner(pending) {
+  if (!pending) return;
+  for (const k of [pending.current, pending.workflows, ...(pending.rotation || [])]) if (k && k.seed) k.seed.fill(0);
+  Object.assign(pending, { current: null, workflows: null, rotation: null, files: null, passphrase: null, walletState: null });
+}
+
 // The signers of the archive: read from the head of its branch.
 export async function signersOf({ gh, repo, cache, settings }) {
   const mirror = settings && /^https:\/\//.test(settings.baseUrl || "") ? settings.baseUrl : null;
