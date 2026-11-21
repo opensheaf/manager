@@ -100,7 +100,7 @@ function show(target, ...nodes) {
 // shown again (its own nodes, so its buttons still work).
 const TOAST_MS = { ok: 8000 };
 const toast = { timer: null, kind: "" };
-const history = [];
+const messageLog = [];
 
 function message(kind, ...content) {
   clearTimeout(toast.timer);
@@ -108,8 +108,8 @@ function message(kind, ...content) {
   if (!content.length) { box.replaceChildren(); box.hidden = true; toast.kind = ""; return; }
   showToast(kind, content);
   if (kind !== "info") {
-    history.unshift({ kind, content, at: new Date() });
-    history.length = Math.min(history.length, 50);
+    messageLog.unshift({ kind, content, at: new Date() });
+    messageLog.length = Math.min(messageLog.length, 50);
     showHistory();
   }
 }
@@ -137,13 +137,13 @@ function showToast(kind, content) {
 const clock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 function showHistory() {
-  show("#history", history.length ? history.map((h) => el("li", {},
+  show("#history", messageLog.length ? messageLog.map((h) => el("li", {},
     el("button", { type: "button", class: `again ${h.kind}`, title: "Show it again",
                    onclick: () => showToast(h.kind, h.content) },
       el("span", { class: "small muted" }, clock(h.at)), " ",
       h.content.map((c) => (c instanceof Node ? c.textContent : String(c))).join(" ").slice(0, 140))))
     : el("li", { class: "muted" }, "No messages yet."));
-  const last = history[0];
+  const last = messageLog[0];
   show("#dock-last", last ? el("span", { class: `last ${last.kind}` },
     (last.content.map((c) => (c instanceof Node ? c.textContent : String(c))).join(" ")).slice(0, 90)) : null);
 }
@@ -367,7 +367,7 @@ async function openArchive(repo) {
   if (state.repo !== repo) {
     state.pending.clear();
     stopWatchingSite();
-    history.length = 0;
+    messageLog.length = 0;
     showHistory();
     state.cache = new Map();
     state.signers = null;
