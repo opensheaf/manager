@@ -1,4 +1,4 @@
-// opensheaf-js 6b4a275002bff6b93e6ff9c7e624316fafc0f37d: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js b6b2ebb2775cb334e7db9a44cdce1374eb7b5089: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -14711,6 +14711,8 @@ function concat(...parts) {
   }
   return out;
 }
+var OPSLIMIT = 3;
+var MEMLIMIT = 268435456;
 var ARGON2ID = {
   opsMin: 1,
   opsMax: 4,
@@ -14751,6 +14753,18 @@ async function unseal(data2, key) {
   if (data2.length < 24 + 16) return null;
   return box.open(data2.subarray(24), data2.subarray(0, 24), key);
 }
+async function encryptSeed(seed, passphrase, { opslimit = OPSLIMIT, memlimit = MEMLIMIT } = {}) {
+  if (passphrase === null || passphrase === void 0) return [
+    "none",
+    seed
+  ];
+  const salt = randomBytes(ARGON2ID.saltBytes);
+  const box = await seal(seed, await argon2id2(passphrase, salt, opslimit, memlimit));
+  return [
+    `argon2id-secretbox opslimit=${opslimit} memlimit=${memlimit} salt=${base64(salt)}`,
+    box
+  ];
+}
 function parameters(words2) {
   const out = {};
   for (const w of words2) {
@@ -14790,6 +14804,18 @@ var KINDS2 = [
   CURRENT,
   ROTATION
 ];
+async function fileText(head, key, owner, version, passphrase, cost) {
+  const [encryption, data2] = await encryptSeed(key.seed, passphrase, cost);
+  const lines2 = [
+    ...head,
+    `owner ${owner}`,
+    ...version ? [
+      `version v${version}`
+    ] : []
+  ];
+  lines2.push(`key ${key.did}`, `digest ${key.digest}`, `encryption ${encryption}`, `seed ${base64(data2)}`);
+  return lines2.join("\n") + "\n";
+}
 var SHEET_TITLE = "OpenSheaf rotation key";
 async function sheetCheck(seed) {
   return base32(await sha256(concat(utf8("opensheaf-rotation-key-check\n"), seed))).slice(0, 4).toUpperCase();
@@ -14844,6 +14870,22 @@ var Passkey = class {
     return `Passkey(${this.rp} ${this.cred})`;
   }
 };
+async function wrapsFor(dataKey2, passphrase, passkeys, { opslimit = OPSLIMIT, memlimit = MEMLIMIT } = {}) {
+  const salt = randomBytes(ARGON2ID.saltBytes);
+  const box = await seal(dataKey2, await argon2id2(passphrase, salt, opslimit, memlimit));
+  const out = [
+    `wrap passphrase argon2id opslimit=${opslimit} memlimit=${memlimit} salt=${base64(salt)} ${base64(box)}`
+  ];
+  for (const p of passkeys) out.push(await p.wrap(dataKey2));
+  return out;
+}
+async function envelope(seed, passphrase, passkeys = [], cost = {}) {
+  const dataKey2 = randomBytes(32);
+  return [
+    await wrapsFor(dataKey2, passphrase, passkeys, cost),
+    await seal(seed, dataKey2)
+  ];
+}
 function parseWrap(line) {
   const parts = line.split(/\s+/).filter(Boolean);
   if (parts.length < 4 || parts[0] !== "wrap") throw new KeyError(`a damaged lock of the key: '${line}'`);
@@ -14893,6 +14935,55 @@ async function openEnvelope(wraps, data2, passphrase = null, keks = null) {
   const seed = await unseal(data2, await dataKey(wraps, passphrase, keks));
   if (!seed) throw new KeyError("the seed of the key is damaged");
   return seed;
+}
+async function addPasskey(text3, passphrase, passkey, cost = {}) {
+  const lines2 = text3.split(/\r\n|\r|\n/);
+  if (lines2[lines2.length - 1] === "") lines2.pop();
+  const enc = lines2.findIndex((x) => x.startsWith("encryption "));
+  const seedAt = lines2.findIndex((x) => x.startsWith("seed "));
+  if (enc < 0 || seedAt < 0 || seedAt < enc) throw new KeyError("not a key file");
+  const method = lines2[enc].split(/\s+/).filter(Boolean)[1];
+  if (method === ENVELOPE) {
+    const key = await dataKey(wrapsOf(text3), passphrase);
+    let last = -1;
+    lines2.forEach((x, k) => {
+      if (x.startsWith("wrap ")) last = k;
+    });
+    lines2.splice(last + 1, 0, await passkey.wrap(key));
+  } else if (method === "none") {
+    throw new KeyError("this key is kept unencrypted: there is nothing to unlock");
+  } else {
+    let data2;
+    try {
+      data2 = strictBase64(lines2[seedAt].slice(5).trim());
+    } catch {
+      throw new KeyError("the seed of the key is damaged");
+    }
+    const seed = await decryptSeed(lines2[enc].slice("encryption ".length), data2, passphrase);
+    const [wraps, sealed] = await envelope(seed, passphrase, [
+      passkey
+    ], cost);
+    lines2.splice(enc, seedAt + 1 - enc, `encryption ${ENVELOPE}`, ...wraps, "seed " + base64(sealed));
+  }
+  return lines2.join("\n") + "\n";
+}
+async function keyFileText(key, owner, kind, version = null, passphrase = null, { passkeys = [], cost = {} } = {}) {
+  if (!KINDS2.includes(kind)) throw new KeyError(`a key is ${KINDS2.join(" or ")}`);
+  const head = [
+    KEY_FORMAT,
+    `kind ${kind}`
+  ];
+  if (passphrase === null || passphrase === void 0) return fileText(head, key, owner, version, null, cost);
+  const [wraps, data2] = await envelope(key.seed, passphrase, passkeys, cost);
+  const lines2 = [
+    ...head,
+    `owner ${owner}`,
+    ...version ? [
+      `version v${version}`
+    ] : []
+  ];
+  lines2.push(`key ${key.did}`, `digest ${key.digest}`, `encryption ${ENVELOPE}`, ...wraps, "seed " + base64(data2));
+  return lines2.join("\n") + "\n";
 }
 async function readKey(text3, passphrase = null, keks = null) {
   const lines2 = text3.split(/\r\n|\r|\n/);
@@ -15778,6 +15869,52 @@ var GitHubWallet = class {
     });
   }
 };
+async function putKey(wallet, owner, key, kind, version, passphrase, passkeys = [], cost = {}) {
+  if ((passphrase === null || passphrase === void 0) && kind === ROTATION) {
+    throw new WalletError("a rotation key is kept in a wallet only locked with a passphrase");
+  }
+  const text3 = await keyFileText(key, owner, kind, version, passphrase, {
+    passkeys,
+    cost
+  });
+  await wallet.write(owner, key.id, kind, text3);
+  if ((await wallet.read(owner, key.id, kind) || "").trim() !== text3.trim()) {
+    throw new WalletError(`${wallet.name} did not keep the ${kind} key ${key.did}`);
+  }
+}
+async function readAny(wallet, owner, kid) {
+  for (const kind of KINDS2) {
+    const t = await wallet.read(owner, kid, kind);
+    if (t) return t;
+  }
+  return "";
+}
+async function addPasskey2(wallet, owner, kid, passphrase, passkey, cost = {}) {
+  const text3 = await readAny(wallet, owner, kid);
+  const where2 = `${wallet.name} ${entryPath(owner, kid)}`;
+  let before, fresh, after;
+  try {
+    before = await readKey(text3, passphrase);
+    fresh = await addPasskey(text3, passphrase, passkey, cost);
+    after = await readKey(fresh, null, {
+      [passkey.cred]: passkey.kek
+    });
+  } catch (error) {
+    if (error instanceof KeyError) throw new WalletError(`${where2}: ${error.message}`);
+    throw error;
+  }
+  if (after.key.did !== before.key.did || after.kind !== before.kind) {
+    throw new WalletError(`${where2}: the key changed when the passkey lock was added`);
+  }
+  await wallet.write(owner, kid, before.kind, fresh);
+  if ((await wallet.read(owner, kid, before.kind) || "").trim() !== fresh.trim()) {
+    throw new WalletError(`${wallet.name} did not keep the ${before.kind} key ${before.key.did}`);
+  }
+  return [
+    before.kind,
+    before.key.did
+  ];
+}
 function describeEntry(text3) {
   const fields = {};
   for (const line of text3.split(/\r\n|\r|\n/)) {
@@ -21682,6 +21819,7 @@ function answerOf(result, creds = []) {
   ];
 }
 var POPUP = "popup";
+var POPUP_ENROLL = "popup-enroll";
 var UNLOCK_ORIGIN = new URL(UNLOCK_PAGE).origin;
 var POPUP_MESSAGES = {
   ready: "opensheaf-unlock-ready",
@@ -21689,19 +21827,26 @@ var POPUP_MESSAGES = {
   answer: "opensheaf-unlock-answer",
   done: "opensheaf-unlock-done"
 };
-function popupUrl(origin) {
+function popupMode(mode) {
+  if (mode !== POPUP && mode !== POPUP_ENROLL) throw new UnlockFailed(`not a mode of the popup: ${mode}`);
+  return mode;
+}
+function popupUrl(origin, mode = POPUP) {
   return UNLOCK_PAGE + "#" + new URLSearchParams({
-    mode: POPUP,
+    mode: popupMode(mode),
     origin
   }).toString();
 }
-async function popupRequest(owner, creds, pair = null, state = null) {
+async function popupRequest(owner, creds, pair = null, state = null, mode = POPUP) {
   if (!OWNER_NAME.test(owner || "")) throw new UnlockFailed(`not an owner name: ${owner}`);
-  if (!creds.length) throw new UnlockFailed("no passkey is enrolled for the keys of this owner (osheaf key enroll)");
+  if (!creds.length && popupMode(mode) === POPUP) {
+    throw new UnlockFailed("no passkey is enrolled for the keys of this owner (osheaf key enroll)");
+  }
   pair ||= await newKeyPair();
   state ||= randomState();
   return {
     owner,
+    mode,
     creds: [
       ...creds
     ],
@@ -21739,9 +21884,16 @@ async function openPopupAnswer(request, data2, typed) {
       fromB64url(data2.tag)
     ];
     fromB64url(data2.cred);
-    secret = await unseal2(request.pair, epk, ct, tag, request.state, POPUP, request.owner, data2.cred);
+    secret = await unseal2(request.pair, epk, ct, tag, request.state, request.mode || POPUP, request.owner, data2.cred);
   } catch {
     throw new UnlockFailed("the page sent a damaged answer");
+  }
+  if (request.mode === POPUP_ENROLL) {
+    if (request.creds.includes(data2.cred)) throw new UnlockFailed("the page sent no new credential");
+    return answerOf({
+      cred: data2.cred,
+      secret
+    });
   }
   return answerOf({
     cred: data2.cred,
@@ -21785,14 +21937,20 @@ async function signers(storage, env) {
   if (!latest) return {
     owner,
     dids: [],
-    threshold: 0
+    threshold: 0,
+    versions: {}
   };
+  const versions2 = {};
+  for (const did of latest.keys.keys) {
+    versions2[did] = log.side().find((v) => v.keys && (v.keys.keys || []).includes(did))?.number ?? null;
+  }
   return {
     owner,
     dids: [
       ...latest.keys.keys
     ],
-    threshold: latest.keys.threshold
+    threshold: latest.keys.threshold,
+    versions: versions2
   };
 }
 async function walletLocks(wallet, owner, dids) {
@@ -21875,6 +22033,154 @@ async function keyFromText(text3, { passphrase = null, owner = null } = {}) {
     kind: rk.kind,
     key: await sealedKey(rk.key)
   };
+}
+async function checkWallet(wallet) {
+  wallet.checkName();
+  const info = await wallet.api("GET", `repos/${wallet.repo}`);
+  if (info === null) {
+    throw new WalletError(`no repository ${wallet.repo} that this sign-in can reach: create it, private, and install the OpenSheaf app on it`);
+  }
+  if (info.private !== true || info.visibility !== "private") {
+    throw new WalletError(`${wallet.repo} is not a private repository: a wallet must be private`);
+  }
+  if (wallet.forbidden.has(String(info.full_name ?? wallet.repo).toLowerCase())) {
+    throw new WalletError(`${wallet.repo} is a repository of the archive, which is public: a wallet is a repository of its own`);
+  }
+  if (info.permissions && info.permissions.push !== true) {
+    throw new WalletError(`this sign-in cannot write to ${wallet.repo}`);
+  }
+  wallet.checked = true;
+  return info;
+}
+async function walletEntries(wallet, owner) {
+  const out = [];
+  for (const [o, kid] of await wallet.entries(owner)) {
+    const text3 = await readAny(wallet, o, kid);
+    if (text3) out.push({
+      kid,
+      text: text3,
+      fields: describeEntry(text3)
+    });
+  }
+  return out;
+}
+function passphraseConfirmed(entries) {
+  return !entries.some((e) => wrapsOf(e.text).length);
+}
+async function checkPassphrase(entries, passphrase, owner, walletName) {
+  const locked = entries.filter((e) => wrapsOf(e.text).length);
+  if (!locked.length) return;
+  try {
+    await readKey(locked[0].text, passphrase);
+  } catch (error) {
+    if (error instanceof KeyError) {
+      throw new WalletError(`${error.message}: this is not the passphrase of the keys of ${owner} in ${walletName}`);
+    }
+    throw error;
+  }
+}
+async function keyToPush(text3, { owner, dids }) {
+  const line = String(text3 ?? "").trim();
+  let key, of = owner;
+  if (/^[A-Za-z0-9+/]{43}=$/.test(line)) {
+    key = await Key.fromSeed(unbase64(line));
+  } else {
+    let rk;
+    try {
+      rk = await readKey(String(text3 ?? ""));
+    } catch (error) {
+      if (error instanceof PassphraseNeeded) {
+        throw new KeyError("this key is locked with a passphrase: give the key file of osheaf's key store, or the text of osheaf key export without --encrypt");
+      }
+      if (error instanceof KeyError) {
+        throw new KeyError(`not a key file of osheaf (${error.message}): give the file OWNER/K.key of its key store, or the text of osheaf key export`);
+      }
+      throw error;
+    }
+    if (rk.kind !== CURRENT) {
+      rk.key.seed?.fill(0);
+      throw new KeyError(`this is a ${rk.kind} key: only a current key is put in the wallet here`);
+    }
+    key = rk.key;
+    of = rk.owner;
+  }
+  if (of !== owner || !dids.includes(key.did)) {
+    key.seed.fill(0);
+    throw new KeyError(of !== owner ? `this key is of the owner ${of}, not of the archive's owner ${owner}` : `${key.did} is not a current key of the latest version of the owner's key log`);
+  }
+  return key;
+}
+async function pushKey(wallet, owner, key, version, passphrase, { cost = {} } = {}) {
+  if (await wallet.read(owner, key.id, CURRENT) !== null) return false;
+  await putKey(wallet, owner, key, CURRENT, version, passphrase, [], cost);
+  return true;
+}
+var encrypted = (text3) => text3.split(/\r\n|\r|\n/).some((x) => {
+  const p = x.split(/\s+/).filter(Boolean);
+  return x.startsWith("encryption ") && p[1] !== "none";
+});
+async function enrollPlan(wallet, owner, { newPasskey = false, entries = null } = {}) {
+  entries = (entries || await walletEntries(wallet, owner)).filter((e) => encrypted(e.text));
+  if (!entries.length) throw new WalletError(`the wallet ${wallet.name} holds no key of ${owner} locked with a passphrase`);
+  const salt = await passkeySalt(owner);
+  const ours = (text3) => passkeysOf(text3).filter((p) => sameBytes(p.salt, salt) && p.rp === PASSKEY_RP).map((p) => p.cred);
+  const known = [
+    ...new Set(entries.flatMap((e) => ours(e.text)))
+  ];
+  const fresh = Boolean(newPasskey) || !known.length;
+  const todo = fresh ? entries : entries.filter((e) => !passkeysOf(e.text).some((p) => known.includes(p.cred)));
+  return {
+    owner,
+    salt,
+    entries,
+    known,
+    fresh,
+    todo
+  };
+}
+async function openWithPassphrase(plan, passphrase, walletName) {
+  for (const e of plan.todo) {
+    try {
+      await readKey(e.text, passphrase);
+    } catch (error) {
+      if (error instanceof KeyError) throw new WalletError(`${walletName} ${e.kid}: ${error.message}: nothing was changed`);
+      throw error;
+    }
+  }
+}
+async function enrollPasskey(wallet, plan, passphrase, cred, prf, { cost = {}, progress = () => {
+} } = {}) {
+  if (plan.fresh && plan.known.includes(cred)) throw new WalletError("the page sent no new passkey: nothing was changed");
+  const kek = await passkeyKek(prf);
+  try {
+    if (!plan.fresh) {
+      let opens = false;
+      for (const e of plan.entries) {
+        if (!passkeysOf(e.text).some((p) => p.cred === cred)) continue;
+        try {
+          await readKey(e.text, null, {
+            [cred]: kek
+          });
+          opens = true;
+          break;
+        } catch (error) {
+          if (!(error instanceof KeyError)) throw error;
+        }
+      }
+      if (!opens) throw new WalletError("the passkey used does not open the keys it is enrolled for: nothing was changed");
+    }
+    const passkey = new Passkey(cred, plan.salt, {
+      kek
+    });
+    const done = [];
+    for (const e of plan.todo) {
+      done.push(await addPasskey2(wallet, plan.owner, e.kid, passphrase, passkey, cost));
+      progress(done.length, plan.todo.length);
+    }
+    return done;
+  } finally {
+    kek.fill(0);
+  }
 }
 function prefetched(path, size = null) {
   return size !== null && size < 4096 || path === "osheaf.json" || path === "opensheaf.json" || path.startsWith("collections/") || path.startsWith("templates/") || path.startsWith("ocfl/") && /\.(json|sha512)$/.test(path) || path.startsWith("ocfl/") && !path.includes("/content/");
@@ -22127,6 +22433,7 @@ export {
   OPERATIONS,
   PASSKEY_RP,
   POPUP,
+  POPUP_ENROLL,
   POPUP_MESSAGES,
   Problem,
   Stop,
@@ -22136,21 +22443,30 @@ export {
   WalletError,
   browserEnvironment,
   carryOut,
+  checkPassphrase,
+  checkWallet,
   confirmationCode,
   directWrite,
+  enrollPasskey,
+  enrollPlan,
   gitBlobSha,
   keyFromText,
+  keyToPush,
   oneCommit,
   openLocks,
   openPopupAnswer,
+  openWithPassphrase,
+  passphraseConfirmed,
   popupRequest,
   popupUrl,
   prefetched,
+  pushKey,
   readKey,
   sameCode,
   schemasOf,
   sealedKey,
   signers,
+  walletEntries,
   walletLocks
 };
 /*!

@@ -175,6 +175,11 @@ ol.progress > li.now { color: var(--os-ink); font-weight: 600; }
 .notice.signing p { margin: 0.4em 0; }
 details.how { margin-top: 0.3em; }
 details.how summary { cursor: pointer; }
+details.setup { margin-top: 0.6em; }
+details.setup > summary { font-weight: 600; }
+details.setup h4 { margin: 0.9em 0 0.2em; font-size: 1rem; }
+details.setup textarea { font-family: var(--os-mono); font-size: 0.85em; }
+details.setup input#setup-wallet { min-width: 18em; }
 input#unlock-code { width: 8em; font-size: 1.2em; letter-spacing: 0.1em; }
 
 /* the parts of the archive's page that fold (collections, papers), and the

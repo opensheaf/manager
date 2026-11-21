@@ -7,43 +7,7 @@ import assert from "node:assert/strict";
 import * as core from "../vendor/opensheaf-manager.js";
 import { unlockWithPopup, walletName, locksOf, Keys, github } from "../direct.js";
 
-const owner = "a".repeat(52);
-const cred = "Y3JlZGVudGlhbC1vZi10aGUtdGVzdHM";
-const subtle = globalThis.crypto.subtle;
-const enc = new TextEncoder();
-const b64url = (bytes) => Buffer.from(bytes).toString("base64url");
-
-// The unlock page's sealing (unlock-core.js), written again here.
-async function seal(secret, pkText, state, mode) {
-  const eph = await subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
-  const pk = Buffer.from(pkText, "base64url");
-  const peer = await subtle.importKey("raw", pk, { name: "X25519" }, false, []);
-  const shared = await subtle.deriveBits({ name: "X25519", public: peer }, eph.privateKey, 256);
-  const ikm = await subtle.importKey("raw", shared, "HKDF", false, ["deriveBits"]);
-  const both = new Uint8Array(await subtle.deriveBits({ name: "HKDF", hash: "SHA-256", salt: enc.encode(state),
-                                                        info: enc.encode("opensheaf unlock hand-off v2") }, ikm, 512));
-  const ct = secret.map((b, i) => b ^ both[i]);
-  const epk = new Uint8Array(await subtle.exportKey("raw", eph.publicKey));
-  const mac = await subtle.importKey("raw", both.slice(32), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const aad = enc.encode(`${mode}|${owner}|${cred}|${pkText}|${b64url(epk)}`);
-  const tag = new Uint8Array(await subtle.sign("HMAC", mac, new Uint8Array([...aad, ...ct])));
-  return { epk: b64url(epk), ct: b64url(ct), tag: b64url(tag) };
-}
-
-// The manager's window and the popup: what each posts, to which origin.
-function windows() {
-  const listeners = new Set();
-  const popup = { posted: [], closed: false, postMessage(message, origin) { this.posted.push({ message, origin }); },
-                  close() { this.closed = true; } };
-  const win = { location: { origin: "https://opensheaf.org" }, opened: [],
-                addEventListener: (t, f) => listeners.add(f), removeEventListener: (t, f) => listeners.delete(f) };
-  const open = (url) => { win.opened.push(url); return popup; };
-  const send = async (data, { origin = core.UNLOCK_ORIGIN, source = popup } = {}) => {
-    for (const f of [...listeners]) await f({ data, origin, source });
-    await new Promise((r) => setTimeout(r, 5));
-  };
-  return { win, popup, open, send, listeners };
-}
+import { seal, windows, owner, cred } from "./popup-double.mjs";
 
 test("the popup: opened at once, the request to the unlock page only, the answer opened with the code", async () => {
   const { win, popup, open, send, listeners } = windows();
@@ -52,7 +16,7 @@ test("the popup: opened at once, the request to the unlock page only, the answer
   let code = null;
   const got = unlockWithPopup({ win, open, prepare: async () => { prepared = true; return { owner, creds: [cred] }; },
                                 askCode: async () => code });
-  assert.deepEqual(win.opened, ["https://unlock.opensheaf.org/#mode=popup&origin=https%3A%2F%2Fopensheaf.org"]);
+  assert.deepEqual(win.opened, ["https://unlock.opensheaf.org/#mode=popup&origin=https%3A%2F%2Fmanager.opensheaf.org"]);
   await send({ type: "opensheaf-unlock-ready" }, { origin: "https://evil.example" });
   assert.deepEqual(popup.posted, []);
   await send({ type: "opensheaf-unlock-ready" });

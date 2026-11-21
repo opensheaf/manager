@@ -6,7 +6,7 @@
 > the latest draft.
 
 A page for keeping an [OpenSheaf](https://opensheaf.org) archive from the
-browser, at <https://opensheaf.org/manager/>. It works with archives made
+browser, at <https://manager.opensheaf.org/>. It works with archives made
 from the [archive template](https://github.com/opensheaf/archive-template),
 specification 0.2: set the archive up, deposit papers and new versions
 (also from arXiv, by their authors or with their permission), give notices
@@ -52,7 +52,42 @@ then the keys. The keys are kept in the page's memory only, as WebCrypto
 keys that cannot be exported, until the page is closed or locked ("Lock");
 they are never written to the browser's storage. The GitHub sign-in must
 be able to read the wallet: install the OpenSheaf app on the wallet's
-repository too (the page only reads it).
+repository too (the page only reads it, except to set it up, below).
+
+**Setting up a wallet from the page.** An owner whose current key is on
+one computer only, in `osheaf`'s key store, sets up the wallet under
+"Write directly", "Set up a key wallet", while the keys are locked:
+
+1. *The wallet*: a private repository of the person's, never the
+   archive's (a link opens GitHub's page to create it, filled in:
+   `owner`, `name=opensheaf-keys`, `visibility=private`, `description`,
+   the query parameters GitHub documents), added to the repositories of
+   the OpenSheaf app (a link to the installation's settings, which GitHub
+   gives the page, or to install the app). The page checks that the
+   repository is private, not the archive's, and that the sign-in can read
+   and write it; `osheaf key push` refuses a public repository too.
+2. *The current key*: the person picks the key file of `osheaf`'s key
+   store (`~/.config/opensheaf/keys/OWNER/K.key`, one line, the seed in
+   base64) or pastes it, or the text of `osheaf key export --stdout` when
+   the key is in the system's credential store. The page checks that it is
+   a current key of the owner's key log, asks the passphrase (twice, or
+   once when the wallet holds keys of the owner already, and checks it
+   against them), locks the key as `osheaf key push` does (the same file
+   `OWNER/K.key.enc`, the same commit message) and commits it with the
+   contents API; the seed is wiped once it is locked. A key already there
+   is left as it is.
+3. *The passkey*: as `osheaf key enroll`, every key of the owner in the
+   wallet is opened with the passphrase first; then the popup of
+   unlock.opensheaf.org, in the mode `popup-enroll`, creates a passkey for
+   `unlock.opensheaf.org` (excluding those the owner has) and seals its
+   secret to the page exactly as for `osheaf` (the mode in the
+   authenticated data); or, when a passkey of the owner opens some keys
+   already, the popup unlocks with it, as `osheaf key enroll` without
+   `--new-passkey` does. Each key gets one more lock, written and read
+   back.
+
+"Unlock with your passkey" then works as above, and `osheaf key pull` and
+`osheaf key unlock` take the same files.
 
 ## Requests to the workflow
 
@@ -91,6 +126,17 @@ an origin of its own, <https://unlock.opensheaf.org/> (repository
 are for `unlock.opensheaf.org`. `unlock.html` here only says so, runs no
 script, and tells the user of an older `osheaf` to update it.
 
+## Its own origin
+
+The page is served at `https://manager.opensheaf.org` (the file `CNAME`;
+GitHub Pages redirects `https://opensheaf.org/manager/` there). An origin
+of its own keeps the page apart from the other pages of the project's
+sites, the archives and collections served under `https://opensheaf.org/`
+among them: only this origin receives tokens from the sign-in service,
+and only it may open the passkey's popup (`POPUP_OPENERS` of the unlock
+page). Its fonts are those of opensheaf.org, which serves them to any
+origin.
+
 ## Signing in
 
 The page writes to the repository with the author's GitHub account:
@@ -100,7 +146,7 @@ The page writes to the repository with the author's GitHub account:
   tokens reach only the repositories where the author installed it, with
   permission to read and write their contents, and expire after eight hours
   (the page renews them). The service gives tokens only to pages at
-  `https://opensheaf.org`.
+  `https://manager.opensheaf.org`.
 - Or a **fine-grained personal access token**, limited to the archive's
   repository, with the permission *Contents: read and write*. This needs no
   service, and works from a copy of the page anywhere.
@@ -133,7 +179,8 @@ wallet: give it the wallet's repository too (Contents: read).
   while), so that the change shows at once.
 - `forms.js`: the forms, with the labels of the archive's issue forms.
 - `direct.js`: writing directly: the popup of the passkey, the keys of
-  the wallet, and an operation carried out and committed.
+  the wallet, setting the wallet up, and an operation carried out and
+  committed.
 - `pages.js`: after each commit, whether GitHub Pages has published the
   website yet: one file the commit wrote is fetched from the site until it
   is served as committed (the App cannot read Actions, so the site itself
@@ -172,10 +219,10 @@ dist/opensheaf-manager.js` here) when it changes. Tests of the parts that
 need no browser: `node --test tests/` (Node 22 or later); the popup is
 tested against doubles of the windows. To try the page locally, serve the
 folder (`python3 -m http.server 8000`) and sign in with a personal access
-token (the sign-in service answers only pages at `https://opensheaf.org`);
-the passkey's popup answers only pages at `https://opensheaf.org` too, so
-that writing directly is tried on the published page, or with
-`tools/live-test.mjs`:
+token (the sign-in service answers only pages at
+`https://manager.opensheaf.org`); the passkey's popup answers only that
+origin too, so that writing directly is tried on the published page, or
+with `tools/live-test.mjs`:
 
     GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key KEYFILE \
       --operation notice --fields '{"Label": "x", "Document version it is about": "1", "Text of the notice": "..."}'

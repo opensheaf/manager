@@ -331,6 +331,7 @@ function showSignIn() {
 async function showRepositories() {
   const { repos, installations } = await gh.repositories(await token());
   state.reachable = installations ? new Set(repos.map((r) => r.full_name.toLowerCase())) : null;
+  state.installations = installations;
   const select = el("select", { id: "repo", "aria-label": "Repository" },
     el("option", { value: "" }, "Choose the archive's repository"),
     repos.map((r) => el("option", { value: r.full_name, selected: r.full_name === repoInAddress() }, r.full_name)));
@@ -744,9 +745,181 @@ function signingPanel() {
           "here the code that window shows."),
         el("p", {}, "The wallet is a private repository of yours where ", el("code", {}, "osheaf key push"),
           " put the owner's current keys, and ", el("code", {}, "osheaf key enroll"), " your passkey; the OpenSheaf app must " +
-          "be installed on it too (the page only reads it)."))];
+          "be installed on it too (the page only reads it). Without one yet, set it up below.")),
+      setupPanel()];
   }
   return el("div", { class: `notice signing${!viaWf && unlocked() ? " ok" : ""}` }, modes, body);
+}
+
+// --- setting up a key wallet ---------------------------------------------------------
+
+// Folded under "Write directly" while the keys are locked: the wallet (a
+// private repository the person creates, with the app installed), the
+// owner's current key put there locked with the passphrase (as osheaf key
+// push), a passkey enrolled (as osheaf key enroll) in the popup of
+// unlock.opensheaf.org. The panel is kept across redrawings of the archive,
+// so that what is typed in it stays; secrets typed are cleared once used.
+const setup = { repo: null, node: null, state: null, busy: false };
+
+function setupPanel() {
+  if (setup.repo !== state.repo || !setup.node) {
+    Object.assign(setup, { repo: state.repo, state: null, busy: false });
+    setup.node = el("details", { class: "how setup" });
+    setup.node.addEventListener("toggle", () => { if (setup.node.open && !setup.body) renderSetup(); });
+    setup.body = null;
+    setup.node.append(el("summary", {}, "Set up a key wallet"));
+  }
+  return setup.node;
+}
+
+function installLink(walletOwner) {
+  const inst = (state.installations || []).find((i) => i.account && i.account.login.toLowerCase() === walletOwner.toLowerCase());
+  if (inst && inst.html_url) return inst.html_url;
+  return APP_SLUG ? `https://github.com/apps/${APP_SLUG}/installations/new` : "https://github.com/settings/installations";
+}
+
+const short = (did) => el("code", { title: did }, `${did.slice(8, 20)}...`);
+
+function renderSetup() {
+  const s = state.settings;
+  const named = direct.walletName(s);
+  const given = named || direct.walletName({}, pref(WALLET + s.owner)) || `github:${state.user ? state.user.login : "you"}/opensheaf-keys`;
+  const st = setup.state;
+  const walletInput = el("input", { id: "setup-wallet", value: given, "aria-label": "Key wallet", disabled: named ? true : undefined });
+  const name = () => direct.walletName({}, walletInput.value.trim());
+  const links = el("span", { class: "small" });
+  const drawLinks = () => {
+    const w = name();
+    links.replaceChildren(...(w ? [el("a", { href: direct.newRepositoryUrl(w), target: "_blank", rel: "noopener" }, "Create it on GitHub"),
+      " (private), then ", el("a", { href: installLink(w.slice(7).split("/")[0]), target: "_blank", rel: "noopener" },
+        "add it to the OpenSheaf app's repositories"), "."] : ["Name it github:OWNER/REPOSITORY."]));
+  };
+  walletInput.addEventListener("input", drawLinks);
+  drawLinks();
+  const busy = (b) => { setup.busy = b; setup.node.querySelectorAll("button").forEach((x) => { x.disabled = b; }); };
+  const check = async () => {
+    const w = name();
+    if (!w) { message("bad", "Name the wallet as github:OWNER/REPOSITORY."); return; }
+    busy(true);
+    message("info", `Checking ${w} ...`);
+    try {
+      const gh = ghCore();
+      state.signers ||= await direct.signersOf({ gh, repo: state.repo, cache: state.cache, settings: s });
+      setup.state = await direct.setupState({ gh, archiveRepo: state.repo, settings: s, wallet: w, signers: state.signers });
+      if (!named && pref(WALLET + s.owner) !== w) { pref(WALLET + s.owner, w); showArchive(); }
+      message("ok", `${w} is private, and this sign-in can read and write it.`);
+    } catch (e) {
+      setup.state = null;
+      message("bad", `The wallet ${w} cannot be used: ${e.message}.`);
+    } finally {
+      busy(false);
+      renderSetup();
+    }
+  };
+  const steps = [
+    el("p", {}, "The page puts the owner's current key in a key wallet, locked with a passphrase, and lets your passkey " +
+      "open it, as ", el("code", {}, "osheaf key push"), " and ", el("code", {}, "osheaf key enroll"), " do: the same files, " +
+      "which osheaf reads too. Each change is a commit to the wallet."),
+    el("h4", {}, "1. The wallet"),
+    el("p", {}, "A private repository of yours, never the archive's: "),
+    el("div", { class: "controls" }, walletInput, el("button", { onclick: check }, "Check the wallet")),
+    el("p", {}, links),
+  ];
+  if (st) {
+    const signers = state.signers;
+    steps.push(el("p", { class: "small" }, `${st.wallet.name}: holds ${st.there.length} of the ${signers.dids.length} current ` +
+      `key(s) of the owner`, st.there.length ? [" (", st.there.map((d, i) => [i ? ", " : "", short(d)]), ")"] : "",
+      `; ${st.enrolled.length} open(s) with a passkey.`));
+    steps.push(el("h4", {}, "2. The current key"));
+    if (!st.missing.length) {
+      steps.push(el("p", {}, "✓ The owner's current keys are in the wallet."));
+    } else {
+      const file = el("input", { type: "file", id: "setup-key-file", accept: ".key,.txt,text/plain", "aria-label": "Key file" });
+      const pasted = el("textarea", { id: "setup-key-text", rows: 2, spellcheck: "false", autocomplete: "off",
+                                      placeholder: "or paste the key here", "aria-label": "Key" });
+      const pass = el("input", { type: "password", id: "setup-pass", autocomplete: st.confirm ? "new-password" : "current-password",
+                                 "aria-label": "Passphrase", placeholder: "passphrase" });
+      const again = st.confirm ? el("input", { type: "password", id: "setup-pass-again", autocomplete: "new-password",
+                                              "aria-label": "Passphrase again", placeholder: "passphrase again" }) : null;
+      const put = async () => {
+        let text = pasted.value;
+        if (file.files && file.files[0]) text = await file.files[0].text();
+        if (!text.trim()) { message("bad", "Choose the key file, or paste the key."); return; }
+        if (!pass.value) { message("bad", "Type the passphrase that locks the key."); return; }
+        if (again && pass.value !== again.value) { message("bad", "The two passphrases differ."); return; }
+        busy(true);
+        message("info", "Locking the key with the passphrase and putting it in the wallet ...");
+        try {
+          const got = await direct.pushCurrentKey({ state: st, settings: s, signers: state.signers, keyText: text,
+                                                    passphrase: pass.value });
+          message("ok", got.put ? `The current key ${got.did.slice(8, 20)}... is in ${st.wallet.name}, locked with the passphrase.`
+                                : `The current key ${got.did.slice(8, 20)}... was in ${st.wallet.name} already: left as it is.`);
+          setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: state.repo, settings: s,
+                                                  wallet: st.wallet.name, signers: state.signers });
+        } catch (e) {
+          message("bad", `The key was not put in the wallet: ${e.message}.`);
+        } finally {
+          text = "";
+          pasted.value = "";
+          pass.value = "";
+          if (again) again.value = "";
+          try { file.value = ""; } catch (_) { /* some browsers */ }
+          busy(false);
+          renderSetup();
+        }
+      };
+      steps.push(
+        el("p", {}, "The key as ", el("code", {}, "osheaf"), " keeps it on your computer: the file ",
+          el("code", {}, `~/.config/opensheaf/keys/${s.owner.slice(0, 8)}.../K.key`), " (one line), or, if it is in your " +
+          "system's credential store, the text of ", el("code", {}, "osheaf key export --stdout"), ". It must be one of the " +
+          "current keys of the owner's key log. It is read in this page only, and its seed is wiped once it is locked."),
+        el("div", { class: "controls" }, file), pasted,
+        el("p", { class: "small" }, st.confirm ? "A new passphrase for the wallet, twice (keep it: osheaf asks it too)."
+          : "The passphrase of the keys already in the wallet (checked against them)."),
+        el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); put(); } },
+          pass, again, el("button", { type: "submit", class: "primary" }, "Put the key in the wallet")));
+    }
+    steps.push(el("h4", {}, "3. Your passkey"));
+    const plan = st.plans.enrolled;
+    if (!st.there.length) {
+      steps.push(el("p", { class: "muted" }, "Once the current key is in the wallet."));
+    } else if (plan && !plan.todo.length && st.enrolled.length >= state.signers.threshold) {
+      steps.push(el("p", {}, "✓ Your passkey opens the owner's keys in the wallet. Click ", el("strong", {}, "Unlock with your passkey"),
+        " above."));
+    } else {
+      const pass = el("input", { type: "password", id: "setup-enroll-pass", autocomplete: "current-password",
+                                 "aria-label": "Passphrase", placeholder: "passphrase of the wallet" });
+      const fresh = plan && plan.known.length ? el("input", { type: "checkbox", id: "setup-new-passkey" }) : null;
+      const enroll = () => {
+        if (!pass.value) { message("bad", "Type the passphrase of the keys in the wallet."); return; }
+        const passphrase = pass.value;
+        pass.value = "";
+        busy(true);
+        message("info", "Opening the keys with the passphrase; use your passkey in the window of unlock.opensheaf.org ...");
+        direct.enrollPasskey({ state: st, settings: s, passphrase, askCode, newPasskey: Boolean(fresh && fresh.checked) })
+          .then(async (done) => {
+            message("ok", done.length ? `Your passkey now opens ${done.length} key(s) of the owner in ${st.wallet.name}, ` +
+              "and the passphrase still does. Unlock with your passkey above." : "Every key there opens with your passkey already.");
+            setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: state.repo, settings: s,
+                                                    wallet: st.wallet.name, signers: state.signers });
+          })
+          .catch((e) => message("bad", `No passkey was enrolled: ${e.message}.`))
+          .finally(() => { busy(false); renderSetup(); });
+      };
+      steps.push(
+        el("p", {}, plan && plan.known.length
+          ? "A passkey of yours opens some keys of the owner already: it is used for the others (Touch ID, in a window " +
+            "of unlock.opensheaf.org)."
+          : "A passkey is created for unlock.opensheaf.org, named after the owner (Touch ID twice, in a window of " +
+            "unlock.opensheaf.org); you then type here the code it shows. The keys are opened with the passphrase first."),
+        fresh ? el("p", { class: "small" }, el("label", {}, fresh, " Create a new passkey instead (another device or provider)")) : null,
+        el("form", { class: "controls", onsubmit: (ev) => { ev.preventDefault(); enroll(); } },
+          pass, el("button", { type: "submit", class: "primary" }, plan && plan.known.length ? "Add your passkey" : "Create the passkey")));
+    }
+  }
+  setup.body = el("div", { class: "setup-body" }, steps);
+  setup.node.replaceChildren(setup.node.firstChild, setup.body);
+  if (setup.busy) busy(true);
 }
 
 // The code that the popup shows, typed here: the page opens the popup's

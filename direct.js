@@ -14,6 +14,13 @@
 // keys. The keys are kept in this page's memory only, as WebCrypto keys that
 // cannot be exported, until the page is closed or the person locks them;
 // they are never written to the browser's storage.
+//
+// Setting up a wallet (setupState, pushCurrentKey, enrollPasskey): the
+// person creates the private repository and installs the OpenSheaf app on
+// it; the page puts the owner's current key there, locked with the
+// passphrase, as osheaf key push does, and adds a passkey's lock to the
+// keys there, as osheaf key enroll does, the passkey created (or used) in
+// the popup of unlock.opensheaf.org; the files are those of osheaf.
 
 import * as core from "./vendor/opensheaf-manager.js";
 
@@ -78,11 +85,13 @@ export async function locksOf({ gh, archiveRepo, settings, wallet, signers }) {
 // request goes to it, to its origin only; its answer is taken from it only,
 // from its origin only; the person types the code the popup shows
 // (askCode), and the answer is opened with the code of this request only.
-// Gives [cred, secret], the secret of the passkey (32 bytes).
-export function unlockWithPopup({ prepare, askCode, win = window, open = null, timeout = 5 * 60_000 }) {
-  const popup = (open || ((url) => win.open(url, "opensheaf-unlock", POPUP_FEATURES)))(core.popupUrl(win.location.origin));
+// Gives [cred, secret], the secret of the passkey (32 bytes). MODE is
+// core.POPUP (unlock with one of creds) or core.POPUP_ENROLL (create a
+// passkey, creds excluded).
+export function unlockWithPopup({ prepare, askCode, win = window, open = null, timeout = 5 * 60_000, mode = core.POPUP }) {
+  const popup = (open || ((url) => win.open(url, "opensheaf-unlock", POPUP_FEATURES)))(core.popupUrl(win.location.origin, mode));
   if (!popup) return Promise.reject(new core.UnlockFailed("the browser blocked the window of the passkey: allow pop-ups for this page"));
-  const request = Promise.resolve().then(prepare).then(({ owner, creds }) => core.popupRequest(owner, creds));
+  const request = Promise.resolve().then(prepare).then(({ owner, creds }) => core.popupRequest(owner, creds, null, null, mode));
   request.catch(() => { try { popup.close(); } catch (_) { /* gone */ } });
   return new Promise((resolve, reject) => {
     let answered = false;
@@ -141,6 +150,90 @@ export async function unlock({ gh, archiveRepo, settings, wallet, signers, askCo
   });
   try {
     return await core.openLocks(locks, settings.owner, cred, secret);
+  } finally {
+    secret.fill(0);
+  }
+}
+
+// --- setting up a key wallet --------------------------------------------------
+
+// The page to create the wallet's repository, filled in (GitHub's documented
+// query parameters: owner, name, description, visibility).
+export function newRepositoryUrl(wallet) {
+  const [owner, name] = wallet.slice("github:".length).split("/");
+  const q = new URLSearchParams({ owner, name, visibility: "private",
+    description: "Key wallet of OpenSheaf owners (private: keys locked with a passphrase and passkeys)" });
+  return `https://github.com/new?${q.toString()}`;
+}
+
+function walletOf(gh, archiveRepo, wallet) {
+  return new core.GitHubWallet(wallet.slice("github:".length), { api: gh.api, fetch: gh.fetch, token: async () =>
+    (typeof gh.token === "function" ? gh.token() : gh.token) }, [archiveRepo]);
+}
+
+// Where the setup stands: the wallet checked (private, not the archive's,
+// readable and writable with this sign-in), the owner's keys there, which
+// current keys of the key log are there, and the passkeys that open them.
+// { wallet: GitHubWallet, entries, there: [did], missing: [did], enrolled:
+// [did], confirm: whether the passphrase is new (asked twice), plans: what
+// enrolling would do, with the passkey enrolled or with a new one (null when
+// no key there is locked with a passphrase) }.
+export async function setupState({ gh, archiveRepo, settings, wallet, signers }) {
+  const w = walletOf(gh, archiveRepo, wallet);
+  await core.checkWallet(w);
+  const entries = await core.walletEntries(w, settings.owner);
+  const current = entries.filter((e) => e.fields.kind === "current");
+  const there = signers.dids.filter((d) => current.some((e) => e.fields.key === d));
+  const locks = await core.walletLocks(w, settings.owner, signers.dids);
+  const plan = async (newPasskey) => {
+    try {
+      return await core.enrollPlan(w, settings.owner, { newPasskey, entries });
+    } catch (e) {
+      if (e instanceof core.WalletError) return null;
+      throw e;
+    }
+  };
+  return { wallet: w, entries, there, missing: signers.dids.filter((d) => !there.includes(d)),
+           enrolled: locks.filter((l) => l.creds.length).map((l) => l.did), confirm: core.passphraseConfirmed(entries),
+           plans: { enrolled: await plan(false), fresh: await plan(true) } };
+}
+
+// The current key given as text (the file OWNER/K.key of osheaf's key store,
+// or the text of osheaf key export), put in the wallet locked with the
+// passphrase, as osheaf key push puts it; its seed wiped after. Gives the
+// key's did:key and whether it was put (false: it was there already).
+export async function pushCurrentKey({ state, settings, signers, keyText, passphrase }) {
+  await core.checkPassphrase(state.entries, passphrase, settings.owner, state.wallet.name);
+  const key = await core.keyToPush(keyText, { owner: settings.owner, dids: signers.dids });
+  try {
+    const put = await core.pushKey(state.wallet, settings.owner, key, signers.versions?.[key.did] ?? null, passphrase);
+    return { did: key.did, put };
+  } finally {
+    key.seed.fill(0);
+  }
+}
+
+// A passkey's lock added to the owner's keys in the wallet, as osheaf key
+// enroll adds it: the keys opened with the passphrase first; a passkey
+// created in the popup (mode popup-enroll) when none is enrolled, or with
+// newPasskey; else the passkey enrolled already, unlocked in the popup. The
+// popup is opened at once, in the click (the plan is setupState's), and the
+// keys are opened with the passphrase meanwhile: a wrong passphrase closes
+// it, and changes nothing. Gives [[kind, did], ...], the keys that got the
+// lock ([] if none needed it).
+export async function enrollPasskey({ state, settings, passphrase, askCode, win, open, newPasskey = false }) {
+  const plan = newPasskey ? state.plans.fresh : state.plans.enrolled;
+  if (!plan) throw new core.WalletError(`the wallet ${state.wallet.name} holds no key of the owner locked with a passphrase`);
+  if (!plan.todo.length) return [];
+  const [cred, secret] = await unlockWithPopup({
+    win, open, askCode, mode: plan.fresh ? core.POPUP_ENROLL : core.POPUP,
+    prepare: async () => {
+      await core.openWithPassphrase(plan, passphrase, state.wallet.name);
+      return { owner: settings.owner, creds: plan.known };
+    },
+  });
+  try {
+    return await core.enrollPasskey(state.wallet, plan, passphrase, cred, secret);
   } finally {
     secret.fill(0);
   }

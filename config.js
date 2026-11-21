@@ -1,5 +1,6 @@
 // Settings of this page. The sign-in service gives tokens only to pages at
-// the origins on its list (https://opensheaf.org for the service below);
+// the origins on its list (https://manager.opensheaf.org for the service
+// below);
 // a copy of this page elsewhere uses a service of its own, or a personal
 // access token.
 export const SERVICE = "https://opensheaf-gh-auth.opensheaf.workers.dev";
