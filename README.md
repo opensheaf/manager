@@ -121,7 +121,10 @@ wallet: give it the wallet's repository too (Contents: read).
   its git name), and the other archives whose papers a collection holds.
 - `app.js`: the interface: signing in, choosing the repository, showing
   the archive, the key ceremony of a repository not set up, the forms,
-  sending requests and reading their answers.
+  sending requests and reading their answers; messages float at the top
+  right (a success for a few seconds, a refusal until closed), and the
+  Activity bar at the bottom says how the website and the requests are, and
+  opens on the requests and the history of messages.
 - `load.js`: reading the archive (`osheaf.json`, `opensheaf.json`, the
   collections' heads), where the site of a repository not set up will be
   served (as the template's setup finds it), and waiting for the answer to
@@ -134,7 +137,7 @@ wallet: give it the wallet's repository too (Contents: read).
 - `pages.js`: after each commit, whether GitHub Pages has published the
   website yet: one file the commit wrote is fetched from the site until it
   is served as committed (the App cannot read Actions, so the site itself
-  is watched); the page shows "rebuilding ..." and then "published in N s".
+  is watched).
 - `vendor/opensheaf-manager.js`: opensheaf-js's `web/manager.js`, bundled
   (`deno task bundle` in opensheaf-js), with the JSON Schemas and the
   default templates of the website; its first line names the commit of

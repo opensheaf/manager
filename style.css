@@ -138,7 +138,7 @@ th { color: var(--os-muted); font-size: 0.7rem; font-weight: 600; text-transform
   border-top: 1px solid var(--os-ink); border-bottom-color: var(--os-ink); }
 td.actions { white-space: nowrap; }
 td.actions button { margin: 0 0.2em 0.2em 0; }
-section.collection { padding: 0.8em 0; border-bottom: 1px solid var(--os-rule); }
+details.collection { padding: 0.6em 0; border-bottom: 1px solid var(--os-rule); }
 ol.members { margin: 0.3em 0; padding-left: 1.4em; font-size: 0.92rem; }
 li::marker { color: var(--os-faint); }
 
@@ -166,11 +166,76 @@ ol.progress > li.now { color: var(--os-ink); font-weight: 600; }
 .notice.signing input#wallet { min-width: 18em; }
 input#unlock-code { width: 8em; font-size: 1.2em; letter-spacing: 0.1em; }
 
-/* the website being published by GitHub Pages after a commit (pages.js) */
-.pages { margin: -0.4em 0 1em; font-size: 0.85rem; color: var(--os-muted); }
-.pages.published { color: var(--os-ok); }
-.pages .spinner { display: inline-block; width: 0.8em; height: 0.8em; margin-right: 0.5em; vertical-align: -0.05em;
+/* the parts of the archive's page that fold (collections, papers), and the
+   compact lists */
+.list-tools { display: flex; justify-content: flex-end; margin: 1.2em 0 -0.6em; }
+details.block > summary, details.collection > summary { cursor: pointer; list-style: none; }
+details.block > summary::-webkit-details-marker, details.collection > summary::-webkit-details-marker { display: none; }
+details.block > summary h3, details.collection > summary h4 { display: inline; }
+details.block > summary::before, details.collection > summary::before {
+  content: ""; display: inline-block; width: 0.45em; height: 0.45em; margin: 0 0.6em 0.15em 0.1em;
+  border-right: 1.5px solid var(--os-muted); border-bottom: 1.5px solid var(--os-muted); transform: rotate(-45deg);
+  transition: transform 0.15s; }
+details[open].block > summary::before, details[open].collection > summary::before { transform: rotate(45deg); }
+details.block > summary { margin: 1.6em 0 0.6em; }
+details.block > summary h3 { margin: 0; }
+.count { font-weight: 400; }
+.compact details.collection { padding: 0.3em 0; }
+.compact details.collection > summary h4 { font-size: 0.95rem; }
+.compact table.papers td { padding-top: 0.25em; padding-bottom: 0.25em; }
+.compact table.papers td[data-title] { max-width: 0; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.compact table.papers th:last-child, .compact table.papers td.actions { width: 1%; }
+@media (hover: hover) and (pointer: fine) {
+  .compact table.papers td.actions button { visibility: hidden; }
+  .compact table.papers tr:hover td.actions button,
+  .compact table.papers tr:focus-within td.actions button { visibility: visible; }
+}
+
+/* messages: a pane floating at the top right */
+.toast { position: fixed; top: 1rem; right: 1rem; z-index: 30; width: min(26rem, calc(100vw - 2rem));
+  max-height: 60vh; overflow: auto; }
+.toast .notice { margin: 0; padding-right: 2.4em; position: relative; border: 1px solid var(--os-rule);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); animation: toast-in 0.18s ease-out; }
+.toast .close, .toast .notice > .close { position: absolute; top: 0.35em; right: 0.45em; border: none; background: none;
+  font-size: 1.2rem; line-height: 1; padding: 0.1em 0.3em; color: var(--os-muted); }
+.toast .close:hover { color: var(--os-ink); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-6px); } }
+
+/* Activity: a bar fixed at the bottom of the page, opening on a panel */
+body.with-dock main { padding-bottom: 5rem; }
+body.with-dock footer.site { padding-bottom: 4rem; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--os-surface);
+  border-top: 1px solid var(--os-rule); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08); }
+.dock-bar { display: flex; align-items: center; gap: 0.8em; width: 100%; max-width: 50rem; margin: 0 auto;
+  padding: 0.5em 16px; border: none; border-radius: 0; background: none; text-align: left; font-size: 0.82rem;
+  color: var(--os-muted); }
+.dock-title { font-weight: 600; color: var(--os-ink); }
+.dock-status { display: flex; align-items: center; gap: 0.6em; flex: 0 1 auto; white-space: nowrap; }
+.dock-status .chip { margin: 0; }
+.dock-last { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-last .bad { color: var(--os-bad); }
+.site.published { color: var(--os-ok); }
+.site.late { color: var(--os-warn); }
+.caret { width: 0.45em; height: 0.45em; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-135deg); margin-top: 0.3em; transition: transform 0.15s; flex: none; }
+.dock.open .caret { transform: rotate(45deg); margin-top: -0.2em; }
+.dock-panel { max-width: 50rem; margin: 0 auto; padding: 0 16px 0.8em; max-height: 55vh; overflow: auto; }
+.dock-panel h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--os-muted);
+  margin: 0.8em 0 0.2em; }
+.history { list-style: none; margin: 0; padding: 0; font-size: 0.85rem; }
+.history li { border-bottom: 1px solid var(--os-rule); }
+.history button.again { display: block; width: 100%; text-align: left; border: none; border-radius: 0;
+  background: none; padding: 0.35em 0; color: var(--os-ink); }
+.history button.again:hover { background: var(--os-paper); }
+.history button.bad { color: var(--os-bad); }
+.history button.warn { color: var(--os-warn); }
+.spinner { display: inline-block; width: 0.8em; height: 0.8em; vertical-align: -0.05em;
   border: 2px solid var(--os-rule); border-top-color: var(--os-muted); border-radius: 50%;
-  animation: pages-spin 0.9s linear infinite; }
-@keyframes pages-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pages .spinner { animation: none; } }
+  animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner, .toast .notice { animation: none; } }
+@media (max-width: 40rem) {
+  .dock-last { display: none; }
+  .toast { top: auto; bottom: 3.2rem; right: 0.5rem; left: 0.5rem; width: auto; }
+}
+@media print { .toast, .dock { display: none; } }

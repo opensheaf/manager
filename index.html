@@ -28,12 +28,23 @@
   <code>osheaf</code> carries it out on the command line, signed with your keys, which your passkey
   unlocks, and committed to the archive's repository; or it is sent as a request to the archive's own
   workflow.</p>
-  <div id="message"></div>
-  <div id="pages"></div>
   <section id="account"><noscript><p>The manager is a JavaScript application.</p></noscript></section>
   <section id="archive"></section>
   <section id="form"></section>
 </main>
+<div id="toast" class="toast" aria-live="polite" hidden></div>
+<aside id="dock" class="dock" aria-label="Activity" hidden>
+  <button id="dock-bar" class="dock-bar" type="button" aria-expanded="false" aria-controls="dock-panel">
+    <span class="dock-title">Activity</span>
+    <span id="dock-status" class="dock-status"></span>
+    <span id="dock-last" class="dock-last"></span>
+    <span class="caret" aria-hidden="true"></span>
+  </button>
+  <div id="dock-panel" class="dock-panel" hidden>
+    <section><h3>Requests</h3><div id="requests"></div></section>
+    <section><h3>Messages</h3><ol id="history" class="history"></ol></section>
+  </div>
+</aside>
 <footer class="site">
   <p><strong>Draft.</strong> OpenSheaf 0.2 is a draft specification: until version 1.0, a revision may
   change the format in incompatible ways.</p>

@@ -23,6 +23,11 @@ const $ = (sel) => document.querySelector(sel);
 const KEY = "opensheaf-manager-auth";
 const VIA_WORKFLOW = "opensheaf-manager-via-workflow";
 const WALLET = "opensheaf-manager-wallet:";
+const COMPACT = "opensheaf-manager-compact";
+const FOLDED = "opensheaf-manager-folded:";
+const compact = () => pref(COMPACT) === "yes";
+// collections opened or closed by hand in this tab, kept when the page is drawn again
+const collectionOpen = new Map();
 
 // Preferences kept in this browser (never keys, never tokens): whether to
 // send requests to the workflow rather than write directly, and the name of
@@ -86,40 +91,149 @@ function show(target, ...nodes) {
   t.replaceChildren(...nodes.flat(Infinity).filter(Boolean));
 }
 
+// --- messages: a floating pane, and the history under Activity -------------------
+
+// A message floats at the top right, wherever the page is scrolled: progress
+// ("info") until replaced, a success for a few seconds (held while the
+// pointer is over it), a warning or a refusal until closed. Every message but
+// progress goes to the history in the Activity panel, from where it can be
+// shown again (its own nodes, so its buttons still work).
+const TOAST_MS = { ok: 8000 };
+const toast = { timer: null, kind: "" };
+const history = [];
+
 function message(kind, ...content) {
-  show("#message", content.length ? el("div", { class: `notice ${kind}`, role: "status" }, ...content) : null);
+  clearTimeout(toast.timer);
+  const box = $("#toast");
+  if (!content.length) { box.replaceChildren(); box.hidden = true; toast.kind = ""; return; }
+  showToast(kind, content);
+  if (kind !== "info") {
+    history.unshift({ kind, content, at: new Date() });
+    history.length = Math.min(history.length, 50);
+    showHistory();
+  }
+}
+
+function showToast(kind, content) {
+  clearTimeout(toast.timer);
+  const box = $("#toast");
+  const close = el("button", { class: "close", type: "button", "aria-label": "Close",
+                               title: "Close (it stays in the history, under Activity)", onclick: () => message("info") }, "×");
+  box.replaceChildren(el("div", { class: `notice ${kind}`, role: kind === "bad" ? "alert" : "status" }, close, ...content));
+  box.hidden = false;
+  toast.kind = kind;
+  const ms = TOAST_MS[kind];
+  if (ms) {
+    const later = () => { toast.timer = setTimeout(() => message("info"), ms); };
+    box.onmouseenter = () => clearTimeout(toast.timer);
+    box.onmouseleave = later;
+    box.onfocusin = () => clearTimeout(toast.timer);
+    later();
+  } else {
+    box.onmouseenter = box.onmouseleave = box.onfocusin = null;
+  }
+}
+
+const clock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+function showHistory() {
+  show("#history", history.length ? history.map((h) => el("li", {},
+    el("button", { type: "button", class: `again ${h.kind}`, title: "Show it again",
+                   onclick: () => showToast(h.kind, h.content) },
+      el("span", { class: "small muted" }, clock(h.at)), " ",
+      h.content.map((c) => (c instanceof Node ? c.textContent : String(c))).join(" ").slice(0, 140))))
+    : el("li", { class: "muted" }, "No messages yet."));
+  const last = history[0];
+  show("#dock-last", last ? el("span", { class: `last ${last.kind}` },
+    (last.content.map((c) => (c instanceof Node ? c.textContent : String(c))).join(" ")).slice(0, 90)) : null);
+}
+
+// --- Activity: a bar at the bottom of the page ---------------------------------
+
+// The bar says how the website is (being rebuilt, published), how many
+// requests wait, and the last message; it opens, on hover or on a click, a
+// panel with the requests and the history of messages. A click keeps it open
+// until clicked again (or Escape).
+const dock = { pinned: false, hoverTimer: null };
+
+function setDock(open, pinned = dock.pinned) {
+  dock.pinned = open && pinned;
+  $("#dock-panel").hidden = !open;
+  $("#dock-bar").setAttribute("aria-expanded", String(open));
+  $("#dock").classList.toggle("open", open);
+}
+
+function initDock() {
+  const d = $("#dock"), bar = $("#dock-bar");
+  bar.addEventListener("click", () => setDock(!(dock.pinned && !$("#dock-panel").hidden) , true));
+  const fine = window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+  if (fine) {
+    d.addEventListener("mouseenter", () => {
+      clearTimeout(dock.hoverTimer);
+      dock.hoverTimer = setTimeout(() => { if ($("#dock-panel").hidden) setDock(true, false); }, 250);
+    });
+    d.addEventListener("mouseleave", () => {
+      clearTimeout(dock.hoverTimer);
+      if (!dock.pinned) dock.hoverTimer = setTimeout(() => setDock(false), 400);
+    });
+  }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#dock-panel").hidden) setDock(false); });
+  showHistory();
+}
+
+function showDock(visible) {
+  $("#dock").hidden = !visible;
+  document.body.classList.toggle("with-dock", visible);
+  if (!visible) setDock(false);
+}
+
+// The website part of the bar, and the requests waiting.
+const site = { kind: "", text: null };
+function showDockStatus() {
+  const waiting = state.pending.size;
+  show("#dock-status",
+    site.text ? el("span", { class: `site ${site.kind}` }, site.text) : null,
+    waiting ? el("span", { class: "chip warn" }, `${waiting} request${waiting > 1 ? "s" : ""} waiting`) : null);
 }
 
 // --- the website being published ----------------------------------------------
 
-// After a commit, GitHub Pages rebuilds the archive's website: a line under
-// the messages says so, with the time taken, until the site serves the
-// commit (pages.js). Only the latest commit of the archive open is watched.
+// After a commit, GitHub Pages rebuilds the archive's website: the Activity
+// bar says so, with the time taken, until the site serves the commit
+// (pages.js); then a message says it is published. Only the latest commit of
+// the archive open is watched.
 let watching = 0;
 
 function watchSite(repo, sha) {
   const n = ++watching;
   const base = state.settings && state.settings.baseUrl;
-  const site = () => /^https:\/\//.test(base || "") ? el("a", { href: base }, "the website") : "the website";
-  const line = (kind, ...content) => show("#pages", el("p", { class: `pages ${kind}`, role: "status" }, ...content));
+  const link = () => /^https:\/\//.test(base || "") ? el("a", { href: base }, "the website") : "the website";
+  const set = (kind, ...text) => { site.kind = kind; site.text = text.length ? text : null; showDockStatus(); };
   token().then((t) => watchPages({
     token: t, repo, sha, baseUrl: base,
     stop: () => n !== watching || state.repo !== repo,
     onState: ({ state: s, seconds }) => {
-      if (s === "publishing") line("publishing", el("span", { class: "spinner", "aria-hidden": "true" }),
-        `GitHub Pages is rebuilding `, site(), ` with commit ${sha.slice(0, 7)} ... ${seconds} s`);
-      else if (s === "published") line("published", "\u2713 The changes are on ", site(),
-        `: GitHub Pages published commit ${sha.slice(0, 7)} in ${seconds} s.`);
-      else if (s === "late") line("late", `${sha.slice(0, 7)} is not on `, site(), ` after ${Math.round(seconds / 60)} minutes: see `,
-        el("a", { href: `https://github.com/${repo}/actions` }, "the repository's Actions"), " (pages build and deployment).");
-      else show("#pages");
+      if (s === "publishing") set("publishing", el("span", { class: "spinner", "aria-hidden": "true" }),
+        `Website: rebuilding with ${sha.slice(0, 7)} ... ${seconds} s`);
+      else if (s === "published") {
+        set("published", `✓ Website up to date (${sha.slice(0, 7)}, published in ${seconds} s)`);
+        // said as a message too, unless one that needs reading is shown
+        if (!["bad", "warn", "info"].includes(toast.kind) || $("#toast").hidden) {
+          message("ok", el("p", {}, "✓ The changes are on ", link(), `: GitHub Pages published commit ${sha.slice(0, 7)} in ${seconds} s.`));
+        }
+      } else if (s === "late") {
+        set("late", `Website: ${sha.slice(0, 7)} not published after ${Math.round(seconds / 60)} min`);
+        message("warn", el("p", {}, `Commit ${sha.slice(0, 7)} is not on `, link(), ` after ${Math.round(seconds / 60)} minutes: see `,
+          el("a", { href: `https://github.com/${repo}/actions` }, "the repository's Actions"), " (pages build and deployment)."));
+      } else set("");
     },
-  })).catch(() => show("#pages"));
+  })).catch(() => set(""));
 }
 
 function stopWatchingSite() {
   watching++;
-  show("#pages");
+  site.kind = ""; site.text = null;
+  showDockStatus();
 }
 
 // --- signing in ----------------------------------------------------------------
@@ -170,6 +284,7 @@ function signOut() {
   setRepoInAddress("");
   show("#archive");
   show("#form");
+  showDock(false);
   showSignIn();
 }
 
@@ -252,6 +367,8 @@ async function openArchive(repo) {
   if (state.repo !== repo) {
     state.pending.clear();
     stopWatchingSite();
+    history.length = 0;
+    showHistory();
     state.cache = new Map();
     state.signers = null;
   }
@@ -485,25 +602,16 @@ function showArchive() {
       el("button", { class: "primary", onclick: () => openForm("deposit") }, "Deposit a paper"),
       el("button", { onclick: () => openForm("arxiv") }, "Deposit from arXiv"),
       el("button", { onclick: () => openForm("new_collection") }, "Create a collection")),
-    el("h3", {}, "Papers"),
-    docs().length ? el("table", {},
-      el("tr", {}, el("th", {}, "Label"), el("th", {}, "Title"), el("th", {}, "")),
-      docs().map((o) => el("tr", {},
-        el("td", {}, el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: uri(o), "data-line": `${o.name}:${o.owner}` },
-             el("code", {}, o.label)),
-           o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
-        el("td", { "data-title": o.label }, ""),
-        el("td", { class: "actions" },
-          el("button", { class: "small", onclick: () => openForm("deposit", { "Label": o.label, "This deposit": NEW_VERSION }) }, "New version"),
-          el("button", { class: "small", onclick: () => openForm("notice", { "Label": o.label }) }, "Notice"),
-          el("button", { class: "small", onclick: () => openForm("relicense", { "Label": o.label }) }, "Licence"),
-          o.status === "withdrawn" ? null :
-            el("button", { class: "small", onclick: () => openForm("withdraw", { "Label": o.label }) }, "Withdraw")))))
-      : el("p", { class: "muted" }, "No papers yet."),
-    el("h3", {}, "Collections"),
-    state.collections.length ? state.collections.map((c) => el("section", { class: "collection" },
-      el("h4", {}, c.title, " ", el("span", { class: "chip" }, c.type || "collection"),
-         s.index && s.index.html && s.index.html.featured === c.label ? el("span", { class: "chip ok" }, "featured") : null),
+    el("div", { class: "list-tools" },
+      el("button", { type: "button", class: "small", "aria-pressed": String(compact()),
+                     title: "One line per paper and per collection; a collection's members shown when it is opened",
+                     onclick: () => { pref(COMPACT, compact() ? "" : "yes"); showArchive(); } },
+         compact() ? "Show the lists in full" : "Compact lists")),
+    block("collections", "Collections", state.collections.length,
+        state.collections.length ? state.collections.map((c) => el("details", { class: "collection", open: collectionOpen.has(c.label) ? collectionOpen.get(c.label) : !compact() },
+      el("summary", { onclick: (e) => collectionOpen.set(c.label, !e.currentTarget.parentNode.open) }, el("h4", {}, c.title, " ", el("span", { class: "chip" }, c.type || "collection"),
+         s.index && s.index.html && s.index.html.featured === c.label ? el("span", { class: "chip ok" }, "featured") : null,
+         el("span", { class: "small muted count" }, ` ${c.members.length} member${c.members.length === 1 ? "" : "s"}`))),
       el("p", { class: "small muted" }, el("a", { href: explorerLink(s.baseUrl, { line: c.label, kind: "collection" }),
                                                   title: uri(c), "data-line": `${c.name}:${c.owner}` },
          el("code", {}, c.label))),
@@ -522,11 +630,37 @@ function showArchive() {
           el("button", { class: "small", onclick: () => openForm("vet", { "In collection": c.label }) }, "Vet a new version") : null,
         c.members.length ?
           el("button", { class: "small", onclick: () => openForm("remove", { "In collection": c.label }) }, "Remove a member") : null)))
-      : el("p", { class: "muted" }, "No collections yet."),
-    el("h3", {}, "Requests"),
-    el("div", { id: "requests" }));
+      : el("p", { class: "muted" }, "No collections yet.")),
+    block("papers", "Papers", docs().length,
+        docs().length ? el("table", { class: "papers" },
+      el("tr", {}, el("th", {}, "Label"), el("th", {}, "Title"), el("th", {}, "")),
+      docs().map((o) => el("tr", {},
+        el("td", {}, el("a", { href: explorerLink(s.baseUrl, { line: o.label }), title: uri(o), "data-line": `${o.name}:${o.owner}` },
+             el("code", {}, o.label)),
+           o.status === "withdrawn" ? el("span", { class: "chip bad" }, "withdrawn") : null),
+        el("td", { "data-title": o.label }, ""),
+        el("td", { class: "actions" },
+          el("button", { class: "small", onclick: () => openForm("deposit", { "Label": o.label, "This deposit": NEW_VERSION }) }, "New version"),
+          el("button", { class: "small", onclick: () => openForm("notice", { "Label": o.label }) }, "Notice"),
+          el("button", { class: "small", onclick: () => openForm("relicense", { "Label": o.label }) }, "Licence"),
+          o.status === "withdrawn" ? null :
+            el("button", { class: "small", onclick: () => openForm("withdraw", { "Label": o.label }) }, "Withdraw")))))
+      : el("p", { class: "muted" }, "No papers yet.")));
   show("#archive", parts);
+  $("#archive").classList.toggle("compact", compact());
+  showDock(true);
   showResults();
+}
+
+// A part of the archive's page (collections, papers) that can be folded; how
+// it was left is kept in this browser.
+function block(id, title, count, content) {
+  const key = `${FOLDED}${id}`;
+  const d = el("details", { class: "block", id: `block-${id}`, open: pref(key) !== "yes" },
+    el("summary", {}, el("h3", {}, title, " ", el("span", { class: "small muted count" }, String(count)))),
+    content);
+  d.addEventListener("toggle", () => pref(key, d.open ? "" : "yes"));
+  return d;
 }
 
 // --- signing in this page ---------------------------------------------------------
@@ -869,11 +1003,13 @@ async function showResults() {
     }
   } catch (_) { /* results are a convenience */ }
   show(box, nodes.length ? nodes : [el("p", { class: "muted" }, "No requests yet.")]);
+  showDockStatus();
 }
 
 // --- start ---------------------------------------------------------------------
 
 async function start() {
+  initDock();
   try { state.auth = JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch (_) { state.auth = null; }
   if (state.auth) {
     try { await afterSignIn(); return; }
