@@ -102,9 +102,12 @@ export function unlockWithPopup({ prepare, askCode, win = window, open = null, t
   const popup = (open || ((url) => win.open(url, "opensheaf-unlock", POPUP_FEATURES)))(core.popupUrl(win.location.origin, mode));
   if (!popup) return Promise.reject(new core.UnlockFailed("the browser blocked the window of the passkey: allow pop-ups for this page"));
   const request = Promise.resolve().then(prepare).then(({ owner, creds }) => core.popupRequest(owner, creds, null, null, mode));
-  request.catch(() => { try { popup.close(); } catch (_) { /* gone */ } });
   return new Promise((resolve, reject) => {
     let answered = false, lastStatus = "";
+    // a request that cannot be prepared (a wrong passphrase, a wallet not
+    // readable) ends it at once with its own error, and closes the popup:
+    // never reported as "the window was closed"
+    request.catch((e) => finish(e));
     const finish = (error, value) => {
       win.removeEventListener("message", onMessage);
       clearInterval(watch);
@@ -248,7 +251,12 @@ export async function enrollPasskey({ state, settings, passphrase, askCode, win,
   const [cred, secret] = await unlockWithPopup({
     win, open, askCode, mode: plan.fresh ? core.POPUP_ENROLL : core.POPUP,
     prepare: async () => {
-      await core.openWithPassphrase(plan, passphrase, state.wallet.name);
+      try {
+        await core.openWithPassphrase(plan, passphrase, state.wallet.name);
+      } catch (e) {
+        if (e instanceof core.WalletError) throw new core.WalletError(`the wallet's passphrase does not open the keys: ${e.message}`);
+        throw e;
+      }
       return { owner: settings.owner, creds: plan.known };
     },
   });

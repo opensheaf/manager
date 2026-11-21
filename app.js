@@ -836,7 +836,7 @@ function renderSetup() {
       const file = el("input", { type: "file", id: "setup-key-file", accept: ".key,.txt,text/plain", "aria-label": "Key file" });
       const pasted = el("textarea", { id: "setup-key-text", rows: 2, spellcheck: "false", autocomplete: "off",
                                       placeholder: "or paste the key here", "aria-label": "Key" });
-      const pass = el("input", { type: "password", id: "setup-pass", autocomplete: st.confirm ? "new-password" : "current-password",
+      const pass = el("input", { type: "password", id: "setup-pass", name: "wallet-passphrase-push", autocomplete: "new-password",
                                  "aria-label": "Passphrase", placeholder: "passphrase" });
       const again = st.confirm ? el("input", { type: "password", id: "setup-pass-again", autocomplete: "new-password",
                                               "aria-label": "Passphrase again", placeholder: "passphrase again" }) : null;
@@ -908,7 +908,10 @@ function renderSetup() {
       steps.push(el("p", {}, "✓ Your passkey opens the owner's keys in the wallet. Click ", el("strong", {}, "Unlock with your passkey"),
         " above."));
     } else {
-      const pass = el("input", { type: "password", id: "setup-enroll-pass", autocomplete: "current-password",
+      // new-password and a name of its own: browsers fill a current-password
+      // field with a saved password, which is not the wallet's
+      const pass = el("input", { type: "password", id: "setup-enroll-pass", name: "wallet-passphrase-enroll",
+                                 autocomplete: "new-password",
                                  "aria-label": "Passphrase", placeholder: "passphrase of the wallet" });
       const fresh = plan && plan.known.length ? el("input", { type: "checkbox", id: "setup-new-passkey" }) : null;
       const enroll = () => {
@@ -964,7 +967,7 @@ function newKeyForm(st) {
                                   placeholder: "passphrase of the files", hidden: true });
   const otherPass = el("input", { type: "checkbox", id: "setup-rotation-other",
                                   onchange: () => { filesPass.hidden = !otherPass.checked; if (!otherPass.checked) filesPass.value = ""; } });
-  const pass = el("input", { type: "password", id: "setup-new-pass", autocomplete: st.confirm ? "new-password" : "current-password",
+  const pass = el("input", { type: "password", id: "setup-new-pass", name: "wallet-passphrase-newkey", autocomplete: "new-password",
                              "aria-label": "Passphrase", placeholder: "passphrase" });
   const again = st.confirm ? el("input", { type: "password", id: "setup-new-pass-again", autocomplete: "new-password",
                                           "aria-label": "Passphrase again", placeholder: "passphrase again" }) : null;

@@ -109,3 +109,12 @@ test("the popup's failures: said when its window is closed, from the popup only;
                  error: "the window was closed after: InvalidStateError: excluded" });
   assert.match(String(await q), /the window was closed after: InvalidStateError: excluded/);
 });
+
+test("a request that cannot be prepared ends with its own error, not as a window closed", async () => {
+  const w = windows();
+  const p = unlockWithPopup({ win: w.win, open: w.open, askCode: async () => "",
+                             prepare: async () => { throw new Error("the wallet's passphrase does not open the keys"); } });
+  await assert.rejects(p, /the wallet's passphrase does not open the keys/);
+  assert.ok(w.popup.closed);
+  assert.equal(w.listeners.size, 0);
+});
