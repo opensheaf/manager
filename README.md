@@ -131,6 +131,10 @@ wallet: give it the wallet's repository too (Contents: read).
 - `forms.js`: the forms, with the labels of the archive's issue forms.
 - `direct.js`: writing directly: the popup of the passkey, the keys of
   the wallet, and an operation carried out and committed.
+- `pages.js`: after each commit, whether GitHub Pages has published the
+  website yet: one file the commit wrote is fetched from the site until it
+  is served as committed (the App cannot read Actions, so the site itself
+  is watched); the page shows "rebuilding ..." and then "published in N s".
 - `vendor/opensheaf-manager.js`: opensheaf-js's `web/manager.js`, bundled
   (`deno task bundle` in opensheaf-js), with the JSON Schemas and the
   default templates of the website; its first line names the commit of

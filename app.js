@@ -17,6 +17,7 @@ import { readArchive, headFiles, awaitRequest } from "./load.js";
 import { render } from "./markdown.js";
 import { tokenSource } from "./session.js";
 import * as direct from "./direct.js";
+import { watchPages } from "./pages.js";
 
 const $ = (sel) => document.querySelector(sel);
 const KEY = "opensheaf-manager-auth";
@@ -87,6 +88,38 @@ function show(target, ...nodes) {
 
 function message(kind, ...content) {
   show("#message", content.length ? el("div", { class: `notice ${kind}`, role: "status" }, ...content) : null);
+}
+
+// --- the website being published ----------------------------------------------
+
+// After a commit, GitHub Pages rebuilds the archive's website: a line under
+// the messages says so, with the time taken, until the site serves the
+// commit (pages.js). Only the latest commit of the archive open is watched.
+let watching = 0;
+
+function watchSite(repo, sha) {
+  const n = ++watching;
+  const base = state.settings && state.settings.baseUrl;
+  const site = () => /^https:\/\//.test(base || "") ? el("a", { href: base }, "the website") : "the website";
+  const line = (kind, ...content) => show("#pages", el("p", { class: `pages ${kind}`, role: "status" }, ...content));
+  token().then((t) => watchPages({
+    token: t, repo, sha, baseUrl: base,
+    stop: () => n !== watching || state.repo !== repo,
+    onState: ({ state: s, seconds }) => {
+      if (s === "publishing") line("publishing", el("span", { class: "spinner", "aria-hidden": "true" }),
+        `GitHub Pages is rebuilding `, site(), ` with commit ${sha.slice(0, 7)} ... ${seconds} s`);
+      else if (s === "published") line("published", "\u2713 The changes are on ", site(),
+        `: GitHub Pages published commit ${sha.slice(0, 7)} in ${seconds} s.`);
+      else if (s === "late") line("late", `${sha.slice(0, 7)} is not on `, site(), ` after ${Math.round(seconds / 60)} minutes: see `,
+        el("a", { href: `https://github.com/${repo}/actions` }, "the repository's Actions"), " (pages build and deployment).");
+      else show("#pages");
+    },
+  })).catch(() => show("#pages"));
+}
+
+function stopWatchingSite() {
+  watching++;
+  show("#pages");
 }
 
 // --- signing in ----------------------------------------------------------------
@@ -218,6 +251,7 @@ async function openArchive(repo) {
   if (!gh.isRepo(repo)) { message("bad", `${repo} is not a repository's name (owner/repository).`); return; }
   if (state.repo !== repo) {
     state.pending.clear();
+    stopWatchingSite();
     state.cache = new Map();
     state.signers = null;
   }
@@ -615,6 +649,7 @@ async function writeDirectly(name, fields, files, typed, what) {
     return;
   }
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
+  watchSite(repo, res.commit.sha);
   show("#form");
   try {
     const a = await readArchive(await token(), repo, { ref: res.commit.sha });
@@ -771,6 +806,7 @@ async function poll(id) {
   if (done) {
     state.pending.delete(id);
     // the archive could not be read at that commit: read it as on opening
+    if (done.ref) watchSite(repo, done.ref);
     if (done.archive) refreshArchive(repo, done.archive, done.ref);
     else await openArchive(repo);
     if (state.repo === repo) message(done.result.ok ? "ok" : "bad", render(done.result.message), correctButton(id, done.result));

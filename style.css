@@ -165,3 +165,12 @@ ol.progress > li.now { color: var(--os-ink); font-weight: 600; }
 .notice.signing .controls { margin: 0.4em 0; }
 .notice.signing input#wallet { min-width: 18em; }
 input#unlock-code { width: 8em; font-size: 1.2em; letter-spacing: 0.1em; }
+
+/* the website being published by GitHub Pages after a commit (pages.js) */
+.pages { margin: -0.4em 0 1em; font-size: 0.85rem; color: var(--os-muted); }
+.pages.published { color: var(--os-ok); }
+.pages .spinner { display: inline-block; width: 0.8em; height: 0.8em; margin-right: 0.5em; vertical-align: -0.05em;
+  border: 2px solid var(--os-rule); border-top-color: var(--os-muted); border-radius: 50%;
+  animation: pages-spin 0.9s linear infinite; }
+@keyframes pages-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pages .spinner { animation: none; } }
