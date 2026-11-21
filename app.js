@@ -135,6 +135,10 @@ function showToast(kind, content) {
   }
 }
 
+// The text of a message's content (nodes, strings, lists, nulls), for one line.
+const textOf = (content) => [content].flat(Infinity).filter((c) => c !== null && c !== undefined && c !== false)
+  .map((c) => (c instanceof Node ? c.textContent : String(c))).join(" ").replace(/\s+/g, " ").trim();
+
 const clock = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 function showHistory() {
@@ -142,11 +146,11 @@ function showHistory() {
     el("button", { type: "button", class: `again ${h.kind}`, title: "Show it again",
                    onclick: () => showToast(h.kind, h.content) },
       el("span", { class: "small muted" }, clock(h.at)), " ",
-      h.content.map((c) => (c instanceof Node ? c.textContent : String(c))).join(" ").slice(0, 140))))
+      textOf(h.content).slice(0, 140))))
     : el("li", { class: "muted" }, "No messages yet."));
   const last = messageLog[0];
   show("#dock-last", last ? el("span", { class: `last ${last.kind}` },
-    (last.content.map((c) => (c instanceof Node ? c.textContent : String(c))).join(" ")).slice(0, 90)) : null);
+    textOf(last.content).slice(0, 90)) : null);
 }
 
 // --- Activity: a bar at the bottom of the page ---------------------------------
@@ -926,7 +930,7 @@ async function sendRequest(name, fields, files, typed, what) {
     message("info", "Sending the request ...");
     await gh.commitFiles(await token(), state.repo, gh.buildRequest(id, name, fields, files),
                          `Request ${id}: ${what}`);
-    state.pending.set(id, { what, since: Date.now() });
+    state.pending.set(id, { what, since: Date.now() }); showDockStatus();
     state.sent.set(id, { name, values: typed });
     show("#form");
     message("info", `Sent: ${what}. The archive's workflow carries it out in a minute or two; ` +
@@ -948,7 +952,7 @@ async function poll(id) {
   const done = await awaitRequest(token, repo, id, { stop: () => state.repo !== repo });
   if (state.repo !== repo) return;
   if (done) {
-    state.pending.delete(id);
+    state.pending.delete(id); showDockStatus();
     // the archive could not be read at that commit: read it as on opening
     if (done.ref) watchSite(repo, done.ref);
     if (done.archive) refreshArchive(repo, done.archive, done.ref);
@@ -974,7 +978,7 @@ async function resumePending(repo) {
       const form = r && FORMS[r.operation];
       const what = form ? `${form.title}${subject(r.operation, r.fields || {}) ? `: ${subject(r.operation, r.fields || {})}` : ""}`
                         : `request ${d.name}`;
-      state.pending.set(d.name, { what, since: Date.now() });
+      state.pending.set(d.name, { what, since: Date.now() }); showDockStatus();
       poll(d.name);
     }
     if (dirs.length) showResults();
