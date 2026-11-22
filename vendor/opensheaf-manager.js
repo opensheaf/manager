@@ -1,4 +1,4 @@
-// opensheaf-js 01d13a982bde63b18b2d92b6d0555d1341745175: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js a3aebf6bb38694f449ba5b7f3c1117b5d8e6767e: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -1583,6 +1583,7 @@ var init_schema = __esm({
     patterns = /* @__PURE__ */ new Map();
     SCHEMA_FILES = {
       "opensheaf-archive/0.2": "opensheaf-archive-0.2.schema.json",
+      "opensheaf-objects/0.2": "opensheaf-objects-0.2.schema.json",
       "opensheaf-object/0.2": "opensheaf-object-0.2.schema.json",
       "opensheaf-collection/0.2": "opensheaf-collection-0.2.schema.json",
       "opensheaf-genesis/0.2": "opensheaf-genesis-0.2.schema.json",
@@ -2437,6 +2438,7 @@ var init_archive = __esm({
         const disc = parseJson(await http.cached(where2, options), where2);
         if (!isObject(disc)) throw new FetchError("json", where2, "is not a JSON object");
         const archive = new _Archive(http, base, disc);
+        if (!archive.old && Object.hasOwn(disc, "objectPages")) await archive.loadPages(options);
         if (!archive.old) {
           const ids = [
             ...archive.objects().map((o) => o.id),
@@ -2466,9 +2468,12 @@ var init_archive = __esm({
         this.lines = /* @__PURE__ */ new Map();
         this.lister = null;
       }
+      listed() {
+        if (Array.isArray(this.paged)) return this.paged;
+        return Array.isArray(this.disc.objects) ? this.disc.objects : [];
+      }
       objects() {
-        const list2 = Array.isArray(this.disc.objects) ? this.disc.objects : [];
-        return list2.filter((o) => isObject(o) && isObjectId(o.id) && !parseId(o.id).draft);
+        return this.listed().filter((o) => isObject(o) && isObjectId(o.id) && !parseId(o.id).draft);
       }
       entry(id) {
         return this.objects().find((o) => o.id === id) || null;
@@ -2489,6 +2494,33 @@ var init_archive = __esm({
       }
       byLabel(label) {
         return this.objects().find((o) => o.label === label)?.id ?? null;
+      }
+      async loadPages(options = {}) {
+        const ok = (path) => typeof path === "string" && path.endsWith(".json") && !path.startsWith("/") && !path.includes("\\") && !path.split("/")[0].includes(":") && path.split("/").every((x) => x !== "" && x !== "." && x !== "..");
+        this.pages = [];
+        this.pageProblems = [];
+        const entries = [];
+        for (const path of Array.isArray(this.disc.objectPages) ? this.disc.objectPages : []) {
+          if (!ok(path)) {
+            this.pageProblems.push(`${JSON.stringify(path)} is not the path of a page below the discovery document (section 3.1)`);
+            continue;
+          }
+          let page;
+          try {
+            page = parseJson(await this.http.cached(this.base + path, options), this.base + path);
+          } catch (error) {
+            if (error?.kind === "aborted") throw error;
+            this.pageProblems.push(error?.kind === "not-found" ? `the page of objects ${path} is missing (section 3.1)` : `the page of objects ${path} is not JSON`);
+            continue;
+          }
+          this.pages.push({
+            path,
+            page
+          });
+          if (isObject(page) && Array.isArray(page.objects)) entries.push(...page.objects);
+          else this.pageProblems.push(`${path} is not a page of objects (section 3.1)`);
+        }
+        this.paged = entries;
       }
       where(id) {
         const parts = parseId(id);
@@ -2555,13 +2587,6 @@ var init_archive = __esm({
       }
       async sidecar(id, ver, options = {}) {
         return sidecarDigest(await this.sidecarBytes(id, ver, options)) ?? "";
-      }
-      async pin(id, ver, options = {}) {
-        const digest = await sha512(await this.inventoryBytes(id, ver, options));
-        if (await this.sidecar(id, ver, options) !== digest) {
-          throw new FetchError("digest", this.inventoryUrl(id, ver), "the inventory does not match its checksum file");
-        }
-        return digest;
       }
       fileUrl(id, inv, ver, logical) {
         const cp = contentPath(inv, ver, logical);
@@ -8624,7 +8649,16 @@ var init_folder = __esm({
         this.archive.profiles ??= [];
         this.archive.contact ??= this.archive.baseUrl;
         this.index = cfg.index || {};
-        this.labels = new Map((disc.objects || []).filter((o) => o.label).map((o) => [
+        let listed = Array.isArray(disc.objects) ? disc.objects : [];
+        if (Object.hasOwn(disc, "objectPages")) {
+          const paged = new Archive(new Http({
+            fetch: storageFetch(this.storage, ORIGIN),
+            budget: null
+          }), ORIGIN, disc);
+          await paged.loadPages();
+          listed = paged.pageProblems.length ? [] : paged.listed();
+        }
+        this.labels = new Map(listed.filter((o) => o && typeof o === "object" && o.label).map((o) => [
           o.label,
           o.id
         ]));
@@ -9160,9 +9194,52 @@ async function writeIndexes(f) {
 }
 async function writeDiscovery(f) {
   await writeIndexes(f);
-  await f.storage.write("opensheaf.json", jsonBytes(await discovery(f)));
+  let doc = await discovery(f);
+  const pages = objectPages(doc.objects);
+  const stale = (await f.storage.list(OBJECT_PAGES) || []).filter((e) => e.kind === "file" && e.name.endsWith(".json") && !Object.hasOwn(pages, `${OBJECT_PAGES}/${e.name}`));
+  for (const e of stale) await f.storage.remove(`${OBJECT_PAGES}/${e.name}`);
+  if (await f.storage.kind(OBJECT_PAGES) === "dir" && !(await f.storage.list(OBJECT_PAGES) || []).length) {
+    await f.storage.remove(OBJECT_PAGES);
+  }
+  if (Object.keys(pages).length) {
+    for (const [path, entries] of Object.entries(pages)) {
+      await f.storage.write(path, jsonBytes({
+        format: "opensheaf-objects/0.2",
+        objects: entries
+      }));
+    }
+    doc = Object.fromEntries(Object.entries(doc).map(([k, v]) => k === "objects" ? [
+      "objectPages",
+      Object.keys(pages)
+    ] : [
+      k,
+      v
+    ]));
+  }
+  await f.storage.write("opensheaf.json", jsonBytes(doc));
 }
-var INDEXES, INDEX_FORMAT, INDEX_KEY;
+function objectPages(objs) {
+  if (objs.length <= PAGING.perPage) return {};
+  let groups;
+  for (let k = 1; k < 53; k++) {
+    groups = /* @__PURE__ */ new Map();
+    for (const o of objs) {
+      const p = o.name.slice(0, k);
+      if (!groups.has(p)) groups.set(p, []);
+      groups.get(p).push(o);
+    }
+    if (Math.max(...[
+      ...groups.values()
+    ].map((g) => g.length)) <= PAGING.perPage) break;
+  }
+  return Object.fromEntries([
+    ...groups.keys()
+  ].sort(compareText).map((p) => [
+    `${OBJECT_PAGES}/${p}.json`,
+    groups.get(p)
+  ]));
+}
+var INDEXES, INDEX_FORMAT, INDEX_KEY, OBJECT_PAGES, PAGING;
 var init_discovery = __esm({
   "core/discovery.js"() {
     init_names();
@@ -9180,6 +9257,10 @@ var init_discovery = __esm({
       names: "name",
       owners: "owner",
       sha512: "inventorySha512"
+    };
+    OBJECT_PAGES = "objects";
+    PAGING = {
+      perPage: 1e3
     };
   }
 });
@@ -9285,9 +9366,23 @@ function setDate(dc, dateType, date2, info = null) {
     entry
   ];
 }
-function landingUrl(f, label) {
-  if (f.index.html || f.index.template) return `${f.archive.baseUrl}paper/${label}/`;
-  return `${f.archive.baseUrl}site/${label}/${label}.html`;
+async function nameAddress(f, id, originator = null) {
+  const [, name2, owner] = id.split(":");
+  if (originator === null) {
+    originator = owner;
+    try {
+      const dir = await f.dirOf(id);
+      const inv = await f.inventory(dir);
+      const g = inv ? await f.readLogical(dir, inv, GENESIS2, "v1") : null;
+      if (g) originator = JSON.parse(new TextDecoder().decode(g)).originator ?? owner;
+    } catch {
+      originator = owner;
+    }
+  }
+  return originator === owner ? name2 : `${name2}-${owner}`;
+}
+async function landingUrl(f, id, originator = null) {
+  return `${f.archive.baseUrl}paper/${await nameAddress(f, id, originator)}/`;
 }
 async function docVersionOf(f, dir, inv, ver) {
   return (await f.readObjectJson(dir, inv, OBJ2, ver)).documentVersion;
@@ -9378,8 +9473,7 @@ async function deposit(f, a) {
     docVersion = most + 1;
     owner = prevObj.owner;
   }
-  if (a.created && a.available) exit("give --created (a version not public at the time) or --available, not both");
-  const available = a.created ? null : a.available || f.env.today();
+  const available = a.available || f.env.today();
   const issued = a.issued || (prevDc ? dateOf(prevDc, "Issued") : null) || available;
   const source = a.source || null;
   if (source && suffixOf(source.name) === ".tm" && !a.pdf) {
@@ -9423,12 +9517,12 @@ async function deposit(f, a) {
     publisher: {
       name: f.archive.name
     },
-    publicationYear: Number((issued || a.created).slice(0, 4)),
+    publicationYear: Number(issued.slice(0, 4)),
     types: {
       resourceTypeGeneral: a.type || "Preprint"
     },
     version: String(docVersion),
-    url: landingUrl(f, label),
+    url: null,
     dates: [],
     language: a.language || "en",
     formats,
@@ -9439,8 +9533,8 @@ async function deposit(f, a) {
   }));
   else if (prevDc?.subjects?.length) datacite.subjects = prevDc.subjects;
   if (issued) setDate(datacite, "Issued", issued);
-  if (available) setDate(datacite, "Available", available, a.dateInfo);
-  else setDate(datacite, "Created", a.created, a.dateInfo);
+  setDate(datacite, "Available", available, a.created ? null : a.dateInfo);
+  if (a.created) setDate(datacite, "Created", a.created, a.dateInfo);
   if (abstract) datacite.descriptions = [
     {
       description: abstract,
@@ -9449,7 +9543,6 @@ async function deposit(f, a) {
   ];
   const related = relatedFromArgs(a.related);
   if (related.length) datacite.relatedIdentifiers = related;
-  if (draft) delete datacite.url;
   const obj = {
     format: OBJ_FORMAT,
     specification: SPEC,
@@ -9482,7 +9575,7 @@ async function deposit(f, a) {
   if (a.agreement) {
     obj.agreement = {
       by: datacite.creators.map((c) => c.name),
-      date: available || a.created || f.env.today(),
+      date: available,
       method: a.agreement
     };
   }
@@ -9516,7 +9609,12 @@ async function deposit(f, a) {
   } else {
     files.set(GENESIS2, await f.readLogical(dir, inv, GENESIS2));
   }
-  if (!draft) obj.name = id.split(":")[1];
+  if (!draft) {
+    obj.name = id.split(":")[1];
+    datacite.url = await landingUrl(f, id);
+  } else {
+    delete datacite.url;
+  }
   if (prevObj?.parent) {
     obj.parent = prevObj.parent;
     const state = inv.versions[inv.head].state;
@@ -10084,6 +10182,7 @@ async function takedown(f, args) {
     reason: args.reason.trim()
   };
   await writeIndexes(f);
+  const home = await nameAddress(f, id);
   const label = f.labelOf(id);
   if (label) f.labels.delete(label);
   const cfg = await readJson(f.storage, CONFIG_NAME);
@@ -10092,6 +10191,7 @@ async function takedown(f, args) {
   };
   const gone = Object.keys(former).filter((a) => former[a] === id);
   for (const folder of [
+    `paper/${home}`,
     `paper/${label || name2}`,
     `site/${label || name2}`,
     ...gone.filter((a) => LABEL.test(a)).map((a) => `site/${a}`)
@@ -10119,6 +10219,7 @@ var init_takedown = __esm({
     init_discovery();
     init_folder();
     init_describe();
+    init_deposit();
   }
 });
 
@@ -10259,6 +10360,10 @@ var init_resolve = __esm({
           const opening = Archive.open(this.http, base, options).then((archive) => {
             if (archive.old || archive.disc.specification !== "0.2") {
               this.note("warning", `unavailable: ${where2}: not an archive of specification 0.2`);
+              return null;
+            }
+            if (archive.pageProblems?.length) {
+              this.note("warning", `unavailable: ${where2}: ${archive.pageProblems[0]}`);
               return null;
             }
             return archive;
@@ -10431,6 +10536,18 @@ var init_resolve = __esm({
             this.note("warning", `${w}: ${id}: not a copy of the line: ${problem}`);
             continue;
           }
+          if (archive !== this.home) {
+            for (const v of line.versions) {
+              if (!v.digest) continue;
+              const sc = await archive.sidecar(id, v.ver, options).catch((error) => {
+                if (error?.kind === "aborted") throw error;
+                return "";
+              });
+              if (sc !== v.digest) {
+                this.note("warning", `${w}: ${id} ${v.ver}: the checksum file of its inventory is missing, or does not state its digest (section 12.3)`);
+              }
+            }
+          }
           out.push(new Copy(w, archive, line));
         }
         if (out.length && await this.tombstoned(id, where2, options)) {
@@ -10469,6 +10586,10 @@ var init_resolve = __esm({
         }
         const copies = await this.copies(name2, owner, where2, options);
         const n = isVersion(version) ? versionNumber(version) : 0;
+        for (const c of copies) {
+          const d = n ? c.digest(n) : null;
+          if (d && d !== digest) this.note("warning", `${c.where}: ${objectId(name2, owner)} ${version} does not match the pin (section 12.3)`);
+        }
         for (const c of copies) {
           if (n && c.digest(n) === digest) return found(MEMBER_STATUS[c.status(n)] || "not a version", c, version, digest, copies);
         }
@@ -17893,7 +18014,7 @@ async function pinned(r, name2, owner, u, places, kind, revisions = []) {
   }
   return founds;
 }
-function describeCollection(f, title, description, version, issued, members, label = null) {
+function describeCollection(f, title, description, version, issued, members, url = null) {
   const cur = f.archive.curator;
   const creator2 = {
     name: cur.name,
@@ -17934,7 +18055,7 @@ function describeCollection(f, title, description, version, issued, members, lab
       }
     ]
   };
-  if (label) dc.url = landingUrl(f, label);
+  if (url) dc.url = url;
   if (description) dc.descriptions = [
     {
       description,
@@ -17998,7 +18119,7 @@ async function write(f, collId, mem, { message: message2, title = null, descript
     ],
     [
       "datacite.json",
-      jsonBytes(describeCollection(f, title, description, version, issued, mem.members, label))
+      jsonBytes(describeCollection(f, title, description, version, issued, mem.members, label ? await landingUrl(f, collId) : null))
     ]
   ]);
   const obj = {
@@ -19481,13 +19602,8 @@ function lastPin(m) {
     p.pin
   ];
 }
-async function pageAddress(f, id, ids = null) {
-  const label = f.labelOf(id);
-  if (label) return label;
-  const [, name2, owner] = id.split(":");
-  ids ??= (await f.objects()).map((o) => o.id);
-  const same2 = ids.filter((i) => typeof i === "string" && i.startsWith(`sheaf:${name2}:`));
-  return same2.length <= 1 ? name2 : `${name2}-${owner}`;
+async function pageAddress(f, id) {
+  return f.labelOf(id) || nameAddress(f, id);
 }
 var Site = class {
   constructor(f, { keeperFetch = null, home = true } = {}) {
@@ -19497,7 +19613,6 @@ var Site = class {
     this.keepers = /* @__PURE__ */ new Map();
     this.keeperFetch = keeperFetch;
     this.remotes = /* @__PURE__ */ new Map();
-    this.ids = null;
     this.http = new Http({
       fetch: f.env.fetch,
       budget: null
@@ -19521,8 +19636,8 @@ var Site = class {
     const f = this.f;
     const [, name2, owner] = id.split(":");
     const inv = await f.inventory(dir);
-    this.ids ??= (await f.objects()).map((o) => o.id);
-    const slug = await pageAddress(f, id, this.ids);
+    const slug = await pageAddress(f, id);
+    const home = await nameAddress(f, id);
     let originator = null;
     try {
       const g = await f.readLogical(dir, inv, GENESIS2, "v1");
@@ -19539,6 +19654,7 @@ var Site = class {
       dir,
       inv,
       slug,
+      home,
       originator,
       statuses: read.statuses,
       signed: read.latest,
@@ -19880,8 +19996,13 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
         html_link: htmlLink
       });
     }
-    await f.storage.write(`paper/${line.slug}/index.html`, new TextEncoder().encode(page));
-    written.push(line.slug);
+    for (const address of /* @__PURE__ */ new Set([
+      line.home,
+      line.slug
+    ])) {
+      await f.storage.write(`paper/${address}/index.html`, new TextEncoder().encode(page));
+      written.push(address);
+    }
     const lastmod = line.inv.versions[line.inv.head].created.slice(0, 10);
     urls.push([
       `${base}paper/${line.slug}/`,
@@ -21357,9 +21478,12 @@ function descriptionErrors(inv, ver, obj, dc) {
     if (!Object.hasOwn(dc, k)) out.push(`datacite.json lacks ${k}`);
   }
   for (const r of Array.isArray(dc.rightsList) ? dc.rightsList : []) {
-    const rights = typeof r?.rights === "string" ? r.rights.toLowerCase() : "";
-    if (r?.rightsIdentifier == null && (rights.startsWith("creative") || rights.startsWith("arxiv")) && !r?.rightsUri) {
-      out.push("licence without SPDX identifier and without rightsUri");
+    const ident = r?.rightsIdentifier;
+    if (ident == null) continue;
+    if (r?.rightsIdentifierScheme !== "SPDX") {
+      out.push(`rightsList: ${ident} is not given as an SPDX identifier (section 4.4)`);
+    } else if (String(ident) !== String(ident).toLowerCase()) {
+      out.push(`rightsList: ${ident} is not in lower case (section 4.4)`);
     }
   }
   const notes = [
@@ -21771,6 +21895,8 @@ var Verification = class {
   async run() {
     const a = this.archive;
     this.schema("opensheaf.json", a.disc, "archive");
+    for (const problem of a.pageProblems || []) this.add("error", "opensheaf.json", problem);
+    for (const { path, page } of a.pages || []) this.schema(path, page, "objects");
     await this.storageRoot();
     const ids = [
       ...a.objects().map((o) => o.id),
@@ -22485,7 +22611,7 @@ var Verification = class {
     const a = this.archive;
     const disc = a.disc;
     const listed = /* @__PURE__ */ new Map();
-    for (const e of Array.isArray(disc.objects) ? disc.objects : []) {
+    for (const e of a.listed()) {
       if (!isObject(e)) continue;
       if (listed.has(e.id)) this.add("error", "opensheaf.json", `lists ${this.where(e.id)} twice`);
       listed.set(e.id, e);
@@ -22744,16 +22870,13 @@ var Verification = class {
       const pin = pins[pins.length - 1]?.pin || "";
       if (!page.includes(pin.slice(0, 32))) this.add(level2, "index.html", `does not show the pin of ${m?.name}` + note);
       if (!this.found.has(mid)) continue;
-      const same2 = [
-        ...this.found.keys()
-      ].filter((i) => i.startsWith(`sheaf:${m.name}:`)).length;
-      const landing = `paper/${a.labelOf(mid) || (same2 <= 1 ? m.name : `${m.name}-${m.owner}`)}/index.html`;
+      const originator = this.found.get(mid).rec?.originator === m.owner;
+      const landing = `paper/${originator ? m.name : `${m.name}-${m.owner}`}/index.html`;
       const text3 = await this.fetchOrNull(a.base + landing, LIMITS.page).catch((e) => {
         if (this.aborted(e)) throw e;
         return null;
       });
       const words2 = text3 ? new TextDecoder().decode(text3) : "";
-      const originator = this.found.get(mid).rec?.originator === m.owner;
       if (originator ? !new RegExp(`sheaf:${m.name}(?![a-z0-9:/])`).test(words2) : !words2.includes(mid)) {
         this.add(level2, landing, `no landing page giving the sheaf: URI of ${this.where(mid)} (appendix A.3)` + note);
       }
@@ -22838,6 +22961,7 @@ init_crypto();
 init_names();
 init_versions();
 init_folder();
+init_deposit();
 async function verifyFolder(storage, { schemas: schemas2, remote = false, fetch: fetch2 = globalThis.fetch, digests = true, fetchJson = null } = {}) {
   let base = ORIGIN;
   try {
@@ -22956,7 +23080,6 @@ async function presentationFindings(f, disc) {
   const page = home ? new TextDecoder().decode(home) : null;
   if (page === null && website) out.push(finding(level2, "index.html", "the home page is missing (appendix A.3)"));
   const gone = new Set(f.tombstones.map((t) => t.id));
-  const ids = (await f.objects()).map((o) => o.id);
   for (const m of members) {
     const id = objectId(m?.name, m?.owner);
     if (gone.has(id)) continue;
@@ -22970,7 +23093,7 @@ async function presentationFindings(f, disc) {
       continue;
     }
     if (await f.storage.kind(joinPath(dir, "inventory.json")) !== "file") continue;
-    const landing = `paper/${await pageAddress(f, id, ids)}/index.html`;
+    const landing = `paper/${await nameAddress(f, id)}/index.html`;
     const bytes = await f.storage.read(landing);
     const text3 = bytes ? new TextDecoder().decode(bytes) : "";
     if (!await landingNames(f, text3, m.name, m.owner, id, dir)) {
@@ -23272,7 +23395,7 @@ async function makeBranch(f, uri, where2, { owner = null, label = null, message:
     name: f.archive.name
   };
   dc.version = String(obj.documentVersion);
-  if (label || f.labelOf(id)) dc.url = landingUrl(f, label || f.labelOf(id));
+  dc.url = await landingUrl(f, id, (await readGenesis(files.get(GENESIS2))).originator ?? null);
   const rel = pdc.doi ? {
     relatedIdentifier: pdc.doi,
     relatedIdentifierType: "DOI",
@@ -25213,7 +25336,7 @@ async function directWrite({ repo, github, operation, fields, files = {}, env, s
 }
 
 // dist/manager-entry.js
-var ASSETS = { "schemas": { "opensheaf-archive-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-archive-0.2.schema.json", "title": "OpenSheaf discovery document (opensheaf.json), format opensheaf-archive/0.2", "$comment": "Section 3.1 of the specification. Part of OpenSheaf 0.2 (https://opensheaf.org). Dedicated to the public domain under CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/", "type": "object", "required": ["format", "specification", "name", "storageRoot", "storageLayout", "owners", "objects", "profiles"], "properties": { "format": { "const": "opensheaf-archive/0.2" }, "specification": { "const": "0.2" }, "name": { "type": "string", "minLength": 1 }, "contact": { "type": "string", "format": "uri" }, "storageRoot": { "type": "string", "format": "uri-reference", "pattern": "/$" }, "storageLayout": { "enum": ["opensheaf-owner-name-storage-layout", "0003-hash-and-id-n-tuple-storage-layout"] }, "profiles": { "type": "array", "items": { "enum": ["zenodo", "texmacs", "website"] }, "uniqueItems": true }, "feed": { "type": "string", "format": "uri" }, "objects": { "type": "array", "items": { "type": "object", "required": ["id", "kind", "head", "inventorySha512", "status", "name", "owner"], "properties": { "id": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the object's line (section 4), sheaf:<name>:<owner>" }, "kind": { "enum": ["document", "collection", "owner"] }, "head": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "status": { "enum": ["active", "withdrawn"] }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "a name of genesis.json (section 5.2): seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "label": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64, "$comment": "a readable label (section 3.1), not an identifier" } }, "allOf": [{ "if": { "properties": { "kind": { "const": "owner" } } }, "then": { "properties": { "status": { "const": "active" } } } }] } }, "tombstones": { "type": "array", "items": { "type": "object", "required": ["id", "kind", "lastVersion", "inventorySha512", "date", "reason", "name", "owner", "genesisName"], "properties": { "id": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the object's line (section 4), sheaf:<name>:<owner>" }, "kind": { "enum": ["document", "collection", "owner"] }, "lastVersion": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "date": { "type": "string", "format": "date" }, "reason": { "type": "string" }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "a name of genesis.json (section 5.2): seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "genesisName": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "the genesis name, by algorithm 0 (sections 5.2, 13.3)" } } } }, "extensions": { "type": "array", "items": { "type": "string", "format": "uri" }, "uniqueItems": true }, "indexes": { "$comment": "the indexes kept, each with the length of the prefixes of its files (sections 3.1, 12.5)", "type": "object", "minProperties": 1, "properties": { "names": { "type": "integer", "minimum": 2, "maximum": 4 }, "owners": { "type": "integer", "minimum": 2, "maximum": 4 }, "sha512": { "type": "integer", "minimum": 2, "maximum": 4 } }, "additionalProperties": false }, "owners": { "type": "array", "items": { "type": "object", "required": ["owner", "catalogue"], "properties": { "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "catalogue": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the owner catalogue (section 8.1), sheaf:<name>:<owner>" } } }, "uniqueItems": true, "$comment": "the owners the archive hosts (sections 3.1, 6), each with its owner catalogue (section 8.1), in the order in which the archive presents them (appendix A.3); empty for an archive that hosts no owner" }, "drafts": { "type": "array", "$comment": "drafts (section 10.1) shown as unfinished work, on which nothing may rely", "items": { "type": "object", "required": ["id", "kind", "head"], "properties": { "id": { "type": "string", "pattern": "^sheaf:draft:[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 76, "$comment": "a draft's local identifier (section 10.1), sheaf:draft:<id>, <id> following the pattern of labels, at most 64 characters (76 in all)" }, "kind": { "enum": ["document", "collection"] }, "head": { "type": "string", "pattern": "^v[1-9][0-9]*$" } } } } } }, "opensheaf-collection-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-collection-0.2.schema.json", "title": "OpenSheaf member list (members.json), format opensheaf-collection/0.2", "$comment": "Section 8.2 of the specification. Part of OpenSheaf 0.2 (https://opensheaf.org). Dedicated to the public domain under CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/", "type": "object", "required": ["format", "type", "members"], "properties": { "format": { "const": "opensheaf-collection/0.2" }, "order": { "enum": ["manual", "issued-desc", "issued-asc"] }, "members": { "type": "array", "items": { "type": "object", "required": ["kind", "name", "owner", "at"], "properties": { "kind": { "enum": ["document", "collection"] }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "doi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$" }, "conceptDoi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$" }, "follow": { "const": "latest" }, "cite": { "type": "object", "properties": { "title": { "type": "string" }, "creators": { "type": "array", "items": { "type": "string" } }, "year": { "type": "integer" }, "issued": { "type": "string" }, "available": { "type": "string" } } }, "revisions": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["documentVersion", "version", "inventorySha512"], "properties": { "documentVersion": { "type": "integer", "minimum": 1 }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "doi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$", "$comment": "optional (section 8.4): the version DOI of the document version vetted" } } } }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "a name of genesis.json (section 5.2): seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "at": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "format": "uri", "pattern": "^https://.*/$" }, "$comment": "base URLs where copies of the line may be found, all equal hints (sections 3, 8.2, 12.3)" } } } }, "type": { "enum": ["catalogue", "selection"], "description": "catalogue: members pin objects whole (version, inventorySha512, optional follow); selection: members pin revision sets (revisions)" } }, "allOf": [{ "if": { "properties": { "type": { "const": "catalogue" } } }, "then": { "properties": { "members": { "items": { "required": ["version", "inventorySha512"], "not": { "required": ["revisions"] } } } } } }, { "if": { "properties": { "type": { "const": "selection" } } }, "then": { "properties": { "members": { "items": { "required": ["revisions"], "not": { "anyOf": [{ "required": ["version"] }, { "required": ["inventorySha512"] }, { "required": ["follow"] }] } } } } } }] }, "opensheaf-genesis-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-genesis-0.2.schema.json", "title": "OpenSheaf genesis record (genesis.json), version 0.2", "$comment": "Section 5 of the specification. Dedicated to the public domain under CC0 1.0.", "type": "object", "additionalProperties": false, "required": ["format", "kind", "created", "nonce"], "properties": { "format": { "const": "opensheaf-genesis/0.2" }, "kind": { "enum": ["document", "collection", "owner"] }, "created": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" }, "originator": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "section 5.3: the owner name of the owner of the first line" }, "nonce": { "type": "string", "pattern": "^([0-9a-f]{2}){16,}$" }, "keys": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$" }, "$comment": "sections 5.1 and 6.1: an owner's first current keys" }, "threshold": { "type": "integer", "minimum": 1 }, "next": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$" }, "$comment": "sections 5.1 and 6.1: the digests of an owner's first rotation keys, which sign the second version of its key log; the first version is computed from this record" }, "nextThreshold": { "type": "integer", "minimum": 1 }, "keeper": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://(orcid\\.org/[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X]|[a-z0-9.-]+/)$" }, "$comment": "optional, for an owner only (sections 5.1 and 6.6): the single person or institution who answers for the owner, an ORCID iD or a domain, fixed by the owner name; at most one" }, "extensions": { "type": "object", "$comment": "optional, for an owner only (sections 2, 5.1 and 6.1): the data of extensions concerning its key log as of the first version, keyed by their names (URIs); each value is an object, validated by the schema of its extension", "propertyNames": { "format": "uri", "minLength": 1 }, "additionalProperties": { "type": "object" } } }, "allOf": [{ "if": { "properties": { "kind": { "const": "owner" } } }, "then": { "required": ["keys", "threshold", "next", "nextThreshold"], "not": { "required": ["originator"] } }, "else": { "required": ["originator"], "not": { "anyOf": [{ "required": ["keys"] }, { "required": ["threshold"] }, { "required": ["next"] }, { "required": ["nextThreshold"] }, { "required": ["keeper"] }, { "required": ["extensions"] }] } } }] }, "opensheaf-index-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-index-0.2.schema.json", "title": "OpenSheaf index file (names/, owners/, sha512/) and index declaration (indexes.json), version 0.2", "$comment": "Section 12.5 of the specification. An index file has `index` and `entries`; a declaration of indexes kept for several archives (indexes.json) has `indexes`. Dedicated to the public domain under CC0 1.0. The prefix of each entry, which must be the file's, is checked by verifiers, not by this schema.", "oneOf": [{ "$ref": "#/$defs/indexFile" }, { "$ref": "#/$defs/declaration" }], "$defs": { "indexFile": { "type": "object", "required": ["format", "index", "entries"], "properties": { "format": { "const": "opensheaf-index/0.2" }, "index": { "enum": ["names", "owners", "sha512"] }, "entries": { "type": "array", "minItems": 1, "items": { "type": "object", "properties": { "name": { "$ref": "#/$defs/base32" }, "originator": { "$ref": "#/$defs/ownerName", "$comment": "the owner name of the originator (sections 5.1, 12.5); for an owner object, itself" }, "owner": { "$ref": "#/$defs/ownerName", "$comment": "an owner name (section 6)" }, "names": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/base32" } }, "genesis": { "type": "string", "$comment": "the exact text of genesis.json (sections 5.1, 12.4)" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "status": { "enum": ["active", "withdrawn", "removed"] }, "id": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the object's line, sheaf:<name>:<owner> (section 4)" }, "label": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64 }, "at": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "format": "uri", "pattern": "^https://.*/$" }, "$comment": "in indexes kept for several archives: base URLs of the archive serving the copy, equal hints (sections 3, 12.5)" } } } } }, "allOf": [{ "if": { "properties": { "index": { "const": "names" } } }, "then": { "properties": { "entries": { "items": { "required": ["name", "owner", "id", "status"], "if": { "properties": { "status": { "enum": ["active", "withdrawn"] } } }, "then": { "required": ["originator", "genesis"] } } } } } }, { "if": { "properties": { "index": { "const": "owners" } } }, "then": { "properties": { "entries": { "items": { "required": ["owner", "names"] } } } } }, { "if": { "properties": { "index": { "const": "sha512" } } }, "then": { "properties": { "entries": { "items": { "required": ["inventorySha512", "id", "version", "status"] } } } } }] }, "declaration": { "type": "object", "required": ["format", "indexes"], "properties": { "format": { "const": "opensheaf-index/0.2" }, "indexes": { "$ref": "#/$defs/prefixes" } }, "not": { "required": ["entries"] } }, "prefixes": { "type": "object", "minProperties": 1, "properties": { "names": { "type": "integer", "minimum": 2, "maximum": 4 }, "owners": { "type": "integer", "minimum": 2, "maximum": 4 }, "sha512": { "type": "integer", "minimum": 2, "maximum": 4 } }, "additionalProperties": false }, "base32": { "type": "string", "pattern": "^[a-z2-7]{52}$" }, "ownerName": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6): always made by algorithm 0 (sections 5.2 and 6.2)" } } }, "opensheaf-keeper-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-keeper-0.2.schema.json", "title": "OpenSheaf keeper confirmation (.well-known/opensheaf), version 0.2", "$comment": "Section 6.6 of the specification. Dedicated to the public domain under CC0 1.0.", "type": "object", "additionalProperties": false, "required": ["format", "owners"], "properties": { "format": { "const": "opensheaf-keeper/0.2" }, "owners": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/ownerName" }, "$comment": "the owner names this keeper answers for" }, "successors": { "type": "object", "propertyNames": { "pattern": "^[a-z2-7]{51}[aq]$" }, "additionalProperties": { "$ref": "#/$defs/ownerName" }, "$comment": "optional: owner names this keeper answers for, mapped to their successors" } }, "$defs": { "ownerName": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$" } } }, "opensheaf-keys-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-keys-0.2.schema.json", "title": "OpenSheaf key log version (keys.json), version 0.2", "$comment": "Section 6 of the specification. Dedicated to the public domain under CC0 1.0. That threshold does not exceed the number of keys nor nextThreshold that of next, that no version follows one with ended or a fork record (which holds forked/<d>/ and no keys.json), that keys lists no exposed key and no key whose digest next of its version or an earlier one holds, that next holds no digest of a current key nor a digest held in next of an earlier version, that exposed lists only keys of earlier versions of the same key log, that the first version is the one computed from the genesis record, its keys.json being the JCS form of format and the keys, threshold, next and nextThreshold of the genesis record (keeper and the extensions of the first version are in the genesis record), and that each later version is signed by nextThreshold rotation keys of the version before, are checked by verifiers.", "type": "object", "additionalProperties": false, "required": ["format"], "properties": { "format": { "const": "opensheaf-keys/0.2" }, "keys": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/didKey" }, "$comment": "section 6.1: the current keys, which sign the versions of the owner's lines and never the key log; absent from an ending version" }, "threshold": { "type": "integer", "minimum": 1, "$comment": "section 6.1: how many distinct current keys must sign a version of a line; absent from an ending version" }, "next": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/keyDigest" }, "$comment": "section 6.1: digests of the rotation keys that sign the next version of the key log, each committed in one version only; absent from an ending version" }, "nextThreshold": { "type": "integer", "minimum": 1, "$comment": "section 6.1: how many distinct rotation keys must sign the next version" }, "extensions": { "type": "object", "$comment": "sections 2 and 6.1: the data of extensions concerning the key log, keyed by their names (URIs), for instance https://opensheaf.org/opensheaf-timestamps-0.2; each value is an object, validated by the schema of its extension; absent from the first version, whose extensions are in the genesis record", "propertyNames": { "format": "uri", "minLength": 1 }, "additionalProperties": { "type": "object" } }, "ended": { "const": true, "$comment": "optional (section 6.3): the owner ends with this version, which has no keys, threshold, next or nextThreshold; no later version but a fork record is a version of the key log" }, "successor": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "optional, only with ended (section 6.3): the owner name of the owner that continues the work, other than this owner; accepted only as section 6.6 says" }, "exposed": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/didKey" }, "$comment": "optional (section 6.3): keys listed in keys of earlier versions of this key log that this version declares exposed; an exposure in any version, on either side of a fork, carried versions included, counts" } }, "$defs": { "didKey": { "type": "string", "pattern": "^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$", "$comment": "an Ed25519 key as did:key (multibase base58btc, multicodec ed25519-pub)" }, "keyDigest": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "the lowercase base32 (RFC 4648, without padding) SHA-256 digest of a did:key URI as UTF-8, 52 characters" } }, "dependentRequired": { "successor": ["ended"], "keys": ["threshold"], "threshold": ["keys"], "next": ["nextThreshold"], "nextThreshold": ["next"] }, "if": { "required": ["ended"] }, "then": { "not": { "anyOf": [{ "required": ["keys"] }, { "required": ["threshold"] }, { "required": ["next"] }, { "required": ["nextThreshold"] }] } }, "else": { "required": ["keys", "threshold", "next"] } }, "opensheaf-object-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-object-0.2.schema.json", "title": "OpenSheaf object record (object.json), format opensheaf-object/0.2", "$comment": "Section 4.3 of the specification. Part of OpenSheaf 0.2 (https://opensheaf.org). Dedicated to the public domain under CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/", "type": "object", "required": ["format", "specification", "kind", "status"], "properties": { "format": { "const": "opensheaf-object/0.2" }, "specification": { "const": "0.2" }, "kind": { "enum": ["document", "collection", "owner"] }, "documentVersion": { "type": "integer", "minimum": 1 }, "mainSource": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\]+$" }, "sourceFormat": { "type": "string", "minLength": 1 }, "sourcesMissing": { "$ref": "#/$defs/note" }, "renditions": { "type": "array", "items": { "type": "object", "required": ["path", "mediaType"], "properties": { "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\]+$" }, "mediaType": { "type": "string", "minLength": 1 } } } }, "toolchain": { "type": "array", "items": { "type": "object", "required": ["name", "version"], "properties": { "name": { "type": "string" }, "version": { "type": "string" }, "packages": { "type": "array", "items": { "type": "string" } } } } }, "changes": { "$ref": "#/$defs/note" }, "stage": { "type": "object", "required": ["scheme", "value"], "properties": { "scheme": { "type": "string", "minLength": 1 }, "value": { "type": "string", "minLength": 1 } } }, "history": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/objectVersion" } }, "notices": { "type": "array", "items": { "allOf": [{ "$ref": "#/$defs/note" }, { "type": "object", "required": ["documentVersion", "date"], "properties": { "documentVersion": { "type": "integer", "minimum": 1 }, "date": { "type": "string", "format": "date" }, "replaces": { "type": "integer", "minimum": 1, "$comment": "section 4.2: the number of an earlier notice of the line, its position in notices counted from 1" } } }] } }, "licence": { "$ref": "#/$defs/note" }, "agreement": { "type": "object", "required": ["by", "date", "method"], "properties": { "by": { "type": "array", "items": { "type": "string" } }, "date": { "type": "string", "format": "date" }, "method": { "type": "string" } } }, "external": { "type": "array", "items": { "type": "object", "required": ["role", "service", "record"], "properties": { "role": { "enum": ["deposit", "source"] }, "service": { "type": "string" }, "record": { "type": "string", "format": "uri" }, "doi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$" }, "files": { "type": "array", "items": { "type": "object", "required": ["name", "sha512"], "properties": { "name": { "type": "string" }, "sha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "md5": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "bytes": { "type": "integer" } } } }, "label": { "type": "string" } } } }, "status": { "enum": ["active", "withdrawn"] }, "previous": { "type": "string", "pattern": "^[0-9a-f]{128}$", "$comment": "section 4.3: in every sealed object version from the second, the SHA-512 digest of the inventory file of the version before (its pin); absent in a first version and in a draft. Required from the second version on, which a verifier checks (section 14.2), since this file does not state its object version" }, "withdrawal": { "type": "object", "required": ["date", "reason"], "properties": { "date": { "type": "string", "format": "date" }, "reason": { "$ref": "#/$defs/note" } } }, "extensions": { "type": "object", "propertyNames": { "format": "uri", "minLength": 1 }, "additionalProperties": true }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "section 5.2: a name of genesis.json: seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "section 6: an owner name, the name of the owner's genesis record (52 characters of base32)" }, "parent": { "type": "object", "$comment": "section 9.1: the parent version of a branch", "required": ["owner", "name", "objectVersion", "documentVersion", "inventorySha512"], "properties": { "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "section 6: an owner name, the name of the owner's genesis record (52 characters of base32)" }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "section 5.2: a name of genesis.json: seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "objectVersion": { "$ref": "#/$defs/objectVersion" }, "documentVersion": { "type": "integer", "minimum": 1 }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "url": { "type": "string", "format": "uri", "pattern": "/$" } } } }, "$defs": { "note": { "type": "object", "properties": { "text": { "type": "string", "minLength": 1 }, "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\]+$" }, "mediaType": { "type": "string", "minLength": 1 } }, "anyOf": [{ "required": ["text"] }, { "required": ["path"] }], "dependentRequired": { "path": ["mediaType"] } }, "objectVersion": { "type": "string", "pattern": "^v[1-9][0-9]*$" } }, "allOf": [{ "if": { "properties": { "kind": { "const": "document" } } }, "then": { "anyOf": [{ "required": ["mainSource", "sourceFormat"] }, { "required": ["sourcesMissing", "renditions"], "properties": { "renditions": { "minItems": 1 } } }] } }, { "if": { "properties": { "status": { "const": "withdrawn" } } }, "then": { "required": ["withdrawal"] } }, { "if": { "properties": { "kind": { "const": "collection" } } }, "then": { "not": { "anyOf": [{ "required": ["mainSource"] }, { "required": ["sourceFormat"] }, { "required": ["sourcesMissing"] }, { "required": ["licence"] }] } } }, { "if": { "required": ["sourcesMissing"] }, "then": { "not": { "anyOf": [{ "required": ["mainSource"] }, { "required": ["sourceFormat"] }] } } }, { "if": { "properties": { "kind": { "enum": ["document", "collection"] } } }, "then": { "required": ["documentVersion"] } }, { "if": { "properties": { "kind": { "const": "owner" } } }, "then": { "$comment": "section 4.3: an owner object records only format, specification, kind, name, owner and status, and optionally extensions", "required": ["name", "owner"], "not": { "anyOf": [{ "required": ["documentVersion"] }, { "required": ["parent"] }, { "required": ["mainSource"] }, { "required": ["sourceFormat"] }, { "required": ["sourcesMissing"] }, { "required": ["renditions"] }, { "required": ["toolchain"] }, { "required": ["changes"] }, { "required": ["stage"] }, { "required": ["history"] }, { "required": ["notices"] }, { "required": ["withdrawal"] }, { "required": ["licence"] }, { "required": ["agreement"] }, { "required": ["external"] }] }, "properties": { "status": { "const": "active" } } } }, { "$comment": "section 4.3: a draft (no name) is never withdrawn", "if": { "not": { "required": ["name"] } }, "then": { "properties": { "status": { "const": "active" } } } }], "dependentRequired": { "name": ["owner"], "parent": ["name", "owner"], "owner": ["name"] } }, "opensheaf-signature-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-signature-0.2.schema.json", "title": "OpenSheaf signature file, version 0.2", "$comment": "Section 7.2 of the specification (the signed message is defined there). Dedicated to the public domain under CC0 1.0.", "type": "object", "required": ["format", "object", "version", "inventorySha512", "signer", "key", "keyLog", "signature"], "properties": { "format": { "const": "opensheaf-signature/0.2" }, "key": { "type": "string", "pattern": "^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$" }, "keyLog": { "type": "string", "pattern": "^sheaf:[a-z2-7]{51}[aq]/v[1-9][0-9]*\\?sha512=[0-9a-f]{128}$", "$comment": "a pin of the key-log version the signature relies on" }, "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$", "$comment": "an Ed25519 signature (64 bytes) in canonical base64, the unused bits of the last character zero" }, "object": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$" }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "signer": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "the owner name of the signer" } }, "additionalProperties": false }, "opensheaf-timestamps-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-timestamps-0.2.schema.json", "title": "OpenSheaf timestamps extension: the owner's declaration, version 0.2", "$comment": 'Part of the OpenSheaf timestamps extension 0.2 (https://opensheaf.org/opensheaf-timestamps-0.2), not of the core specification. The value of extensions["https://opensheaf.org/opensheaf-timestamps-0.2"] in the genesis record of an owner (for the first version of its key log) or in keys.json; the entry, even empty, declares that the owner timestamps every signature it makes. Closed to other properties, like the genesis records and key logs that hold it, so that nothing seems committed to that is not defined. Dedicated to the public domain under CC0 1.0.', "type": "object", "additionalProperties": false, "properties": { "timestampAuthorities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "$comment": "SHA-256 fingerprints of the signing or root certificates of RFC 3161 authorities; a signature file trusts those listed in the key-log version it names and in the versions before it, and a date earlier than that key-log version's own does not count" } } } }, "templates": { "collection.html": `<!doctype html>
+var ASSETS = { "schemas": { "opensheaf-archive-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-archive-0.2.schema.json", "title": "OpenSheaf discovery document (opensheaf.json), format opensheaf-archive/0.2", "$comment": "Section 3.1 of the specification. Part of OpenSheaf 0.2 (https://opensheaf.org). Dedicated to the public domain under CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/", "type": "object", "required": ["format", "specification", "name", "storageRoot", "storageLayout", "owners", "profiles"], "oneOf": [{ "required": ["objects"] }, { "required": ["objectPages"] }], "properties": { "format": { "const": "opensheaf-archive/0.2" }, "specification": { "const": "0.2" }, "name": { "type": "string", "minLength": 1 }, "contact": { "type": "string", "format": "uri" }, "storageRoot": { "type": "string", "format": "uri-reference", "pattern": "/$" }, "storageLayout": { "enum": ["opensheaf-owner-name-storage-layout", "0003-hash-and-id-n-tuple-storage-layout"] }, "profiles": { "type": "array", "items": { "enum": ["zenodo", "texmacs", "website"] }, "uniqueItems": true }, "feed": { "type": "string", "format": "uri" }, "objects": { "type": "array", "items": { "$ref": "#/$defs/objectEntry" }, "$comment": "every object of the storage root except drafts (section 3.1); or, in its place, objectPages" }, "objectPages": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^(?!/)(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!.*(^|/)\\.\\.?(/|$))[^?#\\\\]+\\.json$" }, "$comment": "the paths, relative to the discovery document, of the pages of objects (section 3.1), each validated by opensheaf-objects-0.2.schema.json" }, "tombstones": { "type": "array", "items": { "type": "object", "required": ["id", "kind", "lastVersion", "inventorySha512", "date", "reason", "name", "owner", "genesisName"], "properties": { "id": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the object's line (section 4), sheaf:<name>:<owner>" }, "kind": { "enum": ["document", "collection", "owner"] }, "lastVersion": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "date": { "type": "string", "format": "date" }, "reason": { "type": "string" }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "a name of genesis.json (section 5.2): seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "genesisName": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "the genesis name, by algorithm 0 (sections 5.2, 13.3)" } } } }, "extensions": { "type": "array", "items": { "type": "string", "format": "uri" }, "uniqueItems": true }, "indexes": { "$comment": "the indexes kept, each with the length of the prefixes of its files (sections 3.1, 12.5)", "type": "object", "minProperties": 1, "properties": { "names": { "type": "integer", "minimum": 2, "maximum": 4 }, "owners": { "type": "integer", "minimum": 2, "maximum": 4 }, "sha512": { "type": "integer", "minimum": 2, "maximum": 4 } }, "additionalProperties": false }, "owners": { "type": "array", "items": { "type": "object", "required": ["owner", "catalogue"], "properties": { "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "catalogue": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the owner catalogue (section 8.1), sheaf:<name>:<owner>" } } }, "uniqueItems": true, "$comment": "the owners the archive hosts (sections 3.1, 6), each with its owner catalogue (section 8.1), in the order in which the archive presents them (appendix A.3); empty for an archive that hosts no owner" }, "drafts": { "type": "array", "$comment": "drafts (section 10.1) shown as unfinished work, on which nothing may rely", "items": { "type": "object", "required": ["id", "kind", "head"], "properties": { "id": { "type": "string", "pattern": "^sheaf:draft:[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 76, "$comment": "a draft's local identifier (section 10.1), sheaf:draft:<id>, <id> following the pattern of labels, at most 64 characters (76 in all)" }, "kind": { "enum": ["document", "collection"] }, "head": { "type": "string", "pattern": "^v[1-9][0-9]*$" } } } } }, "$defs": { "objectEntry": { "type": "object", "required": ["id", "kind", "head", "inventorySha512", "status", "name", "owner"], "properties": { "id": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the object's line (section 4), sheaf:<name>:<owner>" }, "kind": { "enum": ["document", "collection", "owner"] }, "head": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "status": { "enum": ["active", "withdrawn"] }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "a name of genesis.json (section 5.2): seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "label": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64, "$comment": "a readable label (section 3.1), not an identifier" } }, "allOf": [{ "if": { "properties": { "kind": { "const": "owner" } } }, "then": { "properties": { "status": { "const": "active" } } } }] } } }, "opensheaf-collection-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-collection-0.2.schema.json", "title": "OpenSheaf member list (members.json), format opensheaf-collection/0.2", "$comment": "Section 8.2 of the specification. Part of OpenSheaf 0.2 (https://opensheaf.org). Dedicated to the public domain under CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/", "type": "object", "required": ["format", "type", "members"], "properties": { "format": { "const": "opensheaf-collection/0.2" }, "order": { "enum": ["manual", "issued-desc", "issued-asc"] }, "members": { "type": "array", "items": { "type": "object", "required": ["kind", "name", "owner", "at"], "properties": { "kind": { "enum": ["document", "collection"] }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "doi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$" }, "conceptDoi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$" }, "follow": { "const": "latest" }, "cite": { "type": "object", "properties": { "title": { "type": "string" }, "creators": { "type": "array", "items": { "type": "string" } }, "year": { "type": "integer" }, "issued": { "type": "string" }, "available": { "type": "string" } } }, "revisions": { "type": "array", "minItems": 1, "items": { "type": "object", "required": ["documentVersion", "version", "inventorySha512"], "properties": { "documentVersion": { "type": "integer", "minimum": 1 }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "doi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$", "$comment": "optional (section 8.4): the version DOI of the document version vetted" } } } }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "a name of genesis.json (section 5.2): seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "at": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "format": "uri", "pattern": "^https://.*/$" }, "$comment": "base URLs where copies of the line may be found, all equal hints (sections 3, 8.2, 12.3)" } } } }, "type": { "enum": ["catalogue", "selection"], "description": "catalogue: members pin objects whole (version, inventorySha512, optional follow); selection: members pin revision sets (revisions)" } }, "allOf": [{ "if": { "properties": { "type": { "const": "catalogue" } } }, "then": { "properties": { "members": { "items": { "required": ["version", "inventorySha512"], "not": { "required": ["revisions"] } } } } } }, { "if": { "properties": { "type": { "const": "selection" } } }, "then": { "properties": { "members": { "items": { "required": ["revisions"], "not": { "anyOf": [{ "required": ["version"] }, { "required": ["inventorySha512"] }, { "required": ["follow"] }] } } } } } }] }, "opensheaf-genesis-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-genesis-0.2.schema.json", "title": "OpenSheaf genesis record (genesis.json), version 0.2", "$comment": "Section 5 of the specification. Dedicated to the public domain under CC0 1.0.", "type": "object", "additionalProperties": false, "required": ["format", "kind", "created", "nonce"], "properties": { "format": { "const": "opensheaf-genesis/0.2" }, "kind": { "enum": ["document", "collection", "owner"] }, "created": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" }, "originator": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "section 5.3: the owner name of the owner of the first line" }, "nonce": { "type": "string", "pattern": "^([0-9a-f]{2}){16,}$" }, "keys": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$" }, "$comment": "sections 5.1 and 6.1: an owner's first current keys" }, "threshold": { "type": "integer", "minimum": 1 }, "next": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$" }, "$comment": "sections 5.1 and 6.1: the digests of an owner's first rotation keys, which sign the second version of its key log; the first version is computed from this record" }, "nextThreshold": { "type": "integer", "minimum": 1 }, "keeper": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "type": "string", "format": "uri", "pattern": "^https://(orcid\\.org/[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{3}[0-9X]|[a-z0-9.-]+/)$" }, "$comment": "optional, for an owner only (sections 5.1 and 6.6): the single person or institution who answers for the owner, an ORCID iD or a domain, fixed by the owner name; at most one" }, "extensions": { "type": "object", "$comment": "optional, for an owner only (sections 2, 5.1 and 6.1): the data of extensions concerning its key log as of the first version, keyed by their names (URIs); each value is an object, validated by the schema of its extension", "propertyNames": { "format": "uri", "minLength": 1 }, "additionalProperties": { "type": "object" } } }, "allOf": [{ "if": { "properties": { "kind": { "const": "owner" } } }, "then": { "required": ["keys", "threshold", "next", "nextThreshold"], "not": { "required": ["originator"] } }, "else": { "required": ["originator"], "not": { "anyOf": [{ "required": ["keys"] }, { "required": ["threshold"] }, { "required": ["next"] }, { "required": ["nextThreshold"] }, { "required": ["keeper"] }, { "required": ["extensions"] }] } } }] }, "opensheaf-index-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-index-0.2.schema.json", "title": "OpenSheaf index file (names/, owners/, sha512/) and index declaration (indexes.json), version 0.2", "$comment": "Section 12.5 of the specification. An index file has `index` and `entries`; a declaration of indexes kept for several archives (indexes.json) has `indexes`. Dedicated to the public domain under CC0 1.0. The prefix of each entry, which must be the file's, is checked by verifiers, not by this schema.", "oneOf": [{ "$ref": "#/$defs/indexFile" }, { "$ref": "#/$defs/declaration" }], "$defs": { "indexFile": { "type": "object", "required": ["format", "index", "entries"], "properties": { "format": { "const": "opensheaf-index/0.2" }, "index": { "enum": ["names", "owners", "sha512"] }, "entries": { "type": "array", "minItems": 1, "items": { "type": "object", "properties": { "name": { "$ref": "#/$defs/base32" }, "originator": { "$ref": "#/$defs/ownerName", "$comment": "the owner name of the originator (sections 5.1, 12.5); for an owner object, itself" }, "owner": { "$ref": "#/$defs/ownerName", "$comment": "an owner name (section 6)" }, "names": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/base32" } }, "genesis": { "type": "string", "$comment": "the exact text of genesis.json (sections 5.1, 12.4)" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "status": { "enum": ["active", "withdrawn", "removed"] }, "id": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the object's line, sheaf:<name>:<owner> (section 4)" }, "label": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64 }, "at": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "format": "uri", "pattern": "^https://.*/$" }, "$comment": "in indexes kept for several archives: base URLs of the archive serving the copy, equal hints (sections 3, 12.5)" } } } } }, "allOf": [{ "if": { "properties": { "index": { "const": "names" } } }, "then": { "properties": { "entries": { "items": { "required": ["name", "owner", "id", "status"], "if": { "properties": { "status": { "enum": ["active", "withdrawn"] } } }, "then": { "required": ["originator", "genesis"] } } } } } }, { "if": { "properties": { "index": { "const": "owners" } } }, "then": { "properties": { "entries": { "items": { "required": ["owner", "names"] } } } } }, { "if": { "properties": { "index": { "const": "sha512" } } }, "then": { "properties": { "entries": { "items": { "required": ["inventorySha512", "id", "version", "status"] } } } } }] }, "declaration": { "type": "object", "required": ["format", "indexes"], "properties": { "format": { "const": "opensheaf-index/0.2" }, "indexes": { "$ref": "#/$defs/prefixes" } }, "not": { "required": ["entries"] } }, "prefixes": { "type": "object", "minProperties": 1, "properties": { "names": { "type": "integer", "minimum": 2, "maximum": 4 }, "owners": { "type": "integer", "minimum": 2, "maximum": 4 }, "sha512": { "type": "integer", "minimum": 2, "maximum": 4 } }, "additionalProperties": false }, "base32": { "type": "string", "pattern": "^[a-z2-7]{52}$" }, "ownerName": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6): always made by algorithm 0 (sections 5.2 and 6.2)" } } }, "opensheaf-keeper-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-keeper-0.2.schema.json", "title": "OpenSheaf keeper confirmation (.well-known/opensheaf), version 0.2", "$comment": "Section 6.6 of the specification. Dedicated to the public domain under CC0 1.0.", "type": "object", "additionalProperties": false, "required": ["format", "owners"], "properties": { "format": { "const": "opensheaf-keeper/0.2" }, "owners": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/ownerName" }, "$comment": "the owner names this keeper answers for" }, "successors": { "type": "object", "propertyNames": { "pattern": "^[a-z2-7]{51}[aq]$" }, "additionalProperties": { "$ref": "#/$defs/ownerName" }, "$comment": "optional: owner names this keeper answers for, mapped to their successors" } }, "$defs": { "ownerName": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$" } } }, "opensheaf-keys-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-keys-0.2.schema.json", "title": "OpenSheaf key log version (keys.json), version 0.2", "$comment": "Section 6 of the specification. Dedicated to the public domain under CC0 1.0. That threshold does not exceed the number of keys nor nextThreshold that of next, that no version follows one with ended or a fork record (which holds forked/<d>/ and no keys.json), that keys lists no exposed key and no key whose digest next of its version or an earlier one holds, that next holds no digest of a current key nor a digest held in next of an earlier version, that exposed lists only keys of earlier versions of the same key log, that the first version is the one computed from the genesis record, its keys.json being the JCS form of format and the keys, threshold, next and nextThreshold of the genesis record (keeper and the extensions of the first version are in the genesis record), and that each later version is signed by nextThreshold rotation keys of the version before, are checked by verifiers.", "type": "object", "additionalProperties": false, "required": ["format"], "properties": { "format": { "const": "opensheaf-keys/0.2" }, "keys": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/didKey" }, "$comment": "section 6.1: the current keys, which sign the versions of the owner's lines and never the key log; absent from an ending version" }, "threshold": { "type": "integer", "minimum": 1, "$comment": "section 6.1: how many distinct current keys must sign a version of a line; absent from an ending version" }, "next": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/keyDigest" }, "$comment": "section 6.1: digests of the rotation keys that sign the next version of the key log, each committed in one version only; absent from an ending version" }, "nextThreshold": { "type": "integer", "minimum": 1, "$comment": "section 6.1: how many distinct rotation keys must sign the next version" }, "extensions": { "type": "object", "$comment": "sections 2 and 6.1: the data of extensions concerning the key log, keyed by their names (URIs), for instance https://opensheaf.org/opensheaf-timestamps-0.2; each value is an object, validated by the schema of its extension; absent from the first version, whose extensions are in the genesis record", "propertyNames": { "format": "uri", "minLength": 1 }, "additionalProperties": { "type": "object" } }, "ended": { "const": true, "$comment": "optional (section 6.3): the owner ends with this version, which has no keys, threshold, next or nextThreshold; no later version but a fork record is a version of the key log" }, "successor": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "optional, only with ended (section 6.3): the owner name of the owner that continues the work, other than this owner; accepted only as section 6.6 says" }, "exposed": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/didKey" }, "$comment": "optional (section 6.3): keys listed in keys of earlier versions of this key log that this version declares exposed; an exposure in any version, on either side of a fork, carried versions included, counts" } }, "$defs": { "didKey": { "type": "string", "pattern": "^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$", "$comment": "an Ed25519 key as did:key (multibase base58btc, multicodec ed25519-pub)" }, "keyDigest": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "the lowercase base32 (RFC 4648, without padding) SHA-256 digest of a did:key URI as UTF-8, 52 characters" } }, "dependentRequired": { "successor": ["ended"], "keys": ["threshold"], "threshold": ["keys"], "next": ["nextThreshold"], "nextThreshold": ["next"] }, "if": { "required": ["ended"] }, "then": { "not": { "anyOf": [{ "required": ["keys"] }, { "required": ["threshold"] }, { "required": ["next"] }, { "required": ["nextThreshold"] }] } }, "else": { "required": ["keys", "threshold", "next"] } }, "opensheaf-object-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-object-0.2.schema.json", "title": "OpenSheaf object record (object.json), format opensheaf-object/0.2", "$comment": "Section 4.3 of the specification. Part of OpenSheaf 0.2 (https://opensheaf.org). Dedicated to the public domain under CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/", "type": "object", "required": ["format", "specification", "kind", "status"], "properties": { "format": { "const": "opensheaf-object/0.2" }, "specification": { "const": "0.2" }, "kind": { "enum": ["document", "collection", "owner"] }, "documentVersion": { "type": "integer", "minimum": 1 }, "mainSource": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\]+$" }, "sourceFormat": { "type": "string", "minLength": 1 }, "sourcesMissing": { "$ref": "#/$defs/note" }, "renditions": { "type": "array", "items": { "type": "object", "required": ["path", "mediaType"], "properties": { "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\]+$" }, "mediaType": { "type": "string", "minLength": 1 } } } }, "toolchain": { "type": "array", "items": { "type": "object", "required": ["name", "version"], "properties": { "name": { "type": "string" }, "version": { "type": "string" }, "packages": { "type": "array", "items": { "type": "string" } } } } }, "changes": { "$ref": "#/$defs/note" }, "stage": { "type": "object", "required": ["scheme", "value"], "properties": { "scheme": { "type": "string", "minLength": 1 }, "value": { "type": "string", "minLength": 1 } } }, "history": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/objectVersion" } }, "notices": { "type": "array", "items": { "allOf": [{ "$ref": "#/$defs/note" }, { "type": "object", "required": ["documentVersion", "date"], "properties": { "documentVersion": { "type": "integer", "minimum": 1 }, "date": { "type": "string", "format": "date" }, "replaces": { "type": "integer", "minimum": 1, "$comment": "section 4.2: the number of an earlier notice of the line, its position in notices counted from 1" } } }] } }, "licence": { "$ref": "#/$defs/note" }, "agreement": { "type": "object", "required": ["by", "date", "method"], "properties": { "by": { "type": "array", "items": { "type": "string" } }, "date": { "type": "string", "format": "date" }, "method": { "type": "string" } } }, "external": { "type": "array", "items": { "type": "object", "required": ["role", "service", "record"], "properties": { "role": { "enum": ["deposit", "source"] }, "service": { "type": "string" }, "record": { "type": "string", "format": "uri" }, "doi": { "type": "string", "pattern": "^10\\.[0-9]+(\\.[0-9]+)*/\\S+$" }, "files": { "type": "array", "items": { "type": "object", "required": ["name", "sha512"], "properties": { "name": { "type": "string" }, "sha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "md5": { "type": "string", "pattern": "^[0-9a-f]{32}$" }, "bytes": { "type": "integer" } } } }, "label": { "type": "string" } } } }, "status": { "enum": ["active", "withdrawn"] }, "previous": { "type": "string", "pattern": "^[0-9a-f]{128}$", "$comment": "section 4.3: in every sealed object version from the second, the SHA-512 digest of the inventory file of the version before (its pin); absent in a first version and in a draft. Required from the second version on, which a verifier checks (section 14.2), since this file does not state its object version" }, "withdrawal": { "type": "object", "required": ["date", "reason"], "properties": { "date": { "type": "string", "format": "date" }, "reason": { "$ref": "#/$defs/note" } } }, "extensions": { "type": "object", "propertyNames": { "format": "uri", "minLength": 1 }, "additionalProperties": true }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "section 5.2: a name of genesis.json: seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "section 6: an owner name, the name of the owner's genesis record (52 characters of base32)" }, "parent": { "type": "object", "$comment": "section 9.1: the parent version of a branch", "required": ["owner", "name", "objectVersion", "documentVersion", "inventorySha512"], "properties": { "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "section 6: an owner name, the name of the owner's genesis record (52 characters of base32)" }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "section 5.2: a name of genesis.json: seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "objectVersion": { "$ref": "#/$defs/objectVersion" }, "documentVersion": { "type": "integer", "minimum": 1 }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "url": { "type": "string", "format": "uri", "pattern": "/$" } } } }, "$defs": { "note": { "type": "object", "properties": { "text": { "type": "string", "minLength": 1 }, "path": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*//)(?!.*/$)(?!(?:.*/)?\\.{1,2}(?:/|$))[^\\\\]+$" }, "mediaType": { "type": "string", "minLength": 1 } }, "anyOf": [{ "required": ["text"] }, { "required": ["path"] }], "dependentRequired": { "path": ["mediaType"] } }, "objectVersion": { "type": "string", "pattern": "^v[1-9][0-9]*$" } }, "allOf": [{ "if": { "properties": { "kind": { "const": "document" } } }, "then": { "anyOf": [{ "required": ["mainSource", "sourceFormat"] }, { "required": ["sourcesMissing", "renditions"], "properties": { "renditions": { "minItems": 1 } } }] } }, { "if": { "properties": { "status": { "const": "withdrawn" } } }, "then": { "required": ["withdrawal"] } }, { "if": { "properties": { "kind": { "const": "collection" } } }, "then": { "not": { "anyOf": [{ "required": ["mainSource"] }, { "required": ["sourceFormat"] }, { "required": ["sourcesMissing"] }, { "required": ["licence"] }] } } }, { "if": { "required": ["sourcesMissing"] }, "then": { "not": { "anyOf": [{ "required": ["mainSource"] }, { "required": ["sourceFormat"] }] } } }, { "if": { "properties": { "kind": { "enum": ["document", "collection"] } } }, "then": { "required": ["documentVersion"] } }, { "if": { "properties": { "kind": { "const": "owner" } } }, "then": { "$comment": "section 4.3: an owner object records only format, specification, kind, name, owner and status, and optionally extensions", "required": ["name", "owner"], "not": { "anyOf": [{ "required": ["documentVersion"] }, { "required": ["parent"] }, { "required": ["mainSource"] }, { "required": ["sourceFormat"] }, { "required": ["sourcesMissing"] }, { "required": ["renditions"] }, { "required": ["toolchain"] }, { "required": ["changes"] }, { "required": ["stage"] }, { "required": ["history"] }, { "required": ["notices"] }, { "required": ["withdrawal"] }, { "required": ["licence"] }, { "required": ["agreement"] }, { "required": ["external"] }] }, "properties": { "status": { "const": "active" } } } }, { "$comment": "section 4.3: a draft (no name) is never withdrawn", "if": { "not": { "required": ["name"] } }, "then": { "properties": { "status": { "const": "active" } } } }], "dependentRequired": { "name": ["owner"], "parent": ["name", "owner"], "owner": ["name"] } }, "opensheaf-objects-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-objects-0.2.schema.json", "title": "OpenSheaf page of objects, format opensheaf-objects/0.2", "$comment": "Section 3.1 of the specification: a page of the objects of an archive whose discovery document has objectPages. Part of OpenSheaf 0.2 (https://opensheaf.org). Dedicated to the public domain under CC0 1.0: https://creativecommons.org/publicdomain/zero/1.0/. The entries are those of objects in opensheaf-archive-0.2.schema.json; that every object is in exactly one page is checked by verifiers.", "type": "object", "required": ["format", "objects"], "properties": { "format": { "const": "opensheaf-objects/0.2" }, "objects": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/objectEntry" } } }, "$defs": { "objectEntry": { "type": "object", "required": ["id", "kind", "head", "inventorySha512", "status", "name", "owner"], "properties": { "id": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$", "$comment": "the object's line (section 4), sheaf:<name>:<owner>" }, "kind": { "enum": ["document", "collection", "owner"] }, "head": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "status": { "enum": ["active", "withdrawn"] }, "name": { "type": "string", "pattern": "^[a-z2-7]{52}$", "$comment": "a name of genesis.json (section 5.2): seeded SHA-256, lowercase base32, the algorithm number in the last character" }, "owner": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "an owner name (section 6), the name of the owner's genesis record (52 characters of base32)" }, "label": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64, "$comment": "a readable label (section 3.1), not an identifier" } }, "allOf": [{ "if": { "properties": { "kind": { "const": "owner" } } }, "then": { "properties": { "status": { "const": "active" } } } }] } } }, "opensheaf-signature-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-signature-0.2.schema.json", "title": "OpenSheaf signature file, version 0.2", "$comment": "Section 7.2 of the specification (the signed message is defined there). Dedicated to the public domain under CC0 1.0.", "type": "object", "required": ["format", "object", "version", "inventorySha512", "signer", "key", "keyLog", "signature"], "properties": { "format": { "const": "opensheaf-signature/0.2" }, "key": { "type": "string", "pattern": "^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}$" }, "keyLog": { "type": "string", "pattern": "^sheaf:[a-z2-7]{51}[aq]/v[1-9][0-9]*\\?sha512=[0-9a-f]{128}$", "$comment": "a pin of the key-log version the signature relies on" }, "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]{85}[AQgw]==$", "$comment": "an Ed25519 signature (64 bytes) in canonical base64, the unused bits of the last character zero" }, "object": { "type": "string", "pattern": "^sheaf:[a-z2-7]{52}:[a-z2-7]{51}[aq]$" }, "version": { "type": "string", "pattern": "^v[1-9][0-9]*$" }, "inventorySha512": { "type": "string", "pattern": "^[0-9a-f]{128}$" }, "signer": { "type": "string", "pattern": "^[a-z2-7]{51}[aq]$", "$comment": "the owner name of the signer" } }, "additionalProperties": false }, "opensheaf-timestamps-0.2.schema.json": { "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://opensheaf.org/schemas/opensheaf-timestamps-0.2.schema.json", "title": "OpenSheaf timestamps extension: the owner's declaration, version 0.2", "$comment": 'Part of the OpenSheaf timestamps extension 0.2 (https://opensheaf.org/opensheaf-timestamps-0.2), not of the core specification. The value of extensions["https://opensheaf.org/opensheaf-timestamps-0.2"] in the genesis record of an owner (for the first version of its key log) or in keys.json; the entry, even empty, declares that the owner timestamps every signature it makes. Closed to other properties, like the genesis records and key logs that hold it, so that nothing seems committed to that is not defined. Dedicated to the public domain under CC0 1.0.', "type": "object", "additionalProperties": false, "properties": { "timestampAuthorities": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "$comment": "SHA-256 fingerprints of the signing or root certificates of RFC 3161 authorities; a signature file trusts those listed in the key-log version it names and in the versions before it, and a date earlier than that key-log version's own does not count" } } } }, "templates": { "collection.html": `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
