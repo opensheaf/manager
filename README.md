@@ -81,8 +81,9 @@ paper's label and the owner's). Notices, licences and withdrawals are
 given only by a line's owner: on the lines of another owner they are
 disabled, and the page says why; the members of a collection are changed
 only by its owner. The papers are listed with their branches under them.
-Every change of a paper also updates the archive's main catalogue, which
-the default owner signs: its keys must be unlocked too. Through the
+Every change of a paper also updates the owner catalogue of the paper's
+owner (section 8.1), which that owner signs: a change by one owner needs
+its keys only, never the default owner's. Through the
 workflow, which signs with the default owner's key for the workflows,
 only the default owner acts; branches by another owner need "Write
 directly".
@@ -392,13 +393,13 @@ with `tools/live-test.mjs`:
     GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key KEYFILE \
       --operation notice --fields '{"Label": "x", "Document version it is about": "1", "Text of the notice": "..."}'
 
-A change by another owner of the archive, with the keys of both owners
-(a key file of a seed alone names its owner, `OWNER:FILE`; the default
-owner signs the main catalogue): a new version of the default owner's
+A change by another owner of the archive, with that owner's keys alone
+(a key file of a seed alone names its owner, `OWNER:FILE`; each owner
+signs its own owner catalogue): a new version of the default owner's
 paper goes into a branch of the acting owner's (`--owner`), made from the
 latest signed version or `--branch-from N`, labelled `--branch-label`:
 
-    GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key KEYFILE --key OWNER2:KEYFILE2 \
+    GH_TOKEN=... node tools/live-test.mjs --repo OWNER/REPO --key OWNER2:KEYFILE2 \
       --owner OWNER2 --branch-label x-member --operation deposit \
       --fields '{"This deposit": "A new version of a paper in the archive", "Label": "x", ...}' \
       --file 'PDF of this version=paper.pdf' --file 'Sources=paper.tex'

@@ -1344,9 +1344,6 @@ function signingPanel() {
         el("div", { class: "controls" }, el("label", { for: "acting-owner" }, "Act as"), select),
         el("p", { class: "small muted" }, "New papers and collections are this owner's. A new version of another owner's " +
           "paper goes into this owner's branch of it, made if needed. Notices, licences and withdrawals are given on its own lines only."));
-      if (acting !== s.owner && !unlockedOwner(s.owner)) body.push(el("p", { class: "small warn" },
-        "Every change of a paper also updates the archive's main catalogue, which the default owner ", ownerCode(s.owner),
-        " signs: unlock its keys too."));
     }
     body.push(walletsPanel(open.length > 0));
     body.push(how(el("p", {}, "Each change is carried out in this page and committed to the repository, signed with the current " +
@@ -2153,10 +2150,6 @@ function actingParts(name, inputs, st, draw) {
   if (COLLECTION_OPS.includes(name) && coll && coll.owner !== st.owner) {
     parts.push(el("p", { class: "notice warn" }, "Only its owner, ", ownerCode(coll.owner), ", changes the members of ",
       el("code", {}, coll.label), open.includes(coll.owner) ? ": act as it." : ": unlock its keys to act as it."));
-  }
-  if (st.owner !== s.owner && !unlockedOwner(s.owner) && ["deposit", "notice", "withdraw", "relicense"].includes(name)) {
-    parts.push(el("p", { class: "small warn" }, "The main catalogue of the archive follows every paper, and the default " +
-      "owner ", ownerCode(s.owner), " signs it: unlock its keys too."));
   }
   return parts;
 }

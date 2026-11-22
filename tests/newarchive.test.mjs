@@ -101,6 +101,13 @@ test("a new archive set up from the page: the owner made here, rotation keys off
   assert.ok(files.has(`ocfl/${owner}/${owner}/v1/content/genesis.json`));
   const listed = JSON.parse(text(files.get("opensheaf.json"))).objects.find((o) => o.id === `sheaf:${owner}:${owner}`);
   assert.equal(listed.label, "jane-doe");
+  // the owner set up with its owner catalogue, sealed by its own key (#72), labelled main
+  const disc = JSON.parse(text(files.get("opensheaf.json")));
+  assert.equal("mainCollection" in disc, false);
+  assert.deepEqual(disc.owners.map((e) => e.owner), [owner]);
+  const catalogue = disc.objects.find((o) => o.id === disc.owners[0].catalogue);
+  assert.deepEqual([catalogue.kind, catalogue.owner, catalogue.label], ["collection", owner, "main"]);
+  assert.equal("mainCollection" in settings, false);
   const storage = await core.GitHubStorage.open(REPO, gh, {});
   const report = await core.verifyFolder(storage, { schemas: await core.schemasOf(core.ASSETS), fetch: noNetwork });
   assert.equal(report.counts().error + report.counts().warning, 0, JSON.stringify(report.findings));
