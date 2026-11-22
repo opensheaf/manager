@@ -68,16 +68,17 @@ test("the popup: a wrong code, an answer for osheaf, a refusal, a blocked or clo
 });
 
 test("the wallet: named by the archive, or by the person", () => {
-  assert.equal(walletName({ keys: "github:jane/keys" }), "github:jane/keys");
-  assert.equal(walletName({ keys: { wallet: "github:jane/keys" } }, "github:other/x"), "github:jane/keys");
+  // the forms of the draft, one wallet for the archive, are no longer read
+  assert.equal(walletName({ keys: "github:jane/keys" }), "");
+  assert.equal(walletName({ keys: { wallet: "github:jane/keys" } }, "github:other/x"), "github:other/x");
   assert.equal(walletName({}, "github:jane/my-keys"), "github:jane/my-keys");
   assert.equal(walletName({ keys: "command" }, "offline"), "");
   assert.equal(walletName({}, "github:../x"), "");
-  // the hints of osheaf.json for the owner, before the one given; a hint for every owner after the owner's own
+  // the hints of osheaf.json for the owner, before the one given
   const o = "a".repeat(52), p = "b".repeat(52);
   const settings = { owner: o, keys: { [o]: { wallets: ["github:jane/keys", "github:inst/keys"] }, wallet: "github:all/keys" } };
   assert.equal(walletName(settings, "github:other/x"), "github:jane/keys");
-  assert.equal(walletName(settings, "", p), "github:all/keys");
+  assert.equal(walletName(settings, "", p), "");
   assert.equal(walletName({ owner: o, keys: { [p]: { wallets: ["github:p/keys"] } } }, "github:mine/keys"), "github:mine/keys");
   assert.equal(walletHinted(settings), true);
   assert.equal(walletHinted({ owner: o, keys: { [p]: { wallet: "github:p/keys" } } }), false);

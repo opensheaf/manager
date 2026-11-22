@@ -20,11 +20,11 @@ test("the owners an archive hosts, and the wallets offered for them, many to man
   assert.deepEqual(walletChoices(settings, ["github:me/keys", "github:jane/keys", "not a wallet"]), [
     { wallet: "github:inst/keys", hinted: [A, B], given: false },
     { wallet: "github:jane/keys", hinted: [A], given: true },
-    { wallet: "github:all/keys", hinted: [A, B, C], given: false },
     { wallet: "github:me/keys", hinted: [], given: true },
   ]);
-  // the earlier form, one wallet for the archive
-  assert.deepEqual(walletChoices({ owner: A, keys: "github:old/keys" }), [{ wallet: "github:old/keys", hinted: [A], given: false }]);
+  // the forms of the draft, one wallet for the archive, are no longer read
+  assert.deepEqual(walletChoices({ owner: A, keys: "github:old/keys" }), []);
+  assert.deepEqual(walletChoices({ owner: A, keys: { wallet: "github:old/keys" } }), []);
 });
 
 test("the keys held add up across wallets, each owner with the wallet it was unlocked from", () => {

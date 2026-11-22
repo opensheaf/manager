@@ -72,7 +72,7 @@ export function hostedOwners(settings) {
 const WALLET_NAME = /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 
 // The wallets the page offers: those osheaf.json hints, for each owner the
-// archive hosts (and for every owner), then those the person added (kept in
+// archive hosts, then those the person added (kept in
 // this browser). Wallets and owners are many to many: each wallet with the
 // owners it is hinted for, and whether the person added it.
 // [{ wallet, hinted: [owner], given: bool }]
@@ -88,8 +88,6 @@ export function walletChoices(settings, given = []) {
   };
   const keys = settings && settings.keys;
   for (const o of hostedOwners(settings)) {
-    // the earliest form, one wallet for the archive: a hint for every owner
-    if (typeof keys === "string") add(keys, o, false);
     for (const w of core.walletHints(keys, o)) add(w, o, false);
   }
   for (const w of given) add(w, null, true);
@@ -182,19 +180,16 @@ export function github(token, fetchImpl = globalThis.fetch && globalThis.fetch.b
 }
 
 // The wallet of the owner's keys: the first wallet the archive's osheaf.json
-// hints for the owner ("keys": {"<owner>": {"wallets": [...]}}, then a hint
-// for every owner, the earlier {"wallet": ...}), else the one the person
+// hints for the owner ("keys": {"<owner>": {"wallets": [...]}}), else the one the person
 // gave (kept in this browser: a name, not a secret). Only GitHub wallets can
 // be read from a page. OWNER: by default the archive's owner.
 export function walletName(settings, given = "", owner = settings && settings.owner) {
-  const k = settings && settings.keys;
-  const named = typeof k === "string" ? k : (core.walletCandidates(settings || {}, owner || null)[0] || "");
+  const named = core.walletCandidates(settings || {}, owner || null)[0] || "";
   const name = (named.startsWith("github:") ? named : String(given || "")).trim();
   return /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(name) ? name : "";
 }
 
-// Whether the archive's osheaf.json hints a wallet for OWNER (its own, or one
-// for every owner).
+// Whether the archive's osheaf.json hints a wallet for OWNER.
 export function walletHinted(settings, owner = settings && settings.owner) {
   return core.walletHints(settings && settings.keys, owner || null).length > 0;
 }
