@@ -25,7 +25,7 @@ export async function headFiles(t, repo, line, layout, names, o = {}) {
 // request, the head that carried it out), past the browser's cache.
 export async function readArchive(t, repo, o = {}) {
   const out = { meta: null, empty: false, hasWorkflow: false, settings: null, lines: [], layout: "",
-                collections: [], originators: new Map(), secret: null, keyLog: false,
+                collections: [], catalogues: [], originators: new Map(), secret: null, keyLog: false,
                 base: null, short: shortForms({}) };
   // an empty repository (no commit yet) is not an archive, and GitHub cannot
   // add commits to it through its API: it must be made from the template
@@ -54,6 +54,18 @@ export async function readArchive(t, repo, o = {}) {
       return { label, name: line.name, owner: line.owner, originator,
                title: dc && dc.titles ? dc.titles[0].title : label,
                type: members ? members.type : "", members: (members && members.members) || [] };
+    }))).filter(Boolean);
+    // the owner catalogues (section 8.1), named in `owners` of the discovery
+    // document, in its order; kept by the tools, not by collections/*.yaml
+    const entries = disc && Array.isArray(disc.owners) ? disc.owners : [];
+    out.catalogues = (await Promise.all(entries.map(async (e) => {
+      const m = /^sheaf:([^:]+):([^:/]+)$/.exec((e && e.catalogue) || "");
+      const line = m && out.lines.find((x) => x.name === m[1] && x.owner === m[2]);
+      if (!line) return null;
+      const [members, dc] = await headFiles(t, repo, line, out.layout, ["members.json", "datacite.json"], o);
+      return { label: line.label || "", name: line.name, owner: line.owner, catalogue: true,
+               title: dc && dc.titles ? dc.titles[0].title : (line.label || line.name),
+               type: "owner catalogue", members: (members && members.members) || [] };
     }))).filter(Boolean);
   } else {
     out.keyLog = (await gh.readText(t, repo, "key-log/inventory.json", o)) !== null;

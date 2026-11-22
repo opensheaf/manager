@@ -53,6 +53,7 @@ const state = {
   settings: null,    // osheaf.json
   lines: [],         // the lines of opensheaf.json with a label: { id, kind, name, owner, label, status }
   layout: "",        // the storage layout, from opensheaf.json
+  catalogues: [],    // the owner catalogues, as collections with catalogue: true (no forms: kept by the tools)
   collections: [],   // [{ label, name, owner, originator, title, type, members: [members.json 0.2: { kind, name, owner, at, revisions, cite }] }]
   originators: new Map(), // "name:owner" -> the originator of the line, from its genesis record, once read
   base: null,        // a repository not set up: where its site will be served, { url, rule } (load.js)
@@ -377,6 +378,7 @@ function apply(a) {
   state.lines = a.lines;
   state.layout = a.layout;
   state.collections = a.collections;
+  state.catalogues = a.catalogues || [];
   state.originators = a.originators;
   state.secret = a.secret;
   state.keyLog = a.keyLog;
@@ -1090,14 +1092,15 @@ function showArchive() {
                      title: "One line per paper and per collection; a collection's members shown when it is opened",
                      onclick: () => { pref(COMPACT, compact() ? "" : "yes"); showArchive(); } },
          compact() ? "Show the lists in full" : "Compact lists")),
-    block("collections", "Collections", state.collections.length,
-        state.collections.length ? state.collections.map((c) => el("details", { class: "collection", open: collectionOpen.has(c.label) ? collectionOpen.get(c.label) : !compact() },
+    block("collections", "Collections", state.catalogues.length + state.collections.length,
+        state.catalogues.length + state.collections.length ? [...state.catalogues, ...state.collections].map((c) => el("details", { class: "collection", open: collectionOpen.has(c.label) ? collectionOpen.get(c.label) : !compact() },
       el("summary", { onclick: (e) => collectionOpen.set(c.label, !e.currentTarget.parentNode.open) }, el("h4", {}, c.title, " ", el("span", { class: "chip" }, c.type || "collection"),
+         c.catalogue && hosted().length > 1 ? el("span", { class: "small muted" }, " of ", ownerCode(c.owner)) : null,
          s.index && s.index.html && s.index.html.featured === c.label ? el("span", { class: "chip ok" }, "featured") : null,
          el("span", { class: "small muted count" }, ` ${c.members.length} member${c.members.length === 1 ? "" : "s"}`))),
-      el("p", { class: "small muted" }, el("a", { href: explorerLink(s.baseUrl, { line: c.label, kind: "collection" }),
+      el("p", { class: "small muted" }, el("a", { href: explorerLink(s.baseUrl, { line: c.label || c.name, kind: "collection" }),
                                                   title: uri(c), "data-line": `${c.name}:${c.owner}` },
-         el("code", {}, c.label))),
+         el("code", {}, c.label || c.name.slice(0, 8)))),
       c.members.length ? el("ol", { class: "members" }, c.members.map((m) => el("li", {},
         el("a", { href: memberLink(m, s.baseUrl, state.lines), title: uri(m), "data-line": `${m.name}:${m.owner}` },
            el("code", {}, memberName(m)), m.cite && m.cite.title ? ` ${m.cite.title}` : ""),
@@ -1107,6 +1110,8 @@ function showArchive() {
             el("a", { href: memberLink(m, s.baseUrl, state.lines, r.version), title: `Version ${r.documentVersion}` },
                String(r.documentVersion))]), ")") : null)))
         : el("p", { class: "muted" }, "No members yet."),
+      c.catalogue ? el("p", { class: "small muted" }, "Kept by the tools: each paper its owner deposits here is listed in it, " +
+        "in a new version signed by that owner.") :
       el("div", { class: "controls" },
         el("button", { class: "small", onclick: () => openForm("add", { "In collection": c.label }) }, "Add a member"),
         c.type === "selection" && c.members.length ?
