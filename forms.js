@@ -104,6 +104,9 @@ export const FORMS = {
       { label: "Label", type: "select", options: "documents", required: true },
       { label: "Document version it is about", type: "select", options: "versions", required: true },
       { label: "Text of the notice", type: "textarea", required: true },
+      { label: "Notice it replaces (optional)", placeholder: "1",
+        help: "To correct or withdraw an earlier notice about the same version: its number (1 for the first notice " +
+              "of the paper, as on its page). A notice is replaced at most once." },
       { label: "Full statement (optional)", type: "file" },
     ],
   },
