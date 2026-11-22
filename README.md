@@ -45,8 +45,7 @@ institution's wallet), several people may share a wallet and its owner
 (a group), each with a passkey of their own, and an owner's keys may be in
 several wallets. Under "Write directly", the page lists the wallets that
 the archive's `osheaf.json` hints for each owner it hosts (`"keys":
-{"<owner>": {"wallets": [...]}}`, or the earlier `"keys": {"wallet":
-...}` for every owner), then those added by name in the page (kept in
+{"<owner>": {"wallets": [...]}}`), then those added by name in the page (kept in
 this browser: names, not secrets). Choosing a wallet (step 1) and then
 the owners to unlock in it (step 2, the owners of the archive whose keys
 it holds, read from it) are two steps; "Unlock the chosen owners with
