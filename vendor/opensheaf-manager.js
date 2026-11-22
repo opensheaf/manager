@@ -1,4 +1,4 @@
-// opensheaf-js 06a548962ce7eeb96fa580dbbce4a3f77cb5a8c9: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 5e3724de0aba12dcdfb4a7cae106bafceff5ea89: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -2242,6 +2242,20 @@ function ownFiles(inv, ver, obj) {
   }
   return files;
 }
+function withdrawnVersions(inv, objOf2, at = inv.head) {
+  const out = /* @__PURE__ */ new Map();
+  const held2 = [];
+  for (const ver of versionsOf(inv)) {
+    const obj = objOf2(ver);
+    const n = obj?.documentVersion;
+    if (Number.isInteger(n) && !held2.includes(n)) held2.push(n);
+    if (obj?.status === "withdrawn") {
+      for (const k of held2) if (!out.has(k)) out.set(k, ver);
+    }
+    if (ver === at) break;
+  }
+  return out;
+}
 function documentVersionErrors(inv, objOf2) {
   const errors = [];
   const add2 = (ver, message2) => errors.push({
@@ -2251,7 +2265,7 @@ function documentVersionErrors(inv, objOf2) {
   const versions2 = versionsOf(inv);
   const seen = /* @__PURE__ */ new Map(), filesOfDoc = /* @__PURE__ */ new Map(), missingOf = /* @__PURE__ */ new Map();
   const fieldsOf = /* @__PURE__ */ new Map(), externalOf = /* @__PURE__ */ new Map();
-  let highest = 0, hadHistory = false, notices = [], prevVer = null;
+  let highest = 0, hadHistory = false, notices = [], prevVer = null, prevObj = null;
   const currentBefore = (at) => {
     if (!at) return null;
     const n = objOf2(currentVersion(inv, objOf2, at))?.documentVersion;
@@ -2261,6 +2275,7 @@ function documentVersionErrors(inv, objOf2) {
     const obj = objOf2(ver);
     if (!obj || obj.kind !== "document" && obj.kind !== "collection") return errors;
     const n = obj.documentVersion;
+    const newDoc = !seen.has(n);
     const own2 = ownFiles(inv, ver, obj);
     const change = obj.changes?.text ?? null;
     if (!seen.size && obj.parent) highest = (Number.isInteger(n) ? n : 1) - 1;
@@ -2309,6 +2324,11 @@ function documentVersionErrors(inv, objOf2) {
     }
     fieldsOf.set(n, fields);
     externalOf.set(n, external);
+    if (newDoc && obj.status === "withdrawn") {
+      add2(ver, "is a new document version and a withdrawal: a withdrawal is a description-only version (section 13.1)");
+    } else if (!newDoc && prevObj?.status === "withdrawn" && (obj.status !== "withdrawn" || !same(obj.withdrawal ?? null, prevObj.withdrawal ?? null))) {
+      add2(ver, `drops or changes the withdrawal of ${prevVer}: only a new document version reinstates a line (section 13.1)`);
+    }
     const hist = obj.history;
     if (hadHistory && hist == null) add2(ver, "lacks the history of earlier versions");
     if (hist != null) {
@@ -2346,6 +2366,7 @@ function documentVersionErrors(inv, objOf2) {
     }
     notices = current;
     prevVer = ver;
+    prevObj = obj;
   }
   return errors;
 }
@@ -9350,7 +9371,9 @@ async function deposit(f, a) {
     prevObj = await f.readObjectJson(dir, inv, OBJ2);
     prevDc = await f.readObjectJson(dir, inv, "datacite.json");
     if (prevObj.kind !== "document") exit(`${label} is not a document`);
-    if (prevObj.status === "withdrawn") exit(`${label} is withdrawn (section 13.1): a withdrawn document gets no new versions`);
+    if (prevObj.status === "withdrawn") {
+      f.env.err(`Note: ${label} is withdrawn; this version reinstates it, and the versions withdrawn stay withdrawn (section 13.1)`);
+    }
     let most = 0;
     for (const v of Object.keys(inv.versions)) most = Math.max(most, await docVersionOf(f, dir, inv, v));
     docVersion = most + 1;
@@ -19616,6 +19639,8 @@ async function versionBlock(f, line, ver, shown, notices, root, vetted2 = null) 
     `<div class="version-head">${head}</div>`
   ];
   if (when) out.push(`<div class="version-date">${esc(when)}</div>`);
+  const withdrawn = withdrawnVersions(line.inv, line.objOf, line.signed || line.inv.head);
+  if (withdrawn.has(n)) out.push(withdrawalHtml(line.objOf(withdrawn.get(n))));
   if (changesNote(obj)) out.push(`<div class="changes">${esc(changesNote(obj))}</div>`);
   out.push(`<div class="files">${files.filter(Boolean).join(" \xB7 ")}</div>`);
   const uri = await pinUri(line, ver);
@@ -22205,6 +22230,14 @@ var Verification = class {
         if (o.objs.get(`v${signed}`)?.status === "withdrawn") this.add("result", place3, "withdrawn (section 13.1)", {
           object: id
         });
+        else {
+          const withdrawn = withdrawnVersions(o.inv, (v) => o.objs.get(v) ?? null, `v${signed}`);
+          if (withdrawn.size) this.add("result", place3, `reinstated; withdrawn: document version(s) ${[
+            ...withdrawn.keys()
+          ].sort((x, y) => x - y).join(", ")} (section 13.1)`, {
+            object: id
+          });
+        }
       }
     }
     for (const ids of genesisNames.values()) {
@@ -22361,14 +22394,14 @@ var Verification = class {
         };
         for (const message2 of memberErrors(type, m)) this.add("error", who, message2, context);
         if (this.found.has(mid)) {
-          await this.memberHeld(m, mid, who, type, context);
+          await this.memberHeld(m, mid, who, type, context, ver === o.inv.head);
         } else if (ver === o.inv.head) {
           await this.memberElsewhere(m, mid, who, context);
         }
       }
     }
   }
-  async memberHeld(m, mid, who, type, context) {
+  async memberHeld(m, mid, who, type, context, inHead = false) {
     const a = this.archive;
     const held2 = this.found.get(mid);
     const sts = this.statuses.get(mid) || [];
@@ -22392,6 +22425,13 @@ var Verification = class {
       const s = k <= sts.length ? sts[k - 1] : null;
       if (s === UNSIGNED || s === INVALID) this.add("error", `${who} ${pv}`, "not a version: a collection pins only signed versions (section 8.5)", context);
       else if (s === UNCHECKED || s === CONTESTED) this.add("warning", `${who} ${pv}`, `${s} (section 8.5)`, context);
+      const signed = latestSigned(sts);
+      if (inHead && signed) {
+        const withdrawn = withdrawnVersions(held2.inv, (v) => held2.objs.get(v) ?? null, `v${signed}`);
+        if (withdrawn.has(pobj.documentVersion)) {
+          this.add("result", `${who} ${pv}`, `document version ${pobj.documentVersion} is withdrawn, in ${withdrawn.get(pobj.documentVersion)} (section 13.1)`, context);
+        }
+      }
     }
     if (type === "selection" && sts.length) {
       const signed = latestSigned(sts);

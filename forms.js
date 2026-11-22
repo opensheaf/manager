@@ -112,7 +112,8 @@ export const FORMS = {
   },
   withdraw: {
     title: "Withdraw a paper",
-    help: "The paper's files stay in the archive; the withdrawal is shown with it.",
+    help: "The paper's files stay in the archive; the withdrawal is shown with it, on the versions deposited so far. " +
+          "A new version of the paper later reinstates it; those versions stay withdrawn.",
     fields: [
       { label: "Label", type: "select", options: "documents", required: true },
       { label: "Reason for the withdrawal", type: "textarea", required: true },

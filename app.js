@@ -1155,6 +1155,8 @@ function papersTable() {
     const versionTitle = blocked ? why : !c ? null : c.kind === "new" ? `A new branch of it for ${ownerText(acting)}`
       : c.kind === "refused" ? `${ownerText(acting)} is the originator of this paper; its own line is not here`
         : `Goes into ${c.label}, the line of ${ownerText(acting)}`;
+    const reinstates = o.status === "withdrawn" && !versionTitle
+      ? "A new version reinstates the paper; the versions withdrawn stay withdrawn. Say why it is back in the change note." : null;
     return el("tr", { class: depth ? "branch" : "" },
       el("td", { style: depth ? `padding-left: ${0.4 + 1.2 * depth}em` : null },
         depth ? el("span", { class: "muted", "aria-hidden": "true" }, "\u21b3 ") : null,
@@ -1166,7 +1168,7 @@ function papersTable() {
         several ? el("div", { class: "small muted" }, "owner ", ownerCode(o.owner)) : null),
       el("td", { "data-title": o.label }, titleOf(o)),
       el("td", { class: "actions" },
-        el("button", { class: "small", disabled: blocked || (c && c.kind === "refused"), title: versionTitle,
+        el("button", { class: "small", disabled: blocked || (c && c.kind === "refused"), title: versionTitle || reinstates,
                        onclick: () => openForm("deposit", { "Label": o.label, "This deposit": NEW_VERSION }) },
           c && c.kind === "new" ? "New version (branch)" : "New version"),
         ownAct("notice", "Notice"),
