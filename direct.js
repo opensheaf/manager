@@ -208,8 +208,7 @@ export async function recordWallet({ gh, repo, owner, wallet, cache = new Map(),
 export async function locksOf({ gh, archiveRepo, settings, wallet, signers }) {
   if (!wallet) throw new Error("name the key wallet of the owner (github:OWNER/REPOSITORY)");
   const repo = wallet.slice("github:".length);
-  const w = new core.GitHubWallet(repo, { api: gh.api, fetch: gh.fetch, token: async () =>
-    (typeof gh.token === "function" ? gh.token() : gh.token) }, [archiveRepo]);
+  const w = walletOf(gh, archiveRepo, wallet);
   w.checkName();
   let locks;
   try {
@@ -333,8 +332,12 @@ export function newRepositoryUrl(wallet) {
   return `https://github.com/new?${q.toString()}`;
 }
 
-function walletOf(gh, archiveRepo, wallet) {
-  return new core.GitHubWallet(wallet.slice("github:".length), { api: gh.api, fetch: gh.fetch, token: async () =>
+// A wallet read through GitHub's API, bypassing the browser's cache: GitHub's
+// answers may be kept for a minute, and a wallet the page has just changed
+// (a key put, a passkey enrolled) must be read as it is now.
+export function walletOf(gh, archiveRepo, wallet) {
+  const fetchFresh = (url, init = {}) => gh.fetch(url, { ...init, cache: "no-store" });
+  return new core.GitHubWallet(wallet.slice("github:".length), { api: gh.api, fetch: fetchFresh, token: async () =>
     (typeof gh.token === "function" ? gh.token() : gh.token) }, [archiveRepo]);
 }
 

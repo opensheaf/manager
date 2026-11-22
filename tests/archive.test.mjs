@@ -60,6 +60,9 @@ test("short forms: the shortest unique prefix, never under 8 characters, tombsto
   const lines = disc.objects.filter((x) => x.label);
   assert.equal(ownerShown(o, lines, s), "jane");
   assert.equal(ownerShown("p".repeat(51) + "q", lines, s), "pppppppp");
+  // an owner whose key log is listed without a label: its short name, never an empty one
+  const b = "b".repeat(51) + "q";
+  assert.equal(ownerShown(b, [...lines, { name: b, owner: b, kind: "owner", label: "" }], s), "bbbbbbbb");
   assert.equal(foreignName("b".repeat(52)), "b".repeat(16) + "…");
   assert.equal(s.name("abc"), "abc");
 });

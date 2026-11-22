@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as core from "../vendor/opensheaf-manager.js";
-import { setupState, pushCurrentKey, enrollPasskey, unlock, newRepositoryUrl, github } from "../direct.js";
+import { setupState, pushCurrentKey, enrollPasskey, unlock, newRepositoryUrl, github, walletOwners } from "../direct.js";
 import { seal, windows, owner, cred } from "./popup-double.mjs";
 
 // GitHub's API for a few repositories: { "o/r": { visibility, push, files: Map } }.
@@ -152,4 +152,18 @@ test("a key wallet set up from the page: checked, the key pushed, a passkey crea
   const [opened] = await keys;
   const message2 = new TextEncoder().encode("a message");
   assert.deepEqual(await opened.sign(message2), await key.sign(message2));
+});
+
+// A wallet the page has just changed is read as it is now: every read of the
+// wallet bypasses the browser's cache (GitHub's answers may be kept for a
+// minute), so that the owners it holds show at once after the setup.
+test("the wallet is read past the browser's cache", async () => {
+  const repos = { "jane/opensheaf-keys": { visibility: "private", push: true, files: new Map() } };
+  const { fetchImpl } = fakeGitHub(repos);
+  const modes = [];
+  const gh = github(async () => "token", (url, init = {}) => { modes.push(init.cache); return fetchImpl(url, init); });
+  assert.deepEqual(await walletOwners({ gh, archiveRepo: "jane/papers", wallet: "github:jane/opensheaf-keys",
+                                        settings: { owner } }), []);
+  assert.ok(modes.length > 0);
+  assert.deepEqual([...new Set(modes)], ["no-store"]);
 });

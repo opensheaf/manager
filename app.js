@@ -1295,6 +1295,8 @@ function walletOwnersOf(w) {
   const entry = { loading: true, list: [], error: "" };
   state.wallets.owners.set(w, entry);
   const repo = state.repo;
+  const before = heldBefore.get(w);
+  heldBefore.delete(w);
   direct.walletOwners({ gh: ghCore(), archiveRepo: repo, wallet: w, settings: state.settings })
     .then((list) => {
       entry.list = list;
@@ -1303,6 +1305,9 @@ function walletOwnersOf(w) {
         const hint = (walletChoices().find((c) => c.wallet === w) || { hinted: [] }).hinted;
         const pick = list.map((x) => x.owner).filter((o) => hint.includes(o));
         state.wallets.selected.set(w, new Set(pick.length ? pick : list.map((x) => x.owner)));
+      } else if (before) {
+        // read again after the setup put an owner's keys there: that owner chosen too
+        for (const x of list) if (!before.has(x.owner)) state.wallets.selected.get(w).add(x.owner);
       }
     })
     .catch((e) => { entry.error = e.message; })
@@ -1311,6 +1316,30 @@ function walletOwnersOf(w) {
 }
 
 const selectedIn = (w) => state.wallets.selected.get(w) || new Set();
+
+// The owners a wallet held before it was read again (walletChanged).
+const heldBefore = new Map();
+
+// After a step of the setup changed the wallet W (a key put, a passkey
+// enrolled) or the archive's osheaf.json (W recorded as a hint, in the
+// commit COMMIT): the owners W holds are read again (the wallet bypassing the
+// browser's cache, direct.js), the archive too at that commit, and the page
+// is drawn again, so that the wallet's owners and the owners it is hinted
+// for are those of now, not of a minute ago.
+async function walletChanged(w, commit = "") {
+  const repo = state.repo;
+  const known = state.wallets.owners.get(w);
+  if (known && !known.loading) heldBefore.set(w, new Set(known.list.map((x) => x.owner)));
+  state.wallets.owners.delete(w);
+  if (commit) {
+    try {
+      const a = await readArchive(await token(), repo, { ref: commit });
+      refreshArchive(repo, a, commit);
+      return;
+    } catch (_) { /* drawn below with what the page has */ }
+  }
+  if (state.repo === repo) showArchive();
+}
 
 // How the changes are written, chosen above the forms: directly (carried
 // out and signed in this page, with the keys that passkeys unlock) or by the
@@ -1505,22 +1534,24 @@ function setupSummary() {
 // person is told; a refusal (no write access) leaves the archive as it is.
 async function recordWalletIfNone(w) {
   const s = state.settings, owner = setupOwner();
-  if (!s || !owner || !setup.state || !setup.state.there.length) return;
-  if (core.walletHints(s.keys, owner).includes(w)) return;
+  if (!s || !owner || !setup.state || !setup.state.there.length) return "";
+  if (core.walletHints(s.keys, owner).includes(w)) return "";
   try {
     const got = await direct.recordWallet({ gh: ghCore(), repo: state.repo, owner, wallet: w, cache: state.cache });
     if (got.recorded) {
       const keys = s.keys && typeof s.keys === "object" ? s.keys : {};
       const mine = keys[owner] && typeof keys[owner] === "object" ? keys[owner] : {};
       s.keys = { ...keys, [owner]: { ...mine, wallets: [...(Array.isArray(mine.wallets) ? mine.wallets : []), w] } };
+      const sha = got.commit && got.commit.sha || String(got.commit || "");
       message("ok", `${w} is now recorded in the archive's osheaf.json as a key wallet of ${ownerText(owner)} (commit ` +
-        `${(got.commit && got.commit.sha || String(got.commit || "")).slice(0, 7)}), so that osheaf and this page look for ` +
-        "its keys there.");
+        `${sha.slice(0, 7)}), so that osheaf and this page look for its keys there.`);
+      return sha;
     }
   } catch (e) {
     message("warn", `${w} was not recorded in the archive's osheaf.json: ${e.message}. Record it with ` +
       `osheaf key wallet --owner ${owner} --add ${w}.`);
   }
+  return "";
 }
 
 // The wallet named, checked once in the background when the archive opens
@@ -1582,7 +1613,7 @@ function renderSetup() {
       state.wallets.chosen = w;
       setup.wallet = w;
       message("ok", `${w} is private, and this sign-in can read and write it.`);
-      await recordWalletIfNone(w);
+      await walletChanged(w, await recordWalletIfNone(w));
     } catch (e) {
       setup.state = null;
       message("bad", `The wallet ${w} cannot be used: ${e.message}.`);
@@ -1605,7 +1636,8 @@ function renderSetup() {
   if (st) {
     const signers = setupSigners();
     steps.push(el("p", { class: "small" }, `${st.wallet.name}: holds ${st.there.length} of the ${signers.dids.length} current ` +
-      `key(s) of the owner`, st.there.length ? [" (", st.there.map((d, i) => [i ? ", " : "", short(d)]), ")"] : "",
+      "key(s) of the owner ", ownerCode(owner),
+      st.there.length ? [" (", st.there.map((d, i) => [i ? ", " : "", short(d)]), ")"] : "",
       `; ${st.enrolled.length} open(s) with a passkey.`));
     const existingKey = () => {
       const file = el("input", { type: "file", id: "setup-key-file", accept: ".key,.txt,text/plain", "aria-label": "Key file" });
@@ -1630,7 +1662,7 @@ function renderSetup() {
                                 : `The current key ${got.did.slice(8, 20)}... was in ${st.wallet.name} already: left as it is.`);
           setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: state.repo, settings: s,
                                                   wallet: st.wallet.name, signers: setupSigners() });
-          await recordWalletIfNone(st.wallet.name);
+          await walletChanged(st.wallet.name, await recordWalletIfNone(st.wallet.name));
         } catch (e) {
           message("bad", `The key was not put in the wallet: ${e.message}.`);
         } finally {
@@ -1702,7 +1734,7 @@ function renderSetup() {
               "and the passphrase still does. Unlock with your passkey above." : "Every key there opens with your passkey already.");
             setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: state.repo, settings: s,
                                                     wallet: st.wallet.name, signers: setupSigners() });
-            state.wallets.owners.delete(st.wallet.name);
+            await walletChanged(st.wallet.name);
           })
           .catch((e) => message("bad", `No passkey was enrolled: ${e.message}.`))
           .finally(() => { busy(false); renderSetup(); });
@@ -1924,8 +1956,7 @@ async function finishNewKey(st, typed) {
       const signers = await signersFor(s.owner);
       setup.state = await direct.setupState({ gh: ghCore(), archiveRepo: repo, settings: s, wallet: st.wallet.name,
                                               signers });
-      const a = await readArchive(await token(), repo, { ref: p.committed.commit.sha });
-      refreshArchive(repo, a, p.committed.commit.sha);
+      await walletChanged(st.wallet.name, p.committed.commit.sha);
     } catch (_) { /* read again when the page is */ }
   } finally {
     setup.busy = false;

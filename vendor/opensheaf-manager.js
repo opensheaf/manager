@@ -1,4 +1,4 @@
-// opensheaf-js dba20262ec939454863d3bf852e141c67041e0cb: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 01d13a982bde63b18b2d92b6d0555d1341745175: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -24417,7 +24417,9 @@ async function carryOut(storage, env, operation, fields, files = {}, { origin = 
     let [cid, message2, title, done] = await op(r, form, origin);
     const why = field(form, "Why (optional)");
     if (why) message2 += `: ${why}`;
-    await osheaf(r, (f) => collect2(f, {}));
+    await osheaf(r, (f) => collect2(f, {
+      owner: owner || f.archive.owner
+    }));
     if (cid) {
       await sync2(r, cid, message2);
       await propagate(r, cid, message2);

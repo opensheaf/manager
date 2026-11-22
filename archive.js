@@ -129,9 +129,10 @@ export function shortForms(discovery) {
 
 // An owner as the page shows it: its label in this archive (an archive may
 // label any line it lists, owners included, section 3.1), else its short
-// owner name.
+// owner name. The lines listed include those without a label (an owner's key
+// log the archive does not label): those are shown by the short name too.
 export function ownerShown(owner, archiveLines, short) {
-  const o = (archiveLines || []).find((x) => x.kind === "owner" && x.name === owner && x.owner === owner);
+  const o = (archiveLines || []).find((x) => x.kind === "owner" && x.name === owner && x.owner === owner && x.label);
   return o ? o.label : short.owner(owner);
 }
 
