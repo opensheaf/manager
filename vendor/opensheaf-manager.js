@@ -1,4 +1,4 @@
-// opensheaf-js 735f1f98a6aa8664806b54810671c7fbece437d5: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 5ea2fdf540d23727eaff9730b06a34949d59d2cd: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -1932,6 +1932,10 @@ var init_owners = __esm({
         for (const v of this.versions) if (v.number === number && v.digest === digest) return v;
         for (const c of this.forkRecord?.carried || []) if (c.number === number && c.digest === digest) return c;
         return null;
+      }
+      verified(number, digest) {
+        const v = this.lookup(number, digest);
+        return v && v.isVersion ? v : null;
       }
       extensions() {
         const side = this.side();
@@ -8689,6 +8693,9 @@ var init_folder = __esm({
           }), ORIGIN, disc);
           await paged.loadPages();
           listed = paged.pageProblems.length ? [] : paged.listed();
+          this.unreadPages = paged.pageProblems[0] ?? null;
+        } else {
+          this.unreadPages = null;
         }
         this.labels = new Map(listed.filter((o) => o && typeof o === "object" && o.label).map((o) => [
           o.label,
@@ -8708,6 +8715,11 @@ var init_folder = __esm({
           this.archive.owner
         ];
         return out.concat((this.archive.owners || []).filter((o) => !out.includes(o)));
+      }
+      refuseUnreadPages() {
+        if (this.unreadPages) {
+          exit(`opensheaf.json: ${this.unreadPages}: the labels of the lines are not known, and writing the discovery document or the website now would lose them; nothing is written (restore the pages of objects, from git for instance, and run the command again)`);
+        }
       }
       labelOf(id) {
         for (const [label, i] of this.labels) if (i === id) return label;
@@ -9225,6 +9237,7 @@ async function writeIndexes(f) {
   }
 }
 async function writeDiscovery(f) {
+  f.refuseUnreadPages?.();
   await writeIndexes(f);
   let doc = await discovery(f);
   const pages = objectPages(doc.objects);
@@ -10639,8 +10652,8 @@ var init_resolve = __esm({
         if (name2 === owner) {
           const log = await this.keyLog(owner, where2, options);
           const v = log && isVersion(version) ? log.lookup(versionNumber(version), digest) : null;
-          if (v) return found("verified", null, version, digest, [], log);
-          return found(log ? "mismatch" : "unavailable", null, version, digest, [], log);
+          if (v && log.verified(versionNumber(version), digest)) return found("verified", null, version, digest, [], log);
+          return found(!log ? "unavailable" : v ? "not a version" : "mismatch", null, version, digest, [], log);
         }
         const copies = await this.copies(name2, owner, where2, options);
         const n = isVersion(version) ? versionNumber(version) : 0;
@@ -18029,8 +18042,11 @@ async function target(f, r, text3, where2) {
     places
   };
 }
+function httpsBases(places) {
+  return places.filter((w) => typeof w === "string" && w.startsWith("https://") && w.endsWith("/"));
+}
 function recordedAt(f, r, found2, places) {
-  const out = places.filter((w) => typeof w === "string" && w.startsWith("https://") && w.endsWith("/"));
+  const out = httpsBases(places);
   const c = found2.copy;
   if (c && c.archive === r.home) out.push(f.archive.baseUrl);
   else if (c && c.where.startsWith("https://")) out.push(c.where);
@@ -18358,9 +18374,11 @@ async function syncMember(f, r, entry, kind, oldMembers) {
   const old = oldMembers.find((m2) => m2.name === name2 && m2.owner === owner) ?? null;
   if (old !== null && !u?.sha512) {
     const m2 = JSON.parse(JSON.stringify(old));
-    if (at.length) m2.at = [
+    const added = httpsBases(at);
+    for (const w of at) if (!added.includes(w)) f.env.out(`${text3}: at ${w}: not an https base URL ending in /: not recorded`);
+    if (added.length) m2.at = [
       .../* @__PURE__ */ new Set([
-        ...at,
+        ...added,
         ...m2.at
       ])
     ];
@@ -18486,7 +18504,7 @@ async function keeperLink(log, fetchJson = null) {
     reason: "the owner names no keeper",
     successor: null
   };
-  const link = (status, reason, successor = null) => ({
+  const link2 = (status, reason, successor = null) => ({
     keeper,
     status,
     reason,
@@ -18499,7 +18517,7 @@ async function keeperLink(log, fetchJson = null) {
     data2 = await fetchJson(url);
   } catch (error) {
     if (!(error instanceof KeeperUnreachable)) throw error;
-    return link(NOT_CHECKED, `offline: ${error.message}`);
+    return link2(NOT_CHECKED, `offline: ${error.message}`);
   }
   const isMap3 = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
   if (orcid) {
@@ -18509,20 +18527,20 @@ async function keeperLink(log, fetchJson = null) {
       const found2 = typeof value === "string" ? value.match(OWNER_WORD) || [] : [];
       if (found2.length && found2[0] === owner) {
         const others = found2.slice(1).filter((w) => w !== owner);
-        return link(CONFIRMED, "ORCID record links the owner", others[0] ?? null);
+        return link2(CONFIRMED, "ORCID record links the owner", others[0] ?? null);
       }
     }
-    return link(CLAIMED, "the ORCID record has no link naming the owner");
+    return link2(CLAIMED, "the ORCID record has no link naming the owner");
   }
-  if (data2 === null) return link(CLAIMED, `there is no ${url}`);
-  if (!isMap3(data2) || data2.format !== KEEPER_FORMAT) return link(CLAIMED, `${url} is not of format ${KEEPER_FORMAT}`);
-  if (!(Array.isArray(data2.owners) && data2.owners.includes(owner))) return link(CLAIMED, `${url} does not list the owner`);
+  if (data2 === null) return link2(CLAIMED, `there is no ${url}`);
+  if (!isMap3(data2) || data2.format !== KEEPER_FORMAT) return link2(CLAIMED, `${url} is not of format ${KEEPER_FORMAT}`);
+  if (!(Array.isArray(data2.owners) && data2.owners.includes(owner))) return link2(CLAIMED, `${url} does not list the owner`);
   let succ = isMap3(data2.successors) ? data2.successors[owner] : null;
   succ = typeof succ === "string" && OWNER_NAME.test(succ) && succ !== owner ? succ : null;
-  return link(CONFIRMED, `${url} lists the owner`, succ);
+  return link2(CONFIRMED, `${url} lists the owner`, succ);
 }
-function successorClaim(log, link) {
-  if (!link || link.successor === null || link.successor === void 0 || link.successor === log.successor) return null;
+function successorClaim(log, link2) {
+  if (!link2 || link2.successor === null || link2.successor === void 0 || link2.successor === log.successor) return null;
   if (log.successor) return `claimed by the keeper (the ending version names ${log.successor}; section 6.6)`;
   return "named by the keeper (section 6.6)";
 }
@@ -19581,6 +19599,15 @@ init_deposit();
 function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
 }
+function safeUrl(u) {
+  return typeof u === "string" && /^https?:\/\//i.test(u) ? u : "";
+}
+function link(u, label, cls = "") {
+  const safe = safeUrl(u);
+  const attr = cls ? ` class="${cls}"` : "";
+  if (safe) return `<a${attr} href="${esc(safe)}">${label}</a>`;
+  return cls ? `<span${attr}>${label}</span>` : label;
+}
 function fill(text3, values) {
   for (const [k, v] of Object.entries(values)) text3 = text3.split(`{{${k}}}`).join(v);
   return text3;
@@ -19808,7 +19835,7 @@ async function versionBlock(f, line, ver, shown, notices, root, vetted2 = null) 
   for (const e of obj.external || []) {
     if (e.record) {
       const label = e.service === "arXiv" && arxiv ? `arXiv:${arxiv}` : e.service;
-      files.push(`<a href="${esc(e.record)}">${esc(label)}</a>`);
+      files.push(link(e.record, esc(label)));
     }
   }
   if (arxiv && !(obj.external || []).some((e) => e.service === "arXiv")) {
@@ -19831,15 +19858,15 @@ async function versionBlock(f, line, ver, shown, notices, root, vetted2 = null) 
     const k = i + 1;
     if (x.documentVersion === n && !replaced.has(k)) {
       const src = line.signed || line.inv.head;
-      const link = x.path ? ` ${await fileLink(f, root, line, src, x.path, "statement")}` : "";
+      const link2 = x.path ? ` ${await fileLink(f, root, line, src, x.path, "statement")}` : "";
       const repl = x.replaces ? `, replacing notice ${x.replaces}` : "";
-      out.push(`<div class="notice"><strong>Notice ${k} (${esc(fmtDate(x.date))}${repl}):</strong> ${esc(x.text ?? "")}${link}</div>`);
+      out.push(`<div class="notice"><strong>Notice ${k} (${esc(fmtDate(x.date))}${repl}):</strong> ${esc(x.text ?? "")}${link2}</div>`);
     }
   }
   out.push("</li>");
   return out.join("\n");
 }
-async function metaTags(f, line, cur, obj, dc) {
+async function metaTags(site, f, line, cur, obj, dc) {
   const base = f.archive.baseUrl;
   const landing = `${base}paper/${line.slug}/`;
   const pdf = await fileUrl(f, base, line, cur, pdfOf(obj));
@@ -19855,40 +19882,159 @@ async function metaTags(f, line, cur, obj, dc) {
   if (abstract) tags.push(`<meta name="description" content="${esc([
     ...words(abstract).join(" ")
   ].slice(0, 300).join(""))}">`);
-  const rights = (dc.rightsList?.length ? dc.rightsList : [
-    {}
-  ])[0];
+  const rel = (r, href, media = null) => `<link rel="${r}" href="${esc(href)}"` + (media ? ` type="${esc(media)}"` : "") + ">";
   const cite2 = dc.doi ? `https://doi.org/${dc.doi}` : landing;
-  tags.push(`<link rel="canonical" href="${esc(landing)}">`, `<link rel="cite-as" href="${esc(cite2)}">`, `<link rel="describedby" href="${esc(await fileUrl(f, base, line, cur, "datacite.json"))}" type="application/vnd.datacite.datacite+json">`);
-  if (pdf) tags.push(`<link rel="item" href="${esc(pdf)}" type="application/pdf">`);
-  if (rights.rightsUri) tags.push(`<link rel="license" href="${esc(rights.rightsUri)}">`);
+  const kind = schemaType(obj, dc);
+  tags.push(rel("canonical", landing), rel("cite-as", cite2), rel("describedby", await fileUrl(f, base, line, cur, "datacite.json"), "application/vnd.datacite.datacite+json"));
+  for (const [path, media] of contentItems(obj)) {
+    const u = await fileUrl(f, base, line, cur, path);
+    if (u) tags.push(rel("item", u, media));
+  }
+  for (const u of licenceUrls(dc)) tags.push(rel("license", u));
+  tags.push(rel("type", `https://schema.org/${kind}`));
+  for (const c of dc.creators) {
+    const o = orcidOf(c);
+    if (o) tags.push(rel("author", o));
+  }
   const ld = {
     "@context": "https://schema.org",
-    "@type": "ScholarlyArticle",
+    "@type": kind,
     name: dc.titles[0].title,
     url: landing,
-    author: dc.creators.map((c) => ({
-      "@type": "Person",
-      name: displayName(c)
-    })),
+    author: dc.creators.map(personLd),
     datePublished: date2,
     version: dc.version,
     identifier: [
-      ...dc.doi ? [
-        `https://doi.org/${dc.doi}`
-      ] : [],
-      fullUri(line)
+      fullUri(line),
+      ...[
+        dc.doi,
+        conceptDoi(dc)
+      ].filter(Boolean).map((d) => `https://doi.org/${d}`)
     ]
   };
-  if (pdf) ld.encoding = {
-    "@type": "MediaObject",
-    contentUrl: pdf,
-    encodingFormat: "application/pdf"
-  };
+  const encodings = [];
+  for (const r of obj.renditions || []) {
+    const u = await fileUrl(f, base, line, cur, r.path);
+    if (u) encodings.push({
+      "@type": "MediaObject",
+      contentUrl: u,
+      encodingFormat: r.mediaType ?? null
+    });
+  }
+  if (encodings.length) ld.encoding = encodings;
+  const licences = [
+    ...licenceUrls(dc),
+    ...(dc.rightsList || []).filter((r) => r.rights && !(r.rightsUri || r.rightsIdentifier)).map((r) => r.rights)
+  ];
+  if (licences.length) ld.license = licences.length === 1 ? licences[0] : licences;
+  const same2 = sameAs(dc);
+  if (same2.length) ld.sameAs = same2;
   if (abstract) ld.abstract = abstract;
-  if (rights.rightsUri) ld.license = rights.rightsUri;
+  const keywords = (dc.subjects || []).filter((x) => x.subject).map((x) => x.subject);
+  if (keywords.length) ld.keywords = keywords;
+  if (obj.kind === "collection") ld.hasPart = await collectionParts(site, f, line, cur);
+  if (obj.status === "withdrawn") ld.creativeWorkStatus = "Withdrawn";
   tags.push('<script type="application/ld+json">' + pyJson(ld).replace(/<\//g, "<\\/") + "<\/script>");
   return tags.join("\n");
+}
+function contentItems(obj) {
+  const out = (obj.renditions || []).map((r) => [
+    r.path,
+    r.mediaType ?? null
+  ]);
+  if (obj.mainSource) out.push([
+    obj.mainSource,
+    obj.sourceFormat ?? null
+  ]);
+  else if (obj.kind === "collection") out.push([
+    "members.json",
+    "application/json"
+  ]);
+  const seen = /* @__PURE__ */ new Set();
+  return out.filter((x) => {
+    const k = JSON.stringify(x);
+    return !seen.has(k) && seen.add(k);
+  });
+}
+function licenceUrls(dc) {
+  const out = [];
+  for (const r of dc.rightsList || []) {
+    if (safeUrl(r.rightsUri)) out.push(r.rightsUri);
+    else if (r.rightsIdentifier) out.push(`https://spdx.org/licenses/${r.rightsIdentifier}.html`);
+  }
+  return out;
+}
+function orcidOf(creator2) {
+  for (const x of creator2.nameIdentifiers || []) {
+    if ((x.nameIdentifierScheme || "").toUpperCase() === "ORCID" && x.nameIdentifier) {
+      return `https://orcid.org/${x.nameIdentifier.split("/").pop()}`;
+    }
+  }
+  return null;
+}
+var SCHEMA_TYPES = {
+  Collection: "Collection",
+  Dataset: "Dataset",
+  Software: "SoftwareSourceCode",
+  Book: "Book",
+  BookChapter: "Chapter",
+  Audiovisual: "MediaObject",
+  Image: "ImageObject",
+  Text: "ScholarlyArticle",
+  Preprint: "ScholarlyArticle",
+  JournalArticle: "ScholarlyArticle",
+  ConferencePaper: "ScholarlyArticle",
+  Report: "Report",
+  Dissertation: "Thesis",
+  Presentation: "PresentationDigitalDocument"
+};
+function schemaType(obj, dc) {
+  if (obj.kind === "collection") return "Collection";
+  const t = dc.types?.resourceTypeGeneral;
+  return Object.hasOwn(SCHEMA_TYPES, t) ? SCHEMA_TYPES[t] : "CreativeWork";
+}
+function personLd(c) {
+  const p = {
+    "@type": (c.nameType ?? "Personal") === "Personal" ? "Person" : "Organization",
+    name: displayName(c)
+  };
+  const o = orcidOf(c);
+  if (o) p["@id"] = o;
+  return p;
+}
+function conceptDoi(dc) {
+  return (dc.relatedIdentifiers || []).find((r) => r.relationType === "IsVersionOf" && r.relatedIdentifierType === "DOI")?.relatedIdentifier ?? null;
+}
+function sameAs(dc) {
+  const out = [];
+  for (const r of dc.relatedIdentifiers || []) {
+    if (r.relationType !== "IsIdenticalTo") continue;
+    const ident = r.relatedIdentifier ?? "", kind = r.relatedIdentifierType;
+    const url = {
+      DOI: `https://doi.org/${ident}`,
+      URL: ident,
+      arXiv: `https://arxiv.org/abs/${ident.startsWith("arXiv:") ? ident.slice(6) : ident}`
+    }[kind];
+    if (Object.hasOwn({
+      DOI: 1,
+      URL: 1,
+      arXiv: 1
+    }, kind) && safeUrl(url)) out.push(url);
+  }
+  return out;
+}
+async function collectionParts(site, f, line, ver) {
+  const out = [];
+  for (const m of (await line.json("members.json", ver))?.members || []) {
+    const h = await site.held(m);
+    if (h) out.push({
+      "@id": `${f.archive.baseUrl}paper/${h.slug}/`
+    });
+    else if (m.doi) out.push({
+      "@id": `https://doi.org/${m.doi}`
+    });
+  }
+  return out;
 }
 function abstractHtml(dc) {
   for (const x of dc.descriptions || []) {
@@ -19916,6 +20062,7 @@ async function template(f, name2) {
 }
 var text2 = async (f, name2) => new TextDecoder().decode(await template(f, name2));
 async function render(f, members, { home = true, featured = null, keeperFetch = null, groups = null } = {}) {
+  f.refuseUnreadPages?.();
   const site = new Site(f, {
     keeperFetch,
     home
@@ -20001,7 +20148,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
       {}
     ])[0];
     let licence2 = esc(rights.rights ?? "");
-    if (rights.rightsUri) licence2 = `<a href="${esc(rights.rightsUri)}">${licence2}</a>`;
+    if (rights.rightsUri) licence2 = link(rights.rightsUri, licence2);
     const citeUrl = dc.doi ? `https://doi.org/${dc.doi}` : `${base}paper/${line.slug}/`;
     const cite2 = esc(`${authorsOf(dc)}. ${dc.titles[0].title}. ${f.archive.name}, ${(issued || "").slice(0, 4)}, version ${obj.documentVersion}.`) + ` <code class="copy">${esc(await pinUri(line, cur))}</code>. <a href="${esc(citeUrl)}">${esc(citeUrl)}</a>`;
     let htmlLink = "";
@@ -20013,7 +20160,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
       root,
       archive_name: esc(f.archive.name),
       base_url: esc(base),
-      head: await metaTags(f, line, cur, obj, dc),
+      head: await metaTags(site, f, line, cur, obj, dc),
       title: esc(dc.titles[0].title),
       issued: esc(fmtDate(issued)),
       withdrawn: withdrawalHtml(line.state),
@@ -20273,21 +20420,15 @@ async function remoteEntry(site, m, root = "", showOwner = false) {
     ({ archive: archiveName, at } = view);
     links.push('<span class="contested">mismatch: its archive holds another version under this pin</span>');
   } else {
-    ({ archive: archiveName, at } = view);
-    const dc = view.dc;
-    title = dc.titles[0].title;
-    by = authorsOf(dc);
-    abstract = abstractHtml(dc);
-    if (view.pdf) links.push(`<a href="${esc(view.pdf)}">PDF</a>`);
-    landing = dc.url || "";
-    if (landing) links.unshift(`<a href="${esc(landing)}">landing page</a>`);
-    withdrawn = withdrawalHtml(view.state || {}, " by its owner");
+    ({ archive: archiveName, at, title, by, abstract, withdrawn, landing } = view);
+    if (view.pdf) links.push(link(view.pdf, "PDF"));
+    if (landing) links.unshift(link(landing, "landing page"));
   }
   return [
     `<li class="paper member${withdrawn ? " withdrawn" : ""}">`,
-    landing ? `<a class="paper-title" href="${esc(landing)}">${esc(title)}</a>` : `<span class="paper-title">${esc(title)}</span>`,
+    link(landing, esc(title), "paper-title"),
     `<div class="paper-authors">${esc(by)}</div>`,
-    `<div class="paper-meta">${esc(String(year))}` + (showOwner ? ` \xB7 ${await ownerTag(site, m.owner, root)}` : "") + ` \xB7 in <a href="${esc(at)}">${esc(archiveName)}</a>` + (m.revisions ? ` \xB7 ${versionsLine(m, {})}` : "") + (links.length ? " \xB7 " + links.join(" \xB7 ") : "") + ` \xB7 <span class="pin" title="${pin}">pin ${pin.slice(0, 32)}\u2026</span></div>`,
+    `<div class="paper-meta">${esc(String(year))}` + (showOwner ? ` \xB7 ${await ownerTag(site, m.owner, root)}` : "") + ` \xB7 in ${link(at, esc(archiveName))}` + (m.revisions ? ` \xB7 ${versionsLine(m, {})}` : "") + (links.length ? " \xB7 " + links.join(" \xB7 ") : "") + ` \xB7 <span class="pin" title="${pin}">pin ${pin.slice(0, 32)}\u2026</span></div>`,
     withdrawn,
     abstract ? `<details><summary>Abstract</summary>${abstract}</details>` : "",
     "</li>"
@@ -20341,8 +20482,9 @@ async function remoteView(site, m) {
       const path = src.root + (await pathOf(id, src.disc.storageLayout)).join("/");
       const data2 = await src.get(`${path}/${pinVer}/inventory.json`);
       if (data2 === null) continue;
+      const name2 = src.disc.name;
       const view = {
-        archive: src.disc.name || at,
+        archive: typeof name2 === "string" && name2 ? name2 : at,
         at: src.at || at
       };
       if (await sha512hex(data2) !== pin) return {
@@ -20351,8 +20493,10 @@ async function remoteView(site, m) {
       };
       const inv = JSON.parse(new TextDecoder().decode(data2));
       const read = async (ver, logical, from = inv) => {
-        const cp2 = contentPathOf(from, ver, logical);
+        const dig = Object.entries(from.versions[ver].state).find(([, ps]) => ps.includes(logical))?.[0] ?? null;
+        const cp2 = dig ? from.manifest[dig][0] : null;
         const raw = cp2 && safePath(cp2) ? await src.get(`${path}/${cp2}`) : null;
+        if (raw !== null && await sha512hex(raw) !== dig) throw new Error(`${cp2}: not the file its inventory names`);
         return raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
       };
       let shown;
@@ -20385,6 +20529,15 @@ async function remoteView(site, m) {
         };
       }
       if (!view.dc) continue;
+      const dc = view.dc;
+      Object.assign(view, {
+        title: dc.titles[0].title,
+        by: authorsOf(dc),
+        abstract: abstractHtml(dc),
+        landing: safeUrl(dc.url),
+        withdrawn: withdrawalHtml(view.state || {}, " by its owner")
+      });
+      if (typeof view.title !== "string" || typeof view.by !== "string") continue;
       return view;
     } catch {
       continue;
@@ -20400,7 +20553,7 @@ async function keeperHtml(site, log) {
   const keeper = await keeperOf(log);
   if (!keeper) return "";
   const mark = (await keeperLinkOf(site, log)).status === CONFIRMED ? " (confirmed)" : "";
-  return `<a href="${esc(keeper)}">${esc(keeper)}</a>${mark}`;
+  return `${link(keeper, esc(keeper))}${mark}`;
 }
 async function ownerHtml(site, owner, root) {
   const log = await keyLogOf(site.f, owner);
@@ -20432,9 +20585,9 @@ async function ownerPage(site, owner, log, lines2) {
   const keeper = await keeperHtml(site, log);
   if (keeper) {
     facts.push(`<li>Keeper: ${keeper}</li>`);
-    const link = await keeperLinkOf(site, log);
-    const claim = successorClaim(log, link);
-    if (claim) facts.push(`<li>Successor ${esc(claim)}: <code>${esc(link.successor)}</code></li>`);
+    const link2 = await keeperLinkOf(site, log);
+    const claim = successorClaim(log, link2);
+    if (claim) facts.push(`<li>Successor ${esc(claim)}: <code>${esc(link2.successor)}</code></li>`);
   }
   const latest = log.latest();
   if (latest !== null) {
@@ -20902,7 +21055,7 @@ async function recordKeyLog(f, owner, others) {
     const [w, first] = others.shift();
     await first.check();
     const { mayReturn: mayReturn2 } = await Promise.resolve().then(() => (init_takedown(), takedown_exports));
-    if (!await mayReturn2(f, objectId(owner, owner), async (n, d) => first.lookup(n, d) != null)) {
+    if (!await mayReturn2(f, objectId(owner, owner), async (n, d) => first.verified(n, d) != null)) {
       env.err(`warning: the key log of ${owner} was taken down here, and the copy at ${w} does not hold the version its tombstone pins (section 13.2): not copied`);
       return null;
     }
@@ -21536,6 +21689,9 @@ function descriptionErrors(inv, ver, obj, dc) {
     "publisher"
   ]) {
     if (!Object.hasOwn(dc, k)) out.push(`datacite.json lacks ${k}`);
+  }
+  if (!(Array.isArray(dc.rightsList) ? dc.rightsList.length : dc.rightsList)) {
+    out.push("datacite.json has no licence or rights statement in rightsList (section 4.4)");
   }
   for (const r of Array.isArray(dc.rightsList) ? dc.rightsList : []) {
     const ident = r?.rightsIdentifier;
@@ -22619,6 +22775,10 @@ var Verification = class {
       const s = k <= sts.length ? sts[k - 1] : null;
       if (s === UNSIGNED || s === INVALID) this.add("error", `${who} ${pv}`, "not a version: a collection pins only signed versions (section 8.5)", context);
       else if (s === UNCHECKED || s === CONTESTED) this.add("warning", `${who} ${pv}`, `${s} (section 8.5)`, context);
+      const log = m.name === m.owner ? this.logs.get(m.owner) ?? null : null;
+      if (log && !log.verified(k, pin)) {
+        this.add("error", `${who} ${pv}`, "not a version of the key log: a collection pins only versions (sections 6.1 and 8.5)", context);
+      }
       const signed = latestSigned(sts);
       if (inHead && signed) {
         const withdrawn = withdrawnVersions(held2.inv, (v) => held2.objs.get(v) ?? null, `v${signed}`);
@@ -23108,14 +23268,14 @@ async function keeperFindings(f, remote, fetchJson = null) {
       out.push(finding("result", place3, `keeper ${keeper}: not checked (osheaf verify --remote reads its ORCID record or domain, section 6.6)`));
       continue;
     }
-    const link = await keeperLink(log, fetchJson);
-    if (link.status === NOT_CHECKED) {
-      out.push(finding("warning", place3, `keeper ${keeper}: not checked (${link.reason})`));
+    const link2 = await keeperLink(log, fetchJson);
+    if (link2.status === NOT_CHECKED) {
+      out.push(finding("warning", place3, `keeper ${keeper}: not checked (${link2.reason})`));
       continue;
     }
-    out.push(finding("result", place3, `keeper ${keeper}: ${link.status} (${link.reason}; section 6.6)`));
-    const claim = successorClaim(log, link);
-    if (claim) out.push(finding("result", place3, `successor ${link.successor} ${claim}`));
+    out.push(finding("result", place3, `keeper ${keeper}: ${link2.status} (${link2.reason}; section 6.6)`));
+    const claim = successorClaim(log, link2);
+    if (claim) out.push(finding("result", place3, `successor ${link2.successor} ${claim}`));
   }
   return out;
 }
@@ -23159,9 +23319,33 @@ async function presentationFindings(f, disc) {
     const text3 = bytes ? new TextDecoder().decode(bytes) : "";
     if (!await landingNames(f, text3, m.name, m.owner, id, dir)) {
       report(landing, `no landing page giving the sheaf: URI of ${where(f, id)} (appendix A.3)`);
+    } else {
+      const missing = landingDescriptionGaps(text3);
+      if (missing.length) report(landing, `the landing page of ${where(f, id)} lacks ${missing.join(", ")} (appendix A.3)`);
     }
   }
   return out;
+}
+function landingDescriptionGaps(text3) {
+  const rels = new Set([
+    ...text3.matchAll(/<link rel="([a-z-]+)"/g)
+  ].map((m) => m[1]));
+  const missing = [
+    "cite-as",
+    "describedby",
+    "type"
+  ].filter((r) => !rels.has(r)).map((r) => `the Signposting link ${r}`);
+  const record = /<script type="application\/ld\+json">([^]*?)<\/script>/.exec(text3);
+  let ld = null;
+  try {
+    ld = record ? JSON.parse(record[1]) : null;
+  } catch {
+    ld = null;
+  }
+  if (!ld || typeof ld !== "object" || Array.isArray(ld) || !ld["@type"] || !ld.identifier || Array.isArray(ld.identifier) && !ld.identifier.length) {
+    missing.push("a schema.org record in JSON-LD with a type and identifiers");
+  }
+  return missing;
 }
 function where(f, id) {
   const parts = (id || "").split(":");
