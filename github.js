@@ -211,14 +211,16 @@ export async function commitFiles(token, repo, entries, message, { fetchImpl, at
     blobs.push({ path: e.path, mode: "100644", type: "blob", sha: blob.sha });
   }
   for (let k = 0; k < attempts; k++) {
-    const ref = await api(token, `/repos/${repo}/git/ref/heads/${branch}`, { fetchImpl });
+    // Past the browser's cache (see headSha): a ref cached from before the
+    // last push would make every attempt fail as not a fast forward.
+    const ref = await api(token, `/repos/${repo}/git/ref/heads/${encodePath(branch)}`, { fetchImpl, fresh: true });
     const parent = await api(token, `/repos/${repo}/git/commits/${ref.object.sha}`, { fetchImpl });
     const tree = await api(token, `/repos/${repo}/git/trees`, {
       method: "POST", body: { base_tree: parent.tree.sha, tree: blobs }, fetchImpl });
     const commit = await api(token, `/repos/${repo}/git/commits`, {
       method: "POST", body: { message, tree: tree.sha, parents: [ref.object.sha] }, fetchImpl });
     try {
-      await api(token, `/repos/${repo}/git/refs/heads/${branch}`, {
+      await api(token, `/repos/${repo}/git/refs/heads/${encodePath(branch)}`, {
         method: "PATCH", body: { sha: commit.sha, force: false }, fetchImpl });
       return commit.sha;
     } catch (e) {

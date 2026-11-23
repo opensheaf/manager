@@ -40,7 +40,7 @@ function fakeGitHub({ moveOnce = false } = {}) {
   const fetchImpl = async (url, opts) => {
     const path = url.replace("https://api.github.com", "");
     const body = opts.body ? JSON.parse(opts.body) : undefined;
-    calls.push([opts.method, path, body]);
+    calls.push([opts.method, path, body, opts.cache]);
     const reply = (status, data) => ({ ok: status < 300, status,
       headers: { get: () => "application/json" }, json: async () => data, text: async () => JSON.stringify(data) });
     if (path === "/repos/o/r") return reply(200, { default_branch: "main" });
@@ -73,6 +73,14 @@ test("if the branch moved meanwhile, the commit is made again on top", async () 
   const sha = await commitFiles("tok", "o/r", buildRequest("x", "notice", {}), "m", { fetchImpl: g.fetchImpl });
   assert.equal(sha, "c-new-c1");
   assert.equal(g.head, "c-new-c1");
+});
+
+test("the branch is read past the browser's cache at every attempt", async () => {
+  const g = fakeGitHub({ moveOnce: true });
+  await commitFiles("tok", "o/r", buildRequest("x", "notice", {}), "m", { fetchImpl: g.fetchImpl });
+  const reads = g.calls.filter((c) => c[1] === "/repos/o/r/git/ref/heads/main");
+  assert.equal(reads.length, 2);
+  for (const c of reads) assert.equal(c[3], "no-store");
 });
 
 test("forms: the labels the archive's script reads, and the required fields", () => {
