@@ -21,6 +21,21 @@ export async function headFiles(t, repo, line, layout, names, o = {}) {
   }));
 }
 
+// The discovery document with its entries of objects: an archive of many
+// objects lists them in pages (section 3.1), `objectPages` naming page files
+// below the document in place of `objects`, each with its `objects`. The
+// pages are read here, so that what follows reads `objects` as for an
+// archive without pages (as opensheaf-py's listed_objects); a page that
+// cannot be read, or whose path is not below the document, is left out.
+export async function withPages(t, repo, disc, o = {}) {
+  if (!disc || typeof disc !== "object" || !Object.prototype.hasOwnProperty.call(disc, "objectPages")) return disc;
+  const below = (p) => typeof p === "string" && p.endsWith(".json") && !p.startsWith("/") && !p.includes("\\") &&
+    !p.split("/")[0].includes(":") && p.split("/").every((x) => x !== "" && x !== "." && x !== "..");
+  const paths = Array.isArray(disc.objectPages) ? disc.objectPages.filter(below) : [];
+  const pages = await Promise.all(paths.map((p) => gh.readJSON(t, repo, p, o).catch(() => null)));
+  return { ...disc, objects: pages.flatMap((p) => (p && Array.isArray(p.objects) ? p.objects : [])) };
+}
+
 // What the page shows of an archive. `o.ref`: read at that commit (after a
 // request, the head that carried it out), past the browser's cache.
 export async function readArchive(t, repo, o = {}) {
@@ -38,7 +53,7 @@ export async function readArchive(t, repo, o = {}) {
   out.settings = await gh.readJSON(t, repo, "osheaf.json", o);
   out.secret = await gh.secretExists(t, repo, "OPENSHEAF_SIGNING_KEY", o.fetchImpl);
   if (out.settings) {
-    const disc = await gh.readJSON(t, repo, "opensheaf.json", o);
+    const disc = await withPages(t, repo, await gh.readJSON(t, repo, "opensheaf.json", o), o);
     out.lines = lines(disc);
     out.short = shortForms(disc);
     out.layout = (disc && disc.storageLayout) || "";

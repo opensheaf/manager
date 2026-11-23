@@ -43,8 +43,8 @@ const after = {
 // the request (as GitHub's contents API may for a while after a push), while
 // the files of a commit read by its sha are those of that commit. The answer
 // to the request is seen on the branch once `answered` is set.
-function fakeGitHub() {
-  const commits = { c1: before, c2: after };
+function fakeGitHub(first = before) {
+  const commits = { c1: first, c2: after };
   const calls = [];
   const g = { answered: false, calls };
   g.fetchImpl = async (url, opts) => {
@@ -82,6 +82,17 @@ test("an archive is read: settings, lines, collections", async () => {
   assert.deepEqual(a.lines.map((o) => o.label), ["kpz"]);
   assert.deepEqual(a.collections, []);
   assert.equal(a.hasWorkflow, true);
+});
+
+test("the lines of a discovery document in pages are read from its pages (section 3.1)", async () => {
+  const paged = { ...before, "opensheaf.json": JSON.stringify({ objectPages: ["objects/a.json", "objects/c.json", "../x.json"] }),
+                  "objects/a.json": JSON.stringify({ format: "opensheaf-objects/0.2", objects: [doc] }),
+                  "objects/c.json": JSON.stringify({ format: "opensheaf-objects/0.2", objects: [coll] }) };
+  const g = fakeGitHub(paged);
+  const a = await readArchive("tok", "o/r", { fetchImpl: g.fetchImpl });
+  assert.deepEqual(a.lines.map((o) => o.label), ["kpz", "reading"]);
+  assert.equal(a.short.name(DOC), DOC.slice(0, 8));
+  assert.ok(!g.calls.some((c) => c.path.includes("x.json")));
 });
 
 test("a completed request triggers a reload at the new head, and the new collection appears", async () => {
