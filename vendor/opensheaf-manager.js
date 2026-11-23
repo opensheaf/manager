@@ -1,4 +1,4 @@
-// opensheaf-js 5ea2fdf540d23727eaff9730b06a34949d59d2cd: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 795f0784d10dffae3d3be12e24a7eb4ea0f43441: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -24041,10 +24041,15 @@ async function sync2(r, label, message2) {
     }
   }
 }
-async function propagate(r, label, message2, seen = /* @__PURE__ */ new Set()) {
+async function propagate(r, label, message2, acting, seen = /* @__PURE__ */ new Set()) {
   for (const parent of await parents(r, label)) {
     if (seen.has(parent)) continue;
     seen.add(parent);
+    const entry = (await labels(r)).get(parent);
+    if (entry && entry.owner !== acting) {
+      r.env.out(`${parent}: a collection of the owner ${entry.owner.slice(0, 8)}, left for its owner to renew`);
+      continue;
+    }
     const data2 = await load(r, parent);
     const member = data2.members.find((m) => m && typeof m === "object" && m.label === label);
     if (data2.type === "selection") {
@@ -24062,7 +24067,7 @@ async function propagate(r, label, message2, seen = /* @__PURE__ */ new Set()) {
     }
     await save(r, parent, data2);
     await sync2(r, parent, message2);
-    await propagate(r, parent, message2, seen);
+    await propagate(r, parent, message2, acting, seen);
   }
 }
 function safeName(name2) {
@@ -24832,12 +24837,13 @@ async function carryOut(storage, env, operation, fields, files = {}, { origin = 
     let [cid, message2, title, done] = await op(r, form, origin);
     const why = field(form, "Why (optional)");
     if (why) message2 += `: ${why}`;
+    const acting = owner || (await r.folder()).archive.owner;
     await osheaf(r, (f) => collect2(f, {
-      owner: owner || f.archive.owner
+      owner: acting
     }));
     if (cid) {
       await sync2(r, cid, message2);
-      await propagate(r, cid, message2);
+      await propagate(r, cid, message2, acting);
     }
     await osheaf(r, async (f) => {
       await writeDiscovery(f);
