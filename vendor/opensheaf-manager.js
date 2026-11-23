@@ -1,4 +1,4 @@
-// opensheaf-js a3aebf6bb38694f449ba5b7f3c1117b5d8e6767e: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 735f1f98a6aa8664806b54810671c7fbece437d5: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -1347,6 +1347,7 @@ function latestSigned(statuses) {
   return found2;
 }
 async function lineStatusesOf(objectId2, owner, versions2, log) {
+  if (log) await log.check();
   const lookup = log ? (n, d) => log.lookup(n, d) : () => null;
   const judgements = await Promise.all(versions2.map(({ version, digest, witnesses }) => judgeFolder(witnesses, {
     objectId: objectId2,
@@ -1618,6 +1619,7 @@ function jsonOrNull(bytes, { integers = false } = {}) {
     const text3 = new TextDecoder("utf-8", {
       fatal: true
     }).decode(bytes);
+    if (nesting(text3) > LIMITS.nesting) return null;
     return integers ? parseIntegers(text3) : JSON.parse(text3);
   } catch {
     return null;
@@ -1891,7 +1893,13 @@ var init_owners = __esm({
       pin(number) {
         return keyLogPin(this.owner, number, this.versions[number - 1].digest);
       }
+      ready() {
+        if (!this.checked?.result) {
+          throw new Error(`the key log of ${this.owner} is read before it is checked (check() first)`);
+        }
+      }
       side() {
+        this.ready();
         return this.versions.filter((v) => v.isVersion && !v.forkRecord);
       }
       latest() {
@@ -1901,6 +1909,7 @@ var init_owners = __esm({
         return last && isObject(last.keys) && "keys" in last.keys ? last : null;
       }
       get forkRecord() {
+        this.ready();
         return this.versions.find((v) => v.forkRecord && v.isVersion) || this.met || null;
       }
       get forkPoint() {
@@ -1919,6 +1928,7 @@ var init_owners = __esm({
         return found2;
       }
       lookup(number, digest) {
+        this.ready();
         for (const v of this.versions) if (v.number === number && v.digest === digest) return v;
         for (const c of this.forkRecord?.carried || []) if (c.number === number && c.digest === digest) return c;
         return null;
@@ -1929,7 +1939,13 @@ var init_owners = __esm({
         return side[side.length - 1].keys?.extensions ?? null;
       }
       async check() {
-        if (!this.checked) this.checked = this.checkNow();
+        if (!this.checked) {
+          const checking = this.checkNow().then((result) => {
+            checking.result = result;
+            return result;
+          });
+          this.checked = checking;
+        }
         return this.checked;
       }
       async checkNow() {
@@ -2107,9 +2123,9 @@ var init_owners = __esm({
         return problems;
       }
       async meet(other) {
-        await this.check();
+        const { errors } = await this.check();
         await other.check();
-        if (!sameBytes(this.genesis, other.genesis)) return this;
+        if (errors.length || !sameBytes(this.genesis, other.genesis)) return this;
         const mine = this.side(), theirs = other.side();
         for (let k = 0; k < Math.min(mine.length, theirs.length); k++) {
           if (mine[k].digest !== theirs[k].digest) return this.withFork(theirs.slice(k));
@@ -2124,9 +2140,12 @@ var init_owners = __esm({
               theirFork
             ] : []
           ]);
-          log.checked = Promise.resolve({
+          const result = {
             errors: [],
             warnings: []
+          };
+          log.checked = Object.assign(Promise.resolve(result), {
+            result
           });
           log.met = other.met;
           return log;
@@ -2588,27 +2607,38 @@ var init_archive = __esm({
       async sidecar(id, ver, options = {}) {
         return sidecarDigest(await this.sidecarBytes(id, ver, options)) ?? "";
       }
+      async headInventory(id, options = {}) {
+        const root = await this.inventory(id, null, options);
+        if (!isVersion(root.head)) {
+          throw new FetchError("json", this.inventoryUrl(id, null), "names no head version (section 4.1)");
+        }
+        const inv = await this.inventory(id, root.head, options);
+        if (inv.id !== root.id || inv.head !== root.head) {
+          throw new FetchError("json", this.inventoryUrl(id, root.head), `is not the inventory of ${root.head} of the object`);
+        }
+        return inv;
+      }
       fileUrl(id, inv, ver, logical) {
         const cp = contentPath(inv, ver, logical);
         return cp ? this.contentUrl(id, inv, cp) : null;
       }
       async json(id, inv, ver, logical, options = {}) {
-        await this.locate(id);
-        const url = this.fileUrl(id, inv, ver, logical);
-        if (!url) return null;
-        return this.http.json(url, {
-          ...options,
-          limit: LIMITS.json
-        });
+        const bytes = await this.bytes(id, inv, ver, logical, options);
+        return bytes === null ? null : parseJson(bytes, this.fileUrl(id, inv, ver, logical));
       }
       async bytes(id, inv, ver, logical, options = {}) {
         await this.locate(id);
         const url = this.fileUrl(id, inv, ver, logical);
         if (!url) return null;
-        return this.http.cached(url, {
+        const bytes = await this.http.cached(url, {
           ...options,
           limit: LIMITS.json
         });
+        const digest = filesOf(inv, ver)[logical];
+        if (typeof digest !== "string" || await sha512(bytes) !== digest.toLowerCase()) {
+          throw new FetchError("digest", url, `does not have the digest its inventory states for ${logical} (section 4.1)`);
+        }
+        return bytes;
       }
       async descriptions(id, inv, ver, options = {}) {
         const [obj, dc] = await Promise.all([
@@ -2632,7 +2662,7 @@ var init_archive = __esm({
         ]));
       }
       async history(id, at, options = {}) {
-        const inv = await this.inventory(id, null, options);
+        const inv = await this.headInventory(id, options);
         const objs = await this.objectsOf(id, inv, options);
         const objOf2 = (v) => objs.get(v) ?? null;
         return {
@@ -2758,7 +2788,7 @@ var init_archive = __esm({
         const options = {
           signal
         };
-        const inv = await this.inventory(id, null, options);
+        const inv = await this.headInventory(id, options);
         const names = versionsOf(inv);
         const objs = await this.objectsOf(id, inv, options);
         const versions2 = await Promise.all(names.map(async (ver) => {
@@ -8444,7 +8474,9 @@ async function newOwner(current, rotation, { threshold = 1, nextThreshold = null
     created,
     nonce
   });
-  return KeyLog.of(genesis);
+  const log = await KeyLog.of(genesis);
+  await log.check();
+  return log;
 }
 async function writeKeyLog(storage, dir, log) {
   const namaste = joinPath(dir, "0=ocfl_object_1.1");
@@ -9238,6 +9270,32 @@ function objectPages(objs) {
     `${OBJECT_PAGES}/${p}.json`,
     groups.get(p)
   ]));
+}
+function pagePathOk(path) {
+  return typeof path === "string" && path.endsWith(".json") && !path.startsWith("/") && !path.includes("\\") && !path.split("/")[0].includes(":") && path.split("/").every((x) => x !== "" && x !== "." && x !== "..");
+}
+async function listedObjects(disc, read) {
+  const entries = (list2) => (Array.isArray(list2) ? list2 : []).filter((o) => o && typeof o === "object" && !Array.isArray(o));
+  if (!Object.hasOwn(disc, "objectPages")) return entries(disc.objects);
+  const out = [];
+  for (const path of Array.isArray(disc.objectPages) ? disc.objectPages : []) {
+    if (!pagePathOk(path)) {
+      throw new Error(`${JSON.stringify(path)} is not the path of a page below the discovery document (section 3.1)`);
+    }
+    const data2 = await read(path);
+    if (data2 === null || data2 === void 0) throw new Error(`the page of objects ${path} is missing (section 3.1)`);
+    let page;
+    try {
+      page = JSON.parse(new TextDecoder().decode(data2));
+    } catch {
+      throw new Error(`the page of objects ${path} is not JSON`);
+    }
+    if (!page || typeof page !== "object" || !Array.isArray(page.objects)) {
+      throw new Error(`${path} is not a page of objects (section 3.1)`);
+    }
+    out.push(...entries(page.objects));
+  }
+  return out;
 }
 var INDEXES, INDEX_FORMAT, INDEX_KEY, OBJECT_PAGES, PAGING;
 var init_discovery = __esm({
@@ -10730,7 +10788,7 @@ var init_resolve = __esm({
       }
       async originator(archive, id, options = {}) {
         try {
-          const inv = await archive.inventory(id, null, options);
+          const inv = await archive.headInventory(id, options);
           const genesis = await archive.bytes(id, inv, "v1", "genesis.json", options);
           return genesis ? (await readGenesis(genesis)).originator ?? null : null;
         } catch (error) {
@@ -19233,6 +19291,7 @@ async function loadKeyLog(storage, dir, where2 = dir) {
   }
   const log = await KeyLog.of(versions2[0].files.get(GENESIS), versions2, problems);
   if (rootInv.id !== log.id) problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
+  await log.check();
   return log;
 }
 
@@ -20257,6 +20316,7 @@ async function remoteSource(site, at) {
       if (raw === null) throw new Error("no discovery document");
       const disc = JSON.parse(new TextDecoder().decode(raw));
       if (disc === null || typeof disc !== "object" || disc.specification !== "0.2") throw new Error("not 0.2");
+      if (Object.hasOwn(disc, "objectPages")) disc.objects = await listedObjects(disc, get);
       const root = disc.storageRoot ?? "ocfl/";
       if (typeof root !== "string" || root.includes(":") || !safePath(root.replace(/\/+$/, "")) || !root.endsWith("/")) {
         throw new Error("storage root");
@@ -21718,6 +21778,7 @@ async function verdict(lv, obj, genesis, logs, depth = 0) {
     problems.push("the parent is the originator's line, or a branch with its own parent (section 9.3)");
   }
   const log = await logs(p.owner);
+  if (log) await log.check();
   const pid = NAME.test(pname) && OWNER_NAME.test(p.owner || "") ? objectId(pname, p.owner) : null;
   if (pid === null) return [
     INCONSISTENT,
@@ -23534,7 +23595,13 @@ async function settings(r) {
 }
 async function labels(r) {
   const disc = await readJson(r.storage, "opensheaf.json") || {};
-  return new Map((disc.objects || []).filter((o) => o.label).map((o) => [
+  let listed;
+  try {
+    listed = await listedObjects(disc, (path) => r.storage.read(path));
+  } catch (error) {
+    throw new Problem(`The discovery document of this archive cannot be read: ${error.message}.`);
+  }
+  return new Map(listed.filter((o) => o.label).map((o) => [
     o.label,
     o
   ]));
@@ -23638,7 +23705,16 @@ async function readDiscovery(r, base) {
   try {
     const res = await r.env.fetch(base + "opensheaf.json");
     if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    return await res.json();
+    const disc = await res.json();
+    if (disc && typeof disc === "object" && Object.hasOwn(disc, "objectPages")) {
+      disc.objects = await listedObjects(disc, async (path) => {
+        const page = await r.env.fetch(base + path);
+        if (page.status === 404 || page.status === 410) return null;
+        if (!page.ok) throw new Error(`HTTP Error ${page.status}`);
+        return new Uint8Array(await page.arrayBuffer());
+      });
+    }
+    return disc;
   } catch (error) {
     throw new Problem(`The archive at \`${base}\` could not be read (${error.message}): give the address of an OpenSheaf archive of specification 0.2, the folder that holds its \`opensheaf.json\`.`);
   }
@@ -23888,7 +23964,31 @@ async function inflate(bytes) {
   ]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
-async function readZip(bytes) {
+var CRC_TABLE = Array.from({
+  length: 256
+}, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+  return c >>> 0;
+});
+function crc322(bytes) {
+  let c = 4294967295;
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
+var DAMAGED = "The zip of the sources is damaged.";
+async function intact(read) {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof Problem) throw error;
+    throw new Problem(DAMAGED);
+  }
+}
+function readZip(bytes) {
+  return intact(() => zipMembers(bytes));
+}
+async function zipMembers(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let end2 = -1;
   for (let k = bytes.length - 22; k >= Math.max(0, bytes.length - 22 - 65535); k--) {
@@ -23903,8 +24003,9 @@ async function readZip(bytes) {
   const out = [];
   const text3 = new TextDecoder("utf-8");
   for (let n = 0; n < count; n++) {
-    if (view.getUint32(at, true) !== 33639248) throw new Problem("The zip of the sources is damaged.");
+    if (view.getUint32(at, true) !== 33639248) throw new Problem(DAMAGED);
     const flags = view.getUint16(at + 8, true), method = view.getUint16(at + 10, true);
+    const crc = view.getUint32(at + 16, true), size = view.getUint32(at + 24, true);
     const csize = view.getUint32(at + 20, true), nameLength = view.getUint16(at + 28, true);
     const extra = view.getUint16(at + 30, true), comment = view.getUint16(at + 32, true);
     const local = view.getUint32(at + 42, true);
@@ -23912,15 +24013,22 @@ async function readZip(bytes) {
     at += 46 + nameLength + extra + comment;
     if (csize === 4294967295 || local === 4294967295) throw new Problem("The zip of the sources is a ZIP64 archive: make an ordinary zip.");
     if (flags & 1) throw new Problem("The zip of the sources is encrypted.");
+    if (at > bytes.length || view.getUint32(local, true) !== 67324752) throw new Problem(DAMAGED);
     const start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+    if (start + csize > bytes.length) throw new Problem(DAMAGED);
     const raw = bytes.subarray(start, start + csize);
     out.push({
       name: name2,
-      read: async () => {
-        if (method === 0) return raw.slice();
-        if (method === 8) return inflate(raw);
-        throw new Problem(`The zip of the sources compresses ${name2} with a method other than deflate.`);
-      }
+      read: () => intact(async () => {
+        let data2;
+        if (method === 0) data2 = raw.slice();
+        else if (method === 8) data2 = await inflate(raw);
+        else throw new Problem(`The zip of the sources compresses ${name2} with a method other than deflate.`);
+        if (data2.length !== size || crc322(data2) !== crc) {
+          throw new Problem(`The zip of the sources is damaged: ${name2} does not have the size and CRC-32 it states.`);
+        }
+        return data2;
+      })
     });
   }
   return out;
