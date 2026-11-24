@@ -1,4 +1,4 @@
-// opensheaf-js b73264aabfd7487673655813d7b46e88955779ae: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 4e552257a8c1a52a9ee3866720bcb18f29020804: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -2449,6 +2449,42 @@ function baseOf(url, relativeTo = globalThis.location?.href) {
   if (/\/[^/]*\.[A-Za-z0-9]{1,8}$/.test(u.pathname)) s = s.slice(0, s.lastIndexOf("/") + 1);
   return s.endsWith("/") ? s : s + "/";
 }
+function jsonEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) return a.length === b.length && a.every((x, k) => jsonEqual(x, b[k]));
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => Object.hasOwn(b, k) && jsonEqual(a[k], b[k]));
+}
+function versionProblem(inv, n, copy) {
+  const upto = Array.from({
+    length: n
+  }, (_, k) => `v${k + 1}`);
+  if (!isObject(copy) || copy.head !== `v${n}`) return "its inventory is not one of that version";
+  const held2 = copy.versions, stated = inv?.versions;
+  if (!isObject(held2) || !isObject(stated) || Object.keys(held2).sort().join() !== [
+    ...upto
+  ].sort().join() || upto.some((v) => !jsonEqual(held2[v], stated[v]))) {
+    return "its inventory does not record the versions up to it as the head inventory does";
+  }
+  return null;
+}
+function inventoriesProblemOf(inv, names, copies) {
+  const head = Number(String(inv.head).slice(1));
+  for (let n = 1; n < head; n++) {
+    if (names[n - 1] !== `v${n}` || !copies[n - 1]) return `v${n} has no inventory (section 4.1)`;
+    let copy = null;
+    try {
+      copy = JSON.parse(new TextDecoder().decode(copies[n - 1]));
+    } catch {
+      copy = null;
+    }
+    const problem = versionProblem(inv, n, copy);
+    if (problem) return `v${n}: ${problem} (section 14.2)`;
+  }
+  return null;
+}
 var Archive;
 var init_archive = __esm({
   "core/archive.js"() {
@@ -2806,17 +2842,20 @@ var init_archive = __esm({
         const inv = await this.headInventory(id, options);
         const names = versionsOf(inv);
         const objs = await this.objectsOf(id, inv, options);
-        const versions2 = await Promise.all(names.map(async (ver) => {
+        const copies = [];
+        const versions2 = await Promise.all(names.map(async (ver, k) => {
           const bytes = await this.inventoryBytes(id, ver, options).catch((error) => {
             if (error.kind === "aborted") throw error;
             return null;
           });
+          copies[k] = bytes;
           return {
             ver,
             digest: bytes ? await sha512(bytes) : "",
             obj: objs.get(ver) ?? null
           };
         }));
+        const inventoriesProblem = inventoriesProblemOf(inv, names, copies);
         const owner = objs.get(names[0])?.owner;
         if (log === void 0) {
           log = typeof owner === "string" ? await this.keyLog(owner, options).catch((error) => {
@@ -2893,7 +2932,8 @@ var init_archive = __esm({
           statuses,
           unnamed,
           listed,
-          latest: n ? `v${n}` : null
+          latest: n ? `v${n}` : null,
+          inventoriesProblem
         };
       }
     };
@@ -8884,6 +8924,15 @@ look at them; give --i-know to extend them anyway`);
         this.env.err(`warning: ${id}: extending versions that are not signed, or are contested:
 ${lines2}`);
       }
+      async previousDigest(id, dir, head) {
+        const inv = await this.storage.read(joinPath(dir, head, "inventory.json"));
+        const sc = await this.storage.read(joinPath(dir, head, "inventory.json.sha512"));
+        const stated = sc ? sidecarDigest(sc) : null;
+        if (!inv || !stated || stated !== await sha512hex(inv)) {
+          exit(`${this.labelOf(id) || id} ${head}: the checksum file of its inventory is missing, or does not state the digest of the inventory (section 4.1): no version is added until it is repaired`);
+        }
+        return stated;
+      }
       async zenodoPending(id) {
         try {
           const state = await readJson(this.storage, joinPath("zenodo-staging", ...await pathOf(id, this.layout), "state.json"));
@@ -8923,7 +8972,7 @@ ${lines2}`);
           };
         } else if (!draft) {
           await this.checkBeforeExtending(id, acknowledged);
-          obj.previous = sidecarDigest(await s.read(joinPath(dir, inv.head, "inventory.json.sha512")));
+          obj.previous = await this.previousDigest(id, dir, inv.head);
         }
         const ver = `v${Number(inv.head.slice(1)) + 1}`;
         if (stageIn !== null && await s.kind(stageIn)) exit(`${stageIn} exists`);
@@ -10096,6 +10145,14 @@ function noteFrom(text3, file, folder) {
     add: add2
   };
 }
+function isoDate(f, text3, option = "--date") {
+  if (text3 === void 0 || text3 === null || text3 === "") return f.env.today();
+  if (typeof text3 === "string" && /^\d{4}-\d{2}-\d{2}$/.test(text3)) {
+    const [y, m, d] = text3.split("-").map(Number);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= new Date(Date.UTC(y, m, 0)).getUTCDate()) return text3;
+  }
+  exit(`${option}: a date, YYYY-MM-DD, not '${text3}'`);
+}
 async function notice(f, a) {
   const { dir, inv } = await headOf(f, a.label);
   const numbers = /* @__PURE__ */ new Set();
@@ -10104,7 +10161,7 @@ async function notice(f, a) {
   const { note, add: add2 } = noteFrom(a.text, a.file, "notices");
   Object.assign(note, {
     documentVersion: a.about,
-    date: a.date || f.env.today()
+    date: isoDate(f, a.date)
   });
   const earlier = (await f.readObjectJson(dir, inv, OBJ2)).notices || [];
   const r = a.replaces ?? null;
@@ -10127,7 +10184,7 @@ async function notice(f, a) {
 }
 async function withdraw(f, a) {
   const { note: reason, add: add2 } = noteFrom(a.reason, a.file, "withdrawal");
-  const date2 = a.date || f.env.today();
+  const date2 = isoDate(f, a.date);
   const done = await descriptionVersion(f, a.label, (dc, obj) => {
     if (obj.status === "withdrawn") exit(`${a.label} is withdrawn already`);
     obj.status = "withdrawn";
@@ -10142,6 +10199,7 @@ async function withdraw(f, a) {
 }
 async function relicense(f, a) {
   const fresh = rightsList(checkRights(a.rights))[0];
+  const date2 = isoDate(f, a.date);
   const done = await descriptionVersion(f, a.label, (dc, obj) => {
     if (dc.rightsList !== void 0 && same(dc.rightsList, [
       fresh
@@ -10151,7 +10209,7 @@ async function relicense(f, a) {
     ];
     obj.agreement = {
       by: dc.creators.map((c) => c.name),
-      date: a.date || f.env.today(),
+      date: date2,
       method: a.method
     };
   }, a.message || `Licence: ${fresh.rights} (description-only version; content unchanged)`, null, a.iKnow);
@@ -10648,6 +10706,7 @@ var init_resolve = __esm({
       }
       async identityProblem(archive, id, line, options) {
         if (line.inv.id !== id) return "its inventory names another object";
+        if (line.inventoriesProblem) return line.inventoriesProblem;
         const [, name2, owner] = id.split(":");
         let genesis = null;
         try {
@@ -18075,6 +18134,9 @@ function recordedAt(f, r, found2, places) {
   ];
 }
 async function pinned(r, name2, owner, u, places, kind, revisions = []) {
+  revisions = [
+    ...new Set(revisions)
+  ];
   let founds;
   if (u?.sha512) {
     founds = [
@@ -18389,7 +18451,9 @@ async function syncMember(f, r, entry, kind, oldMembers) {
     "true",
     "latest"
   ].includes(entry.follow);
-  const revs = (entry.revisions || []).map((x) => Number.parseInt(x, 10));
+  const revs = [
+    ...new Set((entry.revisions || []).map((x) => Number.parseInt(x, 10)))
+  ];
   if (kind === "catalogue" && revs.length) exit(`${text3}: revisions are for selections`);
   const old = oldMembers.find((m2) => m2.name === name2 && m2.owner === owner) ?? null;
   if (old !== null && !u?.sha512) {
@@ -19682,6 +19746,9 @@ function pyJson(value) {
   }
   return JSON.stringify(value);
 }
+function jsonInScript(value) {
+  return pyJson(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+}
 function arxivId(obj, dc) {
   for (const e of obj.external || []) {
     if (e.service === "arXiv" && (e.record || "").includes("/abs/")) {
@@ -19960,7 +20027,7 @@ async function metaTags(site, f, line, cur, obj, dc) {
   if (keywords.length) ld.keywords = keywords;
   if (obj.kind === "collection") ld.hasPart = await collectionParts(site, f, line, cur);
   if (obj.status === "withdrawn") ld.creativeWorkStatus = "Withdrawn";
-  tags.push('<script type="application/ld+json">' + pyJson(ld).replace(/<\//g, "<\\/") + "<\/script>");
+  tags.push('<script type="application/ld+json">' + jsonInScript(ld) + "<\/script>");
   return tags.join("\n");
 }
 function contentItems(obj) {
@@ -21959,7 +22026,8 @@ async function verdict(lv, obj, genesis, logs, depth = 0) {
   }
   const pinvBytes = lv.digests.has("parent/inventory.json") ? await lv.read("parent/inventory.json") : null;
   const pinv = jsonOrNull(pinvBytes);
-  const pobj = await lv.json("parent/object.json");
+  const pobjBytes = lv.digests.has("parent/object.json") ? await lv.read("parent/object.json") : null;
+  const pobj = jsonOrNull(pobjBytes);
   if (!isObject(pinv) || !isObject(pobj)) {
     return [
       INCONSISTENT,
@@ -21977,7 +22045,7 @@ async function verdict(lv, obj, genesis, logs, depth = 0) {
   for (const [d, paths] of Object.entries(isObject(state) ? state : {})) {
     for (const path of Array.isArray(paths) ? paths : []) pstate.set(path, d);
   }
-  if (pstate.get("object.json") !== lv.digests.get("parent/object.json")) {
+  if (!pstate.has("object.json") || pstate.get("object.json") !== await sha512(pobjBytes)) {
     problems.push("parent/object.json is not the object.json the parent inventory records");
   }
   if (depth === 0) {
@@ -23516,6 +23584,7 @@ init_collections();
 // core/mirror.js
 init_http();
 init_resolve();
+init_archive();
 init_names();
 init_owners();
 init_signatures();
