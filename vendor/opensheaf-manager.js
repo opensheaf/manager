@@ -1,4 +1,4 @@
-// opensheaf-js 795f0784d10dffae3d3be12e24a7eb4ea0f43441: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js a13d983460c2a90c2492c60dc3d0532125419fbd: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -851,9 +851,11 @@ async function readGenesis(bytes) {
   if (bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191) throw new Error("a genesis record has no byte order mark");
   let rec;
   try {
-    rec = parseIntegers(new TextDecoder("utf-8", {
+    const text3 = new TextDecoder("utf-8", {
       fatal: true
-    }).decode(bytes));
+    }).decode(bytes);
+    if (nesting(text3) > LIMITS.nesting) throw new Error(`nested deeper than ${LIMITS.nesting} levels`);
+    rec = parseIntegers(text3);
   } catch (error) {
     throw new Error(`a genesis record is JSON in UTF-8 (${error.message})`);
   }
@@ -1211,9 +1213,11 @@ async function fileName(did) {
 function readSignatureFile(bytes) {
   let d;
   try {
-    d = JSON.parse(new TextDecoder("utf-8", {
+    const text3 = new TextDecoder("utf-8", {
       fatal: true
-    }).decode(bytes));
+    }).decode(bytes);
+    if (nesting(text3) > LIMITS.nesting) throw new Error(`nested deeper than ${LIMITS.nesting} levels`);
+    d = JSON.parse(text3);
   } catch (error) {
     throw new Error(`not JSON in UTF-8 (${error.message})`);
   }
@@ -1369,6 +1373,7 @@ var SIGNATURE_FORMAT, WITNESSES, FIELDS, GOOD, UNCHECKED, INVALID, SIGNED, VOUCH
 var init_signatures = __esm({
   "core/signatures.js"() {
     init_crypto();
+    init_http();
     init_names();
     SIGNATURE_FORMAT = "opensheaf-signature/0.2";
     WITNESSES = "extensions/opensheaf-witnesses";
@@ -2742,15 +2747,21 @@ var init_archive = __esm({
           for (const [d, paths] of Object.entries(entry.versions[ver].state)) {
             if (!Array.isArray(paths) || !paths.length) continue;
             let bytes = new Uint8Array();
-            try {
-              const cp = entry.manifest[d]?.[0];
-              bytes = await this.http.cached(this.contentUrl(id, entry, cp), {
-                ...options,
-                limit: LIMITS.json
-              });
-            } catch (error) {
-              if (error.kind === "aborted") throw error;
+            const cp = entry.manifest[d]?.[0];
+            const k = typeof cp === "string" ? /^v([1-9][0-9]*)\//.exec(cp) : null;
+            if (!k || Number(k[1]) > n) {
+              problems.push(`${ver}: a content path out of the object: '${cp}'`);
               problems.push(`${ver}: the content of ${paths[0]} is missing`);
+            } else {
+              try {
+                bytes = await this.http.cached(this.contentUrl(id, entry, cp), {
+                  ...options,
+                  limit: LIMITS.json
+                });
+              } catch (error) {
+                if (error.kind === "aborted") throw error;
+                problems.push(`${ver}: the content of ${paths[0]} is missing`);
+              }
             }
             if (await sha512(bytes) !== d) problems.push(`${ver}: ${paths[0]} does not have the digest its inventory states`);
             for (const p of paths) files.set(p, bytes);
@@ -2935,6 +2946,16 @@ async function readJson(storage, path) {
 }
 async function writeText(storage, path, text3, options) {
   return storage.write(path, utf8(text3), options);
+}
+async function replaceFile(storage, path, bytes) {
+  const salt = [
+    ...crypto.getRandomValues(new Uint8Array(6))
+  ].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const tmp = `${path}.${salt}.tmp`;
+  await storage.write(tmp, bytes, {
+    exclusive: true
+  });
+  await storage.rename(tmp, path);
 }
 function storageFetch(storage, origin = ORIGIN, { fallback = null } = {}) {
   const base = new URL(origin);
@@ -8516,9 +8537,8 @@ async function writeKeyLog(storage, dir, log) {
   }
   if (log.versions.length > held2) {
     const head = log.versions[log.versions.length - 1];
-    await storage.write(joinPath(dir, "inventory.json.tmp"), head.inventory);
-    await storage.rename(joinPath(dir, "inventory.json.tmp"), joinPath(dir, "inventory.json"));
-    await storage.write(joinPath(dir, "inventory.json.sha512"), head.sidecar?.length ? head.sidecar : await sidecar(head.inventory));
+    await replaceFile(storage, joinPath(dir, "inventory.json"), head.inventory);
+    await replaceFile(storage, joinPath(dir, "inventory.json.sha512"), head.sidecar?.length ? head.sidecar : await sidecar(head.inventory));
   }
 }
 var sortedKeys;
@@ -8732,7 +8752,7 @@ var init_folder = __esm({
         };
       }
       async writeConfig(cfg) {
-        await this.storage.write(CONFIG_NAME, jsonBytes(cfg));
+        await replaceFile(this.storage, CONFIG_NAME, jsonBytes(cfg));
         this.archive = settingsOf(cfg);
         this.archive.profiles ??= [];
         this.archive.contact ??= this.archive.baseUrl;
@@ -19628,7 +19648,7 @@ var MONTHS = [
 ];
 function fmtDate(iso) {
   if (!iso) return "";
-  const parts = iso.split("/")[0].split("-");
+  const parts = iso.split("/")[0].split("T")[0].split("-");
   if (parts.length === 3) return `${Number(parts[2])} ${MONTHS[Number(parts[1]) - 1]} ${parts[0]}`;
   if (parts.length === 2) return `${MONTHS[Number(parts[1]) - 1]} ${parts[0]}`;
   return parts[0];
@@ -20641,10 +20661,6 @@ function hasWebsite(f) {
   return Boolean(f.index.html || f.index.template);
 }
 async function readableIndex(f, options = {}) {
-  if (f.index.template && !f.index.html) {
-    f.env.warn("the TeXmacs index (index.template) is written by opensheaf-py: run osheaf index of opensheaf-py to write it and its landing pages again");
-    return;
-  }
   const groups = await catalogueGroups(f);
   if (groups === null) return;
   const members = groups.flatMap(([, ms]) => ms);
@@ -20653,6 +20669,17 @@ async function readableIndex(f, options = {}) {
     "by-owner"
   ].includes(f.index.owners ?? "together")) {
     exit(`osheaf.json: index.owners is together or by-owner, not ${f.index.owners}`);
+  }
+  if (f.index.template && !f.index.html) {
+    const { quiet = false, ...rest } = options;
+    const pages2 = await render(f, members, {
+      ...rest,
+      home: false
+    });
+    if (quiet) return;
+    f.env.warn("the TeXmacs index (index.tm, from index.template) is typeset by opensheaf-py: run osheaf index of opensheaf-py to write it again");
+    f.env.out(`Done: opensheaf.json, ${plural(pages2, "landing page")} and sitemap.xml written.`);
+    return;
   }
   const html = f.index.html && typeof f.index.html === "object" ? f.index.html : {};
   const featured = html.featured || null;
@@ -20677,7 +20704,9 @@ async function readableIndex(f, options = {}) {
 async function present(f) {
   if (!hasWebsite(f) || f.old) return;
   try {
-    await readableIndex(f);
+    await readableIndex(f, f.index.html ? {} : {
+      quiet: true
+    });
   } catch (error) {
     f.env.err(`warning: the website was not regenerated (${error.message}); run osheaf index`);
   }
@@ -21219,13 +21248,39 @@ var GitHubError = class extends Error {
 };
 var CommitConflict = class extends GitHubError {
 };
+var RateLimited = class extends GitHubError {
+};
+var MAX_WAIT = 6e4;
+var TRIES = 3;
+function rateLimitWait(r, now) {
+  const after = r.headers.get("retry-after"), reset = r.headers.get("x-ratelimit-reset");
+  if (r.status !== 429 && !(r.status === 403 && (after !== null || r.headers.get("x-ratelimit-remaining") === "0"))) return null;
+  if (after !== null && /^\d+$/.test(after.trim())) return Number(after) * 1e3;
+  if (reset !== null && /^\d+$/.test(reset.trim())) return Math.max(0, Number(reset) * 1e3 - now) + 1e3;
+  return MAX_WAIT;
+}
 var GitHub = class {
-  constructor({ api = GITHUB_API, fetch: fetch2 = globalThis.fetch?.bind(globalThis), token = null } = {}) {
+  constructor({ api = GITHUB_API, fetch: fetch2 = globalThis.fetch?.bind(globalThis), token = null, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => Date.now() } = {}) {
     this.api = api.replace(/\/$/, "");
     this.fetch = fetch2;
     this.token = token;
+    this.sleep = sleep;
+    this.now = now;
   }
-  async request(method, path, body = null, { raw = false, fresh = false } = {}) {
+  async request(method, path, body = null, options = {}) {
+    for (let tries = 1; ; tries++) {
+      const r = await this.once(method, path, body, options);
+      const wait = rateLimitWait(r, this.now());
+      if (wait === null) return this.answer(r, path, options);
+      if (wait > MAX_WAIT || tries >= TRIES) {
+        const when = new Date(this.now() + wait).toISOString().slice(0, 19) + "Z";
+        throw new RateLimited(`GitHub API ${path}: rate limit reached; try again after ${when}`, r.status);
+      }
+      await r.body?.cancel();
+      await this.sleep(wait);
+    }
+  }
+  async once(method, path, body, { raw = false, fresh = false }) {
     const token = typeof this.token === "function" ? await this.token() : this.token;
     const headers = {
       Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
@@ -21246,6 +21301,9 @@ var GitHub = class {
     } catch (error) {
       throw new GitHubError(`GitHub API ${path}: ${error.message}`);
     }
+    return r;
+  }
+  async answer(r, path, { raw = false }) {
     if (r.ok && raw) return new Uint8Array(await r.arrayBuffer());
     const text3 = await r.text();
     let data2 = null;
@@ -21326,22 +21384,24 @@ var GitHubStorage = class _GitHubStorage {
     this.head = ref.object.sha;
     this.tree = (await this.github.request("GET", `${r}/commits/${this.head}`)).tree.sha;
     const entries = [];
+    const under2 = (prefix, e) => ({
+      ...e,
+      path: prefix ? `${prefix}/${e.path}` : e.path
+    });
     const walk = async (sha, prefix) => {
-      const t = await this.github.request("GET", `${r}/trees/${sha}${prefix === null ? "?recursive=1" : ""}`);
-      if (prefix === null && !t.truncated) {
-        entries.push(...t.tree);
+      const whole = await this.github.request("GET", `${r}/trees/${sha}?recursive=1`);
+      if (!whole.truncated) {
+        for (const e of whole.tree) entries.push(under2(prefix, e));
         return;
       }
+      const t = await this.github.request("GET", `${r}/trees/${sha}`);
+      if (t.truncated) throw new GitHubError(`${this.repo}: the folder ${prefix || "/"} is too large for GitHub's API`);
       for (const e of t.tree) {
-        const path = prefix ? `${prefix}/${e.path}` : e.path;
-        if (e.type === "tree") await walk(e.sha, path);
-        else entries.push({
-          ...e,
-          path
-        });
+        if (e.type === "tree") await walk(e.sha, under2(prefix, e).path);
+        else entries.push(under2(prefix, e));
       }
     };
-    await walk(this.tree, null);
+    await walk(this.tree, "");
     this.base = /* @__PURE__ */ new Map();
     for (const e of entries) {
       if (e.type === "blob") this.base.set(e.path, {
@@ -21496,14 +21556,18 @@ var GitHubStorage = class _GitHubStorage {
       if (e.size !== null && e.size > maxSize) continue;
       if (!skip(path, e.size)) todo.set(e.sha, path);
     }
+    let limited = null;
     await inTurn([
       ...todo
     ], async ([sha, path]) => {
+      if (limited) return;
       try {
         await this.blob(sha, path);
-      } catch {
+      } catch (error) {
+        if (error instanceof RateLimited) limited = error;
       }
     }, concurrency);
+    if (limited) throw limited;
     return todo.size;
   }
   async changes() {
@@ -22229,7 +22293,10 @@ var Verification = class {
       return;
     }
     if (inv.id !== id) {
-      const expected = parseId(inv.id) ? (await a.locate(inv.id).catch(() => null))?.join("/") : null;
+      const expected = parseId(inv.id) ? (await a.locate(inv.id).catch((e) => {
+        if (this.aborted(e)) throw e;
+        return null;
+      }))?.join("/") : null;
       this.add("error", this.where(inv.id), expected ? `is at ocfl/${a.paths.get(id).join("/")}, and its identifier puts it at ocfl/${expected} (section 3.2)` : `${inv.id}: not the identifier of a line or of a draft (sections 3.2 and 4)`, {
         object: id
       });
@@ -22278,7 +22345,10 @@ var Verification = class {
     if (!sc || sidecarDigest(sc) !== rootDigest) this.add("error", place3, "the checksum file of the inventory does not state its digest", at());
     o.sidecar = sc ? sidecarDigest(sc) : null;
     const head = typeof inv.head === "string" ? inv.head : "";
-    const headCopy = /^v[0-9]+$/.test(head) ? await this.fetchOrNull(a.inventoryUrl(id, head)).catch(() => null) : null;
+    const headCopy = /^v[0-9]+$/.test(head) ? await this.fetchOrNull(a.inventoryUrl(id, head)).catch((e) => {
+      if (this.aborted(e)) throw e;
+      return null;
+    }) : null;
     if (!headCopy || await sha512(headCopy) !== rootDigest) this.add("error", place3, `the inventory of ${head} is not the root inventory`, at());
     const names = Object.keys(inv.versions).sort((x, y) => (Number(x.slice(1)) || 0) - (Number(y.slice(1)) || 0));
     for (const [k, ver] of names.entries()) {
@@ -22419,7 +22489,10 @@ var Verification = class {
       const place3 = this.where(id);
       const a = this.archive;
       if (o.draft) {
-        const g = await a.bytes(id, o.inv, o.inv.head, "genesis.json", this.options).catch(() => null);
+        const g = await a.bytes(id, o.inv, o.inv.head, "genesis.json", this.options).catch((e) => {
+          if (this.aborted(e)) throw e;
+          return null;
+        });
         if ([
           "name",
           "owner",
@@ -22690,7 +22763,10 @@ var Verification = class {
   async movedBranchPoint(id, o, ver, p, old, where2) {
     const a = this.archive;
     const before = `v${versionNumber(ver) - 1}`;
-    const read = async (v) => jsonOrNull(await a.bytes(id, o.inv, v, "parent/inventory.json", this.options).catch(() => null)) || {};
+    const read = async (v) => jsonOrNull(await a.bytes(id, o.inv, v, "parent/inventory.json", this.options).catch((e) => {
+      if (this.aborted(e)) throw e;
+      return null;
+    })) || {};
     const [oldInv, newInv] = [
       await read(before),
       await read(ver)
@@ -22845,7 +22921,10 @@ var Verification = class {
     for (const kid of needed) {
       if (this.found.has(kid) || listed.has(kid)) continue;
       const owner = parseId(kid).owner;
-      const log = await a.keyLog(owner, this.options).catch(() => null);
+      const log = await a.keyLog(owner, this.options).catch((e) => {
+        if (this.aborted(e)) throw e;
+        return null;
+      });
       if (log) this.add("error", "opensheaf.json", `does not list ${this.where(kid)}, an object of the storage root (section 3.1)`);
     }
     const fields = [
@@ -22908,7 +22987,10 @@ var Verification = class {
       }
       const held2 = this.found.get(cat);
       if (!held2) continue;
-      const mem = await a.json(cat, held2.inv, held2.inv.head, "members.json", this.options).catch(() => null) || {};
+      const mem = await a.json(cat, held2.inv, held2.inv.head, "members.json", this.options).catch((e2) => {
+        if (this.aborted(e2)) throw e2;
+        return null;
+      }) || {};
       if (mem.type !== "catalogue") {
         this.add("error", "opensheaf.json", `the owner catalogue of ${o}, ${this.where(cat)}, is not a catalogue (section 8.1)`);
       }
@@ -23080,7 +23162,10 @@ var Verification = class {
     for (const e of a.owners()) {
       const cat = this.found.get(e.catalogue);
       if (!cat?.line?.latest) continue;
-      const mem = await a.json(cat.id, cat.inv, cat.line.latest, "members.json", this.options).catch(() => null);
+      const mem = await a.json(cat.id, cat.inv, cat.line.latest, "members.json", this.options).catch((e2) => {
+        if (this.aborted(e2)) throw e2;
+        return null;
+      });
       if (Array.isArray(mem?.members)) members = members.concat(mem.members);
     }
     const page = new TextDecoder().decode(home);
@@ -23338,7 +23423,7 @@ function landingDescriptionGaps(text3) {
   const record = /<script type="application\/ld\+json">([^]*?)<\/script>/.exec(text3);
   let ld = null;
   try {
-    ld = record ? JSON.parse(record[1]) : null;
+    ld = record && nesting(record[1]) <= LIMITS.nesting ? JSON.parse(record[1]) : null;
   } catch {
     ld = null;
   }
@@ -23404,6 +23489,7 @@ async function lookForKeys(storage) {
 
 // core/requests.js
 init_storage();
+init_http();
 init_write();
 init_inputs();
 
@@ -23886,21 +23972,26 @@ async function entryKey(r, entry) {
   return parsed ? `${parsed[0]}:${parsed[1]}` : null;
 }
 async function readDiscovery(r, base) {
+  const http = new Http({
+    fetch: r.env.fetch,
+    budget: null
+  });
   try {
-    const res = await r.env.fetch(base + "opensheaf.json");
-    if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-    const disc = await res.json();
+    const disc = await http.json(base + "opensheaf.json");
     if (disc && typeof disc === "object" && Object.hasOwn(disc, "objectPages")) {
       disc.objects = await listedObjects(disc, async (path) => {
-        const page = await r.env.fetch(base + path);
-        if (page.status === 404 || page.status === 410) return null;
-        if (!page.ok) throw new Error(`HTTP Error ${page.status}`);
-        return new Uint8Array(await page.arrayBuffer());
+        try {
+          return await http.request(base + path);
+        } catch (error) {
+          if (error.kind === "not-found") return null;
+          throw error;
+        }
       });
     }
     return disc;
   } catch (error) {
-    throw new Problem(`The archive at \`${base}\` could not be read (${error.message}): give the address of an OpenSheaf archive of specification 0.2, the folder that holds its \`opensheaf.json\`.`);
+    const why = error.status ? `HTTP Error ${error.status}` : error.detail || error.message;
+    throw new Problem(`The archive at \`${base}\` could not be read (${why}): give the address of an OpenSheaf archive of specification 0.2, the folder that holds its \`opensheaf.json\`.`);
   }
 }
 async function memberRef(r, form, name2, archiveName, required = true) {
@@ -24147,6 +24238,14 @@ async function sources(form) {
     }))
   ];
 }
+var CP437 = "\xC7\xFC\xE9\xE2\xE4\xE0\xE5\xE7\xEA\xEB\xE8\xEF\xEE\xEC\xC4\xC5\xC9\xE6\xC6\xF4\xF6\xF2\xFB\xF9\xFF\xD6\xDC\xA2\xA3\xA5\u20A7\u0192\xE1\xED\xF3\xFA\xF1\xD1\xAA\xBA\xBF\u2310\xAC\xBD\xBC\xA1\xAB\xBB\u2591\u2592\u2593\u2502\u2524\u2561\u2562\u2556\u2555\u2563\u2551\u2557\u255D\u255C\u255B\u2510\u2514\u2534\u252C\u251C\u2500\u253C\u255E\u255F\u255A\u2554\u2569\u2566\u2560\u2550\u256C\u2567\u2568\u2564\u2565\u2559\u2558\u2552\u2553\u256B\u256A\u2518\u250C\u2588\u2584\u258C\u2590\u2580\u03B1\xDF\u0393\u03C0\u03A3\u03C3\xB5\u03C4\u03A6\u0398\u03A9\u03B4\u221E\u03C6\u03B5\u2229\u2261\xB1\u2265\u2264\u2320\u2321\xF7\u2248\xB0\u2219\xB7\u221A\u207F\xB2\u25A0\xA0";
+function zipName(bytes, flags) {
+  const name2 = flags & 2048 ? new TextDecoder("utf-8", {
+    fatal: true
+  }).decode(bytes) : Array.from(bytes, (b) => b < 128 ? String.fromCharCode(b) : CP437[b - 128]).join("");
+  const k = name2.indexOf("\0");
+  return k < 0 ? name2 : name2.slice(0, k);
+}
 async function inflate(bytes) {
   const stream = new Blob([
     bytes
@@ -24190,7 +24289,6 @@ async function zipMembers(bytes) {
   const count = view.getUint16(end2 + 10, true);
   let at = view.getUint32(end2 + 16, true);
   const out = [];
-  const text3 = new TextDecoder("utf-8");
   for (let n = 0; n < count; n++) {
     if (view.getUint32(at, true) !== 33639248) throw new Problem(DAMAGED);
     const flags = view.getUint16(at + 8, true), method = view.getUint16(at + 10, true);
@@ -24198,7 +24296,7 @@ async function zipMembers(bytes) {
     const csize = view.getUint32(at + 20, true), nameLength = view.getUint16(at + 28, true);
     const extra = view.getUint16(at + 30, true), comment = view.getUint16(at + 32, true);
     const local = view.getUint32(at + 42, true);
-    const name2 = text3.decode(bytes.subarray(at + 46, at + 46 + nameLength));
+    const name2 = zipName(bytes.slice(at + 46, at + 46 + nameLength), flags);
     at += 46 + nameLength + extra + comment;
     if (csize === 4294967295 || local === 4294967295) throw new Problem("The zip of the sources is a ZIP64 archive: make an ordinary zip.");
     if (flags & 1) throw new Problem("The zip of the sources is encrypted.");
@@ -25856,6 +25954,7 @@ export {
   Problem,
   ROTATION,
   ROTATION_KEYS,
+  RateLimited,
   SIGNING_SECRET,
   Stop,
   UNLOCK_ORIGIN,
