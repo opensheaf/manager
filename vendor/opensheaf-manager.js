@@ -1,4 +1,4 @@
-// opensheaf-js a13d983460c2a90c2492c60dc3d0532125419fbd: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js b73264aabfd7487673655813d7b46e88955779ae: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -19648,10 +19648,16 @@ var MONTHS = [
 ];
 function fmtDate(iso) {
   if (!iso) return "";
-  const parts = iso.split("/")[0].split("T")[0].split("-");
-  if (parts.length === 3) return `${Number(parts[2])} ${MONTHS[Number(parts[1]) - 1]} ${parts[0]}`;
-  if (parts.length === 2) return `${MONTHS[Number(parts[1]) - 1]} ${parts[0]}`;
-  return parts[0];
+  const text3 = String(iso);
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2})(?:T[^]*)?)?)?$/.exec(text3.split("/")[0].trim());
+  if (!m) return text3;
+  const [, year, month, day] = m.map(Number);
+  if (m[2] && (month < 1 || month > 12)) return text3;
+  if (m[3]) {
+    if (day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return text3;
+    return `${day} ${MONTHS[month - 1]} ${m[1]}`;
+  }
+  return m[2] ? `${MONTHS[month - 1]} ${m[1]}` : m[1];
 }
 function namesJoined(names) {
   names = [
