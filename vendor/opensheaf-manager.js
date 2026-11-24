@@ -1,4 +1,4 @@
-// opensheaf-js 4e552257a8c1a52a9ee3866720bcb18f29020804: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js c3b9d3d9e73de811f885c33075e2726402b649cb: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -276,6 +276,7 @@ var init_http = __esm({
       depth: 3,
       pins: 2e3,
       mirrors: 5,
+      probes: 8,
       versions: 1e4,
       objects: 1e4,
       nesting: 64,
@@ -833,8 +834,8 @@ async function isNameOf(name2, genesis) {
 function objectId(name2, owner) {
   return `sheaf:${name2}:${owner}`;
 }
-function keyLogPin(owner, number, digest) {
-  return `sheaf:${owner}/v${number}?sha512=${digest}`;
+function keyLogPin(owner, number2, digest) {
+  return `sheaf:${owner}/v${number2}?sha512=${digest}`;
 }
 function parseId(id) {
   const m = typeof id === "string" ? /^sheaf:([^:]+):([^:]+)$/.exec(id) : null;
@@ -1037,11 +1038,16 @@ function orcidValid(text3) {
   const r = (12 - total % 11) % 11;
   return (r === 10 ? "X" : String(r)) === digits[15];
 }
-function keeperValid(uri) {
+function keeperValid(uri, strict = false) {
   if (uri.startsWith("https://orcid.org/")) return orcidValid(uri);
-  return /^https:\/\/[a-z0-9.-]+\/$/.test(uri);
+  return /^https:\/\/[a-z0-9.-]+\/$/.test(uri) && (!strict || keeperDomain(uri));
 }
-var NAME, OWNER_NAME, LABEL, DID_KEY, CREATED, NONCE, GENESIS, GENESIS_FORMAT, KINDS, ED25519_PUB, SheafUri, PART, ESCAPED, ORCID;
+function keeperDomain(uri) {
+  if (typeof uri !== "string" || !/^https:\/\/[a-z0-9.-]+\/$/.test(uri)) return false;
+  const labels2 = uri.slice("https://".length, -1).split(".");
+  return labels2.length >= 2 && labels2.every((x) => DNS_LABEL.test(x)) && !/^[0-9]+$/.test(labels2.at(-1)) && labels2.at(-1) !== "localhost" && uri.length - "https:///".length <= 253;
+}
+var NAME, OWNER_NAME, LABEL, DID_KEY, CREATED, NONCE, GENESIS, GENESIS_FORMAT, KINDS, ED25519_PUB, SheafUri, PART, ESCAPED, ORCID, DNS_LABEL;
 var init_names = __esm({
   "core/names.js"() {
     init_crypto();
@@ -1104,6 +1110,7 @@ var init_names = __esm({
     PART = /^[a-z2-7]+$/;
     ESCAPED = /^(?:[A-Za-z0-9\-._~]|%[0-9A-Fa-f]{2})*$/;
     ORCID = /^(?:https:\/\/orcid\.org\/)?([0-9]{4})-([0-9]{4})-([0-9]{4})-([0-9]{3}[0-9X])$/;
+    DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
   }
 });
 
@@ -1261,8 +1268,8 @@ async function judge(bytes, file, { objectId: objectId2, version, inventory, own
     return bad("it signs another version, or another inventory", d);
   }
   if (d.signer !== owner) return bad("its signer is not the owner of the line", d);
-  const [, , number, digest] = FIELDS.keyLog.exec(d.keyLog);
-  const n = Number(number);
+  const [, , number2, digest] = FIELDS.keyLog.exec(d.keyLog);
+  const n = Number(number2);
   if (keyLog && (version === "v1" || n !== Number(version.slice(1)) - 1)) {
     return bad("a key-log version is signed against the version before it, never the first", d);
   }
@@ -1645,14 +1652,14 @@ async function carriedOf(files) {
     const inventory = group.get("inventory.json") || new Uint8Array();
     const inv = jsonOrNull(inventory);
     const head = isObject(inv) ? inv.head : null;
-    const number = typeof head === "string" && /^v[0-9]+$/.test(head) ? Number(head.slice(1)) : null;
+    const number2 = typeof head === "string" && /^v[0-9]+$/.test(head) ? Number(head.slice(1)) : null;
     out.push({
       d,
       files: group,
       inventory,
       sidecar: group.get("inventory.json.sha512") || new Uint8Array(),
       digest: await sha512(inventory),
-      number,
+      number: number2,
       isVersion: true,
       forkRecord: false,
       keys: jsonOrNull(group.get("keys.json"), {
@@ -1794,7 +1801,7 @@ async function keyRules(k, earlier, owner) {
   return problems;
 }
 function heldLookup(side) {
-  return (number, digest) => side.find((x) => x.number === number && x.digest === digest) || null;
+  return (number2, digest) => side.find((x) => x.number === number2 && x.digest === digest) || null;
 }
 function sameFiles(a, b) {
   if (a.size !== b.size) return false;
@@ -1835,15 +1842,15 @@ var init_owners = __esm({
       "parent"
     ];
     Version = class _Version {
-      static async make(number, files, inventory, sidecar2 = null, witnesses = /* @__PURE__ */ new Map()) {
-        const v = new _Version(number, files, inventory, sidecar2, witnesses);
+      static async make(number2, files, inventory, sidecar2 = null, witnesses = /* @__PURE__ */ new Map()) {
+        const v = new _Version(number2, files, inventory, sidecar2, witnesses);
         v.digest = await sha512(inventory);
         if (v.forkRecord) v.carried = await carriedOf(files);
         return v;
       }
-      constructor(number, files, inventory, sidecar2, witnesses) {
+      constructor(number2, files, inventory, sidecar2, witnesses) {
         Object.assign(this, {
-          number,
+          number: number2,
           files,
           inventory,
           sidecar: sidecar2,
@@ -1895,8 +1902,8 @@ var init_owners = __esm({
         this.checked = null;
         this.met = null;
       }
-      pin(number) {
-        return keyLogPin(this.owner, number, this.versions[number - 1].digest);
+      pin(number2) {
+        return keyLogPin(this.owner, number2, this.versions[number2 - 1].digest);
       }
       ready() {
         if (!this.checked?.result) {
@@ -1932,14 +1939,14 @@ var init_owners = __esm({
         for (const c of this.forkRecord?.carried || []) for (const x of arrayOf(c.keys?.exposed)) found2.add(x);
         return found2;
       }
-      lookup(number, digest) {
+      lookup(number2, digest) {
         this.ready();
-        for (const v of this.versions) if (v.number === number && v.digest === digest) return v;
-        for (const c of this.forkRecord?.carried || []) if (c.number === number && c.digest === digest) return c;
+        for (const v of this.versions) if (v.number === number2 && v.digest === digest) return v;
+        for (const c of this.forkRecord?.carried || []) if (c.number === number2 && c.digest === digest) return c;
         return null;
       }
-      verified(number, digest) {
-        const v = this.lookup(number, digest);
+      verified(number2, digest) {
+        const v = this.lookup(number2, digest);
         return v && v.isVersion ? v : null;
       }
       extensions() {
@@ -2063,6 +2070,12 @@ var init_owners = __esm({
       }
       async signatureProblems(v, prev, lookup, warnings, where2 = null) {
         where2 = where2 || `v${v.number}`;
+        const need = prev.keys?.nextThreshold;
+        if (prev.keys?.ended || !Number.isInteger(need)) {
+          return [
+            `follows v${prev.number}, which ends the key log or commits to no rotation keys: nothing follows an ending version (section 6.3)`
+          ];
+        }
         const good = /* @__PURE__ */ new Set();
         for (const j of await judgeFolder(v.witnesses, {
           objectId: this.id,
@@ -2075,7 +2088,6 @@ var init_owners = __esm({
           if (j.status === GOOD && j.keyLog[0] === prev.number && j.keyLog[1] === prev.digest) good.add(j.key);
           else if (j.status !== GOOD) warnings.push(`${where2}/${j.file}: ${j.status}: ${j.reason}`);
         }
-        const need = prev.keys.nextThreshold;
         if (good.size < need) return [
           `signed by ${good.size} rotation key${good.size === 1 ? "" : "s"} of v${prev.number}, which needs ${need} (section 6.1)`
         ];
@@ -2304,6 +2316,11 @@ function documentVersionErrors(inv, objOf2) {
     const obj = objOf2(ver);
     if (!obj || obj.kind !== "document" && obj.kind !== "collection") return errors;
     const n = obj.documentVersion;
+    if (!Number.isInteger(n) || n < 1) {
+      const repr = typeof n === "string" ? `'${n}'` : n === null || n === void 0 ? "None" : JSON.stringify(n);
+      add2(ver, `documentVersion is a positive integer, not ${repr} (section 4.3): the document versions are not checked further`);
+      return errors;
+    }
     const newDoc = !seen.has(n);
     const own2 = ownFiles(inv, ver, obj);
     const change = obj.changes?.text ?? null;
@@ -8421,8 +8438,8 @@ async function genesisRecord(kind, { originator = null, keys = null, threshold =
       ] : [
         ...keeper
       ];
-      if (rec.keeper.length !== 1 || !keeperValid(rec.keeper[0])) {
-        throw new Error(`a keeper is one ORCID iD or https://<domain>/: '${keeper}'`);
+      if (rec.keeper.length !== 1 || !keeperValid(rec.keeper[0], true)) {
+        throw new Error(`a keeper is one ORCID iD or https://<domain>/, a DNS name: '${keeper}'`);
       }
     }
     if (extensions) rec.extensions = extensions;
@@ -8556,6 +8573,12 @@ async function writeKeyLog(storage, dir, log) {
     }
   }
   for (const v of log.versions.slice(held2)) {
+    if (await storage.kind(joinPath(dir, `v${v.number}`))) {
+      const there = await storage.read(joinPath(dir, `v${v.number}`, "inventory.json"));
+      if (!there || there.length !== v.inventory.length || there.some((b, k) => b !== v.inventory[k])) {
+        throw new StorageError(`${dir}: v${v.number} is there already, another version than the one written now: an earlier write of the key log was interrupted before its root inventory was replaced; osheaf owner complete settles it (it completes a signed version, removes an unsigned one), and signing another version of that number would fork the key log (section 6.3)`);
+      }
+    }
     const inv = JSON.parse(new TextDecoder().decode(v.inventory));
     const byDigest = /* @__PURE__ */ new Map();
     for (const bytes of v.files.values()) byDigest.set(await sha512hex(bytes), bytes);
@@ -8606,6 +8629,19 @@ function stop(text3) {
 function exit(text3) {
   throw new Stop(text3);
 }
+function pyRepr(value) {
+  if (typeof value === "string") {
+    const escaped = value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t");
+    if (value.includes("'") && !value.includes('"')) return `"${escaped}"`;
+    return `'${escaped.replace(/'/g, "\\'")}'`;
+  }
+  if (value === null || value === void 0) return "None";
+  if (typeof value === "boolean") return value ? "True" : "False";
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) return `[${value.map(pyRepr).join(", ")}]`;
+  if (typeof value === "object") return `{${Object.entries(value).map(([k, v]) => `${pyRepr(k)}: ${pyRepr(v)}`).join(", ")}}`;
+  return String(value);
+}
 function short(name2) {
   if (name2.startsWith("did:key:")) name2 = name2.slice("did:key:".length);
   return [
@@ -8632,7 +8668,13 @@ function environment(given = {}) {
   };
 }
 async function readConfig(storage) {
-  const cfg = await readJson(storage, CONFIG_NAME);
+  let cfg;
+  try {
+    cfg = await readJson(storage, CONFIG_NAME);
+  } catch (error) {
+    exit(`${CONFIG_NAME}: cannot be read (${error.message.replace(/^osheaf\.json: /, "")})`);
+  }
+  if (cfg !== null && (typeof cfg !== "object" || Array.isArray(cfg))) exit(`${CONFIG_NAME}: the configuration is a mapping of settings`);
   if (cfg !== null) return cfg;
   for (const n of CONFIG_NAMES.slice(1)) {
     if (await storage.kind(n)) exit(`${n}: opensheaf-js reads osheaf.json only (opensheaf-py also reads YAML)`);
@@ -8668,7 +8710,7 @@ async function removeStage(storage, path) {
     await storage.remove(p);
   }
 }
-var Stop, LOWER_NAMES, CONFIG_NAME, CONFIG_NAMES, SPEC, OBJ2, OBJ_FORMAT, GENESIS2, LAYOUTS, LAYOUT_TEXT, REQUIRED, CATALOGUE_LABEL, REBUILD, ArchiveFolder;
+var Stop, LOWER_NAMES, UnsafePath, CONFIG_NAME, CONFIG_NAMES, SPEC, OBJ2, OBJ_FORMAT, GENESIS2, LAYOUTS, LAYOUT_TEXT, REQUIRED, CATALOGUE_LABEL, REBUILD, ArchiveFolder;
 var init_folder = __esm({
   "core/folder.js"() {
     init_paths();
@@ -8688,6 +8730,8 @@ var init_folder = __esm({
       "osheaf",
       "command"
     ];
+    UnsafePath = class extends Stop {
+    };
     CONFIG_NAME = "osheaf.json";
     CONFIG_NAMES = [
       "osheaf.json",
@@ -8732,7 +8776,17 @@ var init_folder = __esm({
       }
       async configure() {
         const cfg = await readConfig(this.storage);
-        const disc = await readJson(this.storage, "opensheaf.json") || {};
+        let disc = {};
+        this.unreadDiscovery = null;
+        try {
+          disc = await readJson(this.storage, "opensheaf.json") ?? {};
+        } catch (error) {
+          this.unreadDiscovery = `the discovery document cannot be read (${error.message.replace(/^opensheaf\.json: /, "")})`;
+        }
+        if (disc === null || typeof disc !== "object" || Array.isArray(disc)) {
+          disc = {};
+          this.unreadDiscovery = "the discovery document is not a JSON object";
+        }
         this.old = "archiveId" in cfg || disc.specification === "0.1";
         this.layout = cfg.storageLayout || OWNER_NAME_LAYOUT;
         this.archive = settingsOf(cfg);
@@ -8753,22 +8807,38 @@ var init_folder = __esm({
           }), ORIGIN, disc);
           await paged.loadPages();
           listed = paged.pageProblems.length ? [] : paged.listed();
-          this.unreadPages = paged.pageProblems[0] ?? null;
+          this.unreadPages = paged.pageProblems[0] ?? this.unreadDiscovery;
         } else {
-          this.unreadPages = null;
+          this.unreadPages = this.unreadDiscovery;
         }
-        this.labels = new Map(listed.filter((o) => o && typeof o === "object" && o.label).map((o) => [
-          o.label,
-          o.id
-        ]));
-        this.catalogues = new Map((disc.owners || []).filter((e) => e && typeof e === "object" && e.owner && e.catalogue).map((e) => [
+        this.labels = await this.labelsOf(listed);
+        this.catalogues = new Map((Array.isArray(disc.owners) ? disc.owners : []).filter((e) => e && typeof e === "object" && e.owner && e.catalogue).map((e) => [
           e.owner,
           e.catalogue
         ]));
-        this.tombstones = [
-          ...disc.tombstones || []
-        ];
+        this.tombstones = (Array.isArray(disc.tombstones) ? disc.tombstones : []).filter((t) => t && typeof t === "object" && !Array.isArray(t));
         return this;
+      }
+      async labelsOf(listed) {
+        const out = /* @__PURE__ */ new Map();
+        for (const o of listed) {
+          if (!o || typeof o !== "object" || o.label === void 0 || o.label === null) continue;
+          const { label, id } = o;
+          let ok = typeof label === "string" && LABEL.test(label) && label.length <= 64 && typeof id === "string";
+          if (ok) {
+            try {
+              await pathOf(id, OWNER_NAME_LAYOUT);
+            } catch {
+              ok = false;
+            }
+          }
+          if (!ok) {
+            this.env.err(`warning: opensheaf.json: the label ${pyRepr(label)} of ${pyRepr(id)} is not a label of a line (^[a-z0-9]+(-[a-z0-9]+)*$, at most 64 characters): left out (osheaf label gives the line another one)`);
+            continue;
+          }
+          out.set(label, id);
+        }
+        return out;
       }
       archiveOwners() {
         const out = [
@@ -8778,7 +8848,7 @@ var init_folder = __esm({
       }
       refuseUnreadPages() {
         if (this.unreadPages) {
-          exit(`opensheaf.json: ${this.unreadPages}: the labels of the lines are not known, and writing the discovery document or the website now would lose them; nothing is written (restore the pages of objects, from git for instance, and run the command again)`);
+          exit(`opensheaf.json: ${this.unreadPages}: the labels of the lines are not known, and writing the discovery document or the website now would lose them; nothing is written (restore it, or its pages of objects, from git for instance, and run the command again` + (this.unreadDiscovery ? "; osheaf index writes it again from the storage root, without the labels)" : ")"));
         }
       }
       labelOf(id) {
@@ -8814,6 +8884,7 @@ var init_folder = __esm({
         }
       }
       async inventory(dir) {
+        if (await this.storage.linked?.(dir)) exit(`${dir} passes through a symbolic link`);
         try {
           return await readJson(this.storage, joinPath(dir, "inventory.json"));
         } catch {
@@ -8828,7 +8899,31 @@ var init_folder = __esm({
       }
       async readLogical(dir, inv, logical, version = null) {
         const cp = this.contentPath(inv, version || inv.head, logical);
-        return cp ? this.storage.read(joinPath(dir, cp)) : null;
+        return cp ? this.contentFile(dir, cp) : null;
+      }
+      async contentProblem(dir, cp) {
+        if (typeof cp !== "string" || !cp) return `${pyRepr(cp)} is not a content path`;
+        const parts = cp.split("/");
+        if (cp.startsWith("/") || cp.includes("\\") || parts.some((p) => [
+          "",
+          ".",
+          ".."
+        ].includes(p)) || /[\u0000-\u001f\u007f]/.test(cp)) {
+          return `the content path ${pyRepr(cp)} is not a relative path inside the object (section 4.1)`;
+        }
+        let at = dir;
+        for (const p of parts) {
+          at = joinPath(at, p);
+          if (await this.storage.kind(at) === "link") return `the content path ${cp} passes through a symbolic link`;
+        }
+        const kind = await this.storage.kind(at);
+        if (kind && kind !== "file") return `the content path ${cp} is not a regular file`;
+        return null;
+      }
+      async contentFile(dir, cp) {
+        const problem = await this.contentProblem(dir, cp);
+        if (problem) throw new UnsafePath(`${dir}: ${problem}: nothing is read from it (repair the inventory, from a copy of the object)`);
+        return this.storage.read(joinPath(dir, cp));
       }
       async readObjectJson(dir, inv, logical, version = null) {
         const bytes = await this.readLogical(dir, inv, logical, version);
@@ -8924,6 +9019,15 @@ look at them; give --i-know to extend them anyway`);
         this.env.err(`warning: ${id}: extending versions that are not signed, or are contested:
 ${lines2}`);
       }
+      async refuseInterrupted(id, dir, ver) {
+        const left = [];
+        for (const p of [
+          joinPath(dir, ver),
+          joinPath(dir, WITNESSES, ver)
+        ]) if (await this.storage.kind(p)) left.push(p);
+        if (!left.length) return;
+        stop(`${this.labelOf(id) || id}: ${left.map((p) => `${p}/`).join(", ")} exist, but the inventory of the object names v${Number(ver.slice(1)) - 1} as its head: an earlier add of ${ver} was interrupted. Either finish it (if ${dir}/${ver}/ is the version you made: copy its inventory.json and inventory.json.sha512 into the object folder, then run osheaf verify), or undo it (remove those folders); then run the command again`);
+      }
       async previousDigest(id, dir, head) {
         const inv = await this.storage.read(joinPath(dir, head, "inventory.json"));
         const sc = await this.storage.read(joinPath(dir, head, "inventory.json.sha512"));
@@ -8936,7 +9040,10 @@ ${lines2}`);
       async zenodoPending(id) {
         try {
           const state = await readJson(this.storage, joinPath("zenodo-staging", ...await pathOf(id, this.layout), "state.json"));
-          return state?.phase === "published";
+          return [
+            "publishing",
+            "published"
+          ].includes(state?.phase);
         } catch {
           return false;
         }
@@ -8975,6 +9082,7 @@ ${lines2}`);
           obj.previous = await this.previousDigest(id, dir, inv.head);
         }
         const ver = `v${Number(inv.head.slice(1)) + 1}`;
+        if (ver !== "v1") await this.refuseInterrupted(id, dir, ver);
         if (stageIn !== null && await s.kind(stageIn)) exit(`${stageIn} exists`);
         const stage = stageIn ?? `.staging-${hex(randomBytes(6))}`;
         try {
@@ -9025,6 +9133,7 @@ ${lines2}`);
       async moveStaged(dir, stage, ver, draft = false) {
         const s = this.storage;
         const data2 = await s.read(joinPath(stage, ver, "inventory.json"));
+        if (ver !== "v1") await this.refuseInterrupted(JSON.parse(new TextDecoder().decode(data2)).id, dir, ver);
         const sc = await s.read(joinPath(stage, ver, "inventory.json.sha512"));
         if (ver === "v1") {
           const obj = joinPath(stage, "object");
@@ -9278,10 +9387,10 @@ function indexFiles(entries) {
   for (const [index, list2] of Object.entries(entries)) {
     const files = out[index] = {};
     const key = INDEX_KEY[index];
-    const number = (e) => Number((e.version ?? "v0").slice(1));
+    const number2 = (e) => Number((e.version ?? "v0").slice(1));
     const sorted = [
       ...list2
-    ].sort((a, b) => compareText(a[key], b[key]) || compareText(a.id ?? "", b.id ?? "") || number(a) - number(b));
+    ].sort((a, b) => compareText(a[key], b[key]) || compareText(a.id ?? "", b.id ?? "") || number2(a) - number2(b));
     for (const e of sorted) {
       const p = e[key].slice(0, INDEXES[index]);
       (files[p] ||= {
@@ -9402,6 +9511,2167 @@ var init_discovery = __esm({
     PAGING = {
       perPage: 1e3
     };
+  }
+});
+
+// core/rules.js
+function finding(level2, place3, message2, { object = null, ver = null } = {}) {
+  const section = /\(sections? ([0-9A-Z][^)]*)\)/.exec(message2)?.[1]?.split(/,| and /)[0].trim() ?? null;
+  return {
+    level: level2,
+    place: place3,
+    message: message2,
+    object,
+    ver,
+    section,
+    text: `${place3}: ${message2}`
+  };
+}
+function schemaFindings(place3, data2, schema4, level2 = "error", context = {}) {
+  if (!schema4) return [];
+  return validate(schema4, data2).map((e) => finding(level2, place3, `${e.path ? e.path + ": " : ""}${e.message}`, context));
+}
+function descriptionErrors(inv, ver, obj, dc) {
+  const out = [];
+  const logical = Object.keys(filesOf(inv, ver));
+  if (!isObject(obj) || !isObject(dc)) return out;
+  if (String(obj.documentVersion) !== dc.version) out.push("datacite.json and object.json disagree on the version");
+  if (obj.status === "withdrawn" && dateOf(dc, "Withdrawn") !== (obj.withdrawal?.date ?? null)) out.push("withdrawal dates disagree");
+  for (const k of [
+    "titles",
+    "creators",
+    "publicationYear",
+    "types",
+    "version",
+    "publisher"
+  ]) {
+    if (!Object.hasOwn(dc, k)) out.push(`datacite.json lacks ${k}`);
+  }
+  if (!(Array.isArray(dc.rightsList) ? dc.rightsList.length : dc.rightsList)) {
+    out.push("datacite.json has no licence or rights statement in rightsList (section 4.4)");
+  }
+  for (const r of Array.isArray(dc.rightsList) ? dc.rightsList : []) {
+    const ident = r?.rightsIdentifier;
+    if (ident == null) continue;
+    if (r?.rightsIdentifierScheme !== "SPDX") {
+      out.push(`rightsList: ${ident} is not given as an SPDX identifier (section 4.4)`);
+    } else if (String(ident) !== String(ident).toLowerCase()) {
+      out.push(`rightsList: ${ident} is not in lower case (section 4.4)`);
+    }
+  }
+  const notes = [
+    obj.changes,
+    obj.sourcesMissing,
+    obj.licence,
+    ...Array.isArray(obj.notices) ? obj.notices : [],
+    obj.withdrawal?.reason
+  ];
+  for (const note of notes) {
+    if (note?.path && !logical.includes(note.path)) out.push(`note file ${note.path} not in the version`);
+  }
+  if (obj.kind === "document") {
+    if (obj.mainSource && !logical.includes(obj.mainSource)) out.push("main source not in the version");
+    if (obj.sourcesMissing && obj.mainSource) out.push("sourcesMissing together with a main source");
+  } else if (obj.kind === "collection" && !logical.includes("members.json")) {
+    out.push("collection without members.json");
+  }
+  for (const r of Array.isArray(obj.renditions) ? obj.renditions : []) {
+    if (!logical.includes(r?.path)) out.push(`rendition ${r?.path} not in the version`);
+  }
+  return out;
+}
+function memberErrors(type, m) {
+  const out = [];
+  if (type === "catalogue" && (!m?.version || !m?.inventorySha512 || isObject(m) && Object.hasOwn(m, "revisions"))) {
+    out.push("a member of a catalogue needs version and inventorySha512, and no revisions");
+  }
+  if (type === "selection") {
+    const revs = m?.revisions;
+    if ([
+      "version",
+      "inventorySha512",
+      "follow"
+    ].some((k) => isObject(m) && Object.hasOwn(m, k))) {
+      out.push("a member of a selection has no version, inventorySha512 or follow");
+    }
+    if (!Array.isArray(revs) || !revs.length || revs.some((r) => ![
+      "documentVersion",
+      "version",
+      "inventorySha512"
+    ].every((k) => r?.[k]))) {
+      out.push("a member of a selection needs revisions, each with documentVersion, version and inventorySha512");
+    } else if (new Set(revs.map((r) => r.documentVersion)).size !== revs.length) {
+      out.push("a document version is vetted twice");
+    }
+  }
+  return out;
+}
+function memberPins2(m) {
+  if (isObject(m) && Object.hasOwn(m, "revisions")) {
+    return (Array.isArray(m.revisions) ? m.revisions : []).map((r) => ({
+      version: r?.version,
+      pin: r?.inventorySha512,
+      documentVersion: r?.documentVersion ?? null
+    }));
+  }
+  return [
+    {
+      version: m?.version,
+      pin: m?.inventorySha512,
+      documentVersion: null
+    }
+  ];
+}
+function indexEntries2(objects) {
+  const out = {
+    names: [],
+    owners: [],
+    sha512: []
+  };
+  const lines2 = /* @__PURE__ */ new Map();
+  for (const o of objects) {
+    const [, name2, owner] = o.id.split(":");
+    const entry = {
+      name: name2,
+      owner,
+      id: o.id,
+      status: o.status,
+      originator: o.rec.kind === "owner" ? owner : o.rec.originator ?? null,
+      genesis: new TextDecoder().decode(o.genesis)
+    };
+    if (o.label) entry.label = o.label;
+    out.names.push(entry);
+    if (!lines2.has(owner)) lines2.set(owner, []);
+    lines2.get(owner).push(name2);
+    o.sidecars.forEach((digest, k) => {
+      if (digest !== null) out.sha512.push({
+        inventorySha512: digest,
+        id: o.id,
+        version: `v${k + 1}`,
+        status: o.status
+      });
+    });
+    for (const c of o.carried || []) {
+      out.sha512.push({
+        inventorySha512: c.digest,
+        id: o.id,
+        version: `v${c.number}`,
+        status: "active"
+      });
+    }
+  }
+  out.owners = [
+    ...lines2
+  ].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([owner, names]) => ({
+    owner,
+    names: names.sort()
+  }));
+  return out;
+}
+var INDEX_KEY2;
+var init_rules = __esm({
+  "core/rules.js"() {
+    init_schema();
+    init_versions();
+    init_names();
+    INDEX_KEY2 = {
+      names: "name",
+      owners: "owner",
+      sha512: "inventorySha512"
+    };
+  }
+});
+
+// core/branches.js
+function level(digests, read) {
+  return {
+    digests,
+    read,
+    sub(prefix) {
+      const below = /* @__PURE__ */ new Map();
+      for (const [p, d] of digests) if (p.startsWith(prefix)) below.set(p.slice(prefix.length), d);
+      return level(below, (p) => read(prefix + p));
+    },
+    async json(path) {
+      return digests.has(path) ? jsonOrNull(await read(path)) : null;
+    }
+  };
+}
+function levelOfVersion(archive, id, inv, ver, options = {}) {
+  const digests = new Map(Object.entries(filesOf(inv, ver)));
+  return level(digests, (p) => archive.bytes(id, inv, ver, p, options));
+}
+async function verdict(lv, obj, genesis, logs, depth = 0) {
+  try {
+    return await levelVerdict(lv, obj, genesis, logs, depth);
+  } catch (error) {
+    if (error?.kind === "aborted") throw error;
+    return [
+      INCONSISTENT,
+      [
+        `the evidence of the branch point cannot be read: ${error?.constructor?.name ?? "Error"} ${error?.message ?? error}`
+      ]
+    ];
+  }
+}
+async function levelVerdict(lv, obj, genesis, logs, depth = 0) {
+  const p = obj?.parent;
+  if (!isObject(p)) return [
+    INCONSISTENT,
+    [
+      "object.json has no parent"
+    ]
+  ];
+  if (depth > MAX_DEPTH) return [
+    UNCHECKED2,
+    [
+      `the chain is not followed beyond ${MAX_DEPTH} levels`
+    ]
+  ];
+  const problems = [];
+  let rec;
+  try {
+    rec = await readGenesis(genesis);
+  } catch (error) {
+    return [
+      INCONSISTENT,
+      [
+        `genesis.json: ${error.message}`
+      ]
+    ];
+  }
+  const name2 = typeof obj.name === "string" ? obj.name : "", pname = typeof p.name === "string" ? p.name : "";
+  if (!await isNameOf(name2, genesis) || !await isNameOf(pname, genesis)) {
+    problems.push("the name and parent.name are not names of genesis.json (section 5.2)");
+  } else if (name2 !== pname && algorithm(name2) <= algorithm(pname)) {
+    problems.push("a branch renamed after a clash has a greater algorithm number than parent.name (section 5.3)");
+  }
+  const pinvBytes = lv.digests.has("parent/inventory.json") ? await lv.read("parent/inventory.json") : null;
+  const pinv = jsonOrNull(pinvBytes);
+  const pobjBytes = lv.digests.has("parent/object.json") ? await lv.read("parent/object.json") : null;
+  const pobj = jsonOrNull(pobjBytes);
+  if (!isObject(pinv) || !isObject(pobj)) {
+    return [
+      INCONSISTENT,
+      [
+        ...problems,
+        "parent/inventory.json or parent/object.json is missing, or not of the form of an inventory and an object.json (section 9.2)"
+      ]
+    ];
+  }
+  if (await sha512(pinvBytes) !== p.inventorySha512 || pinv.head !== p.objectVersion) {
+    problems.push("parent/inventory.json is not the inventory the pin of parent names");
+  }
+  const pstate = /* @__PURE__ */ new Map();
+  const state = pinv.versions?.[pinv.head]?.state;
+  for (const [d, paths] of Object.entries(isObject(state) ? state : {})) {
+    for (const path of Array.isArray(paths) ? paths : []) pstate.set(path, d);
+  }
+  if (!pstate.has("object.json") || pstate.get("object.json") !== await sha512(pobjBytes)) {
+    problems.push("parent/object.json is not the object.json the parent inventory records");
+  }
+  if (depth === 0) {
+    const own2 = [
+      "datacite.json",
+      "object.json",
+      ...(Array.isArray(obj.notices) ? obj.notices : []).map((n) => n?.path).filter((x) => typeof x === "string")
+    ];
+    for (const [path, d] of pstate) {
+      if (own2.includes(path) || isEvidence(path)) continue;
+      if (lv.digests.get(path) !== d) problems.push(`${path}: a file of the parent version is missing, or differs (section 9.3)`);
+    }
+    for (const path of lv.digests.keys()) {
+      if (!own2.includes(path) && !isEvidence(path) && !pstate.has(path)) problems.push(`${path}: not a file of the parent version (section 9.3)`);
+    }
+  }
+  if (p.owner !== pobj.owner || p.name !== pobj.name || p.documentVersion !== pobj.documentVersion) {
+    problems.push("parent does not agree with parent/object.json");
+  }
+  if (obj.owner === p.owner || obj.owner === rec.originator) {
+    problems.push("the owner of a branch is neither the parent's owner nor the originator (section 9.3)");
+  }
+  if (!(p.owner === rec.originator && !("parent" in pobj) || "parent" in pobj)) {
+    problems.push("the parent is the originator's line, or a branch with its own parent (section 9.3)");
+  }
+  const log = await logs(p.owner);
+  if (log) await log.check();
+  const pid = NAME.test(pname) && OWNER_NAME.test(p.owner || "") ? objectId(pname, p.owner) : null;
+  if (pid === null) return [
+    INCONSISTENT,
+    [
+      ...problems,
+      "parent does not name a line"
+    ]
+  ];
+  const witnesses = /* @__PURE__ */ new Map();
+  for (const path of lv.digests.keys()) {
+    const rest = path.slice("parent/signatures/".length);
+    if (path.startsWith("parent/signatures/") && !rest.includes("/")) witnesses.set(rest, await lv.read(path));
+  }
+  const judgements = await judgeFolder(witnesses, {
+    objectId: pid,
+    version: p.objectVersion,
+    inventory: p.inventorySha512,
+    owner: p.owner,
+    lookup: log ? (n, d) => log.lookup(n, d) : () => null
+  });
+  const status = lineStatuses([
+    judgements
+  ], log ? {
+    exposed: log.exposedKeys(),
+    forkPoint: log.forkPoint
+  } : {})[0];
+  if (status === UNSIGNED || status === INVALID) problems.push(`the parent version is not a version: ${status} (sections 7.3 and 9.3)`);
+  let result = status === SIGNED || status === VOUCHED ? CONFIRMED2 : UNCHECKED2;
+  const notes = result === CONFIRMED2 ? [] : [
+    `the parent version is ${status} (section 9.3)`
+  ];
+  if (problems.length) return [
+    INCONSISTENT,
+    problems
+  ];
+  if ("parent" in pobj) {
+    const inner = lv.sub("parent/");
+    const chain = level(new Map([
+      ...inner.digests
+    ].filter(([path]) => isEvidence(path))), inner.read);
+    const evidence = new Map([
+      ...pstate
+    ].filter(([path]) => isEvidence(path)));
+    if (chain.digests.size !== evidence.size || [
+      ...evidence
+    ].some(([path, d]) => chain.digests.get(path) !== d)) {
+      return [
+        INCONSISTENT,
+        [
+          "parent/parent/ is not the evidence of the parent version (section 9.3)"
+        ]
+      ];
+    }
+    const [sub, more] = await verdict(chain, pobj, genesis, logs, depth + 1);
+    if (sub === INCONSISTENT) return [
+      INCONSISTENT,
+      more.map((m) => `parent/parent/: ${m}`)
+    ];
+    notes.push(...more.map((m) => `parent/parent/: ${m}`));
+    if (ORDER[sub] > ORDER[result]) result = sub;
+  }
+  return [
+    result,
+    notes
+  ];
+}
+var INCONSISTENT, CONFIRMED2, UNCHECKED2, ORDER, MAX_DEPTH;
+var init_branches = __esm({
+  "core/branches.js"() {
+    init_http();
+    init_names();
+    init_owners();
+    init_signatures();
+    init_versions();
+    INCONSISTENT = "inconsistent";
+    CONFIRMED2 = "confirmed";
+    UNCHECKED2 = "unchecked";
+    ORDER = {
+      [CONFIRMED2]: 0,
+      [UNCHECKED2]: 1,
+      [INCONSISTENT]: 2
+    };
+    MAX_DEPTH = 64;
+  }
+});
+
+// core/resolve.js
+function found(status, copy = null, version = null, digest = null, copies = [], log = null) {
+  return {
+    status,
+    copy,
+    version,
+    digest,
+    copies,
+    log,
+    ok: status === "verified" || status === "contested"
+  };
+}
+function ipv6Groups(text3) {
+  const halves = text3.split("::");
+  if (halves.length > 2) return null;
+  const groups = (s) => s ? s.split(":").map((g) => parseInt(g, 16)) : [];
+  const head = groups(halves[0]), tail = halves.length === 2 ? groups(halves[1]) : [];
+  if (halves.length === 1 && head.length !== 8) return null;
+  const out = [
+    ...head,
+    ...new Array(8 - head.length - tail.length).fill(0),
+    ...tail
+  ];
+  return out.length === 8 && out.every((g) => Number.isInteger(g) && g >= 0 && g <= 65535) ? out : null;
+}
+function ipv4Kind([a, b]) {
+  if (a === 127) return "a loopback address";
+  if (a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168) return "a private address";
+  if (a === 169 && b === 254) return "a link-local address";
+  if (a === 0) return "an address of this network";
+  return null;
+}
+function localKind(hostname) {
+  const host = String(hostname).toLowerCase().replace(/\.$/, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return "a loopback address";
+  if (host === "local" || host.endsWith(".local")) return "a name of the local network (.local)";
+  if (/^[0-9]+(\.[0-9]+){3}$/.test(host)) return ipv4Kind(host.split(".").map(Number));
+  if (!host.startsWith("[")) return null;
+  const g = ipv6Groups(host.slice(1, -1));
+  if (!g) return null;
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 65535) return ipv4Kind([
+    g[6] >> 8,
+    g[6] & 255
+  ]);
+  if (g.slice(0, 7).every((x) => x === 0)) return g[7] === 1 ? "a loopback address" : g[7] === 0 ? "an address of this network" : null;
+  if ((g[0] & 65024) === 64512) return "a unique local address";
+  if ((g[0] & 65472) === 65152) return "a link-local address";
+  return null;
+}
+var MEMBER_STATUS, Copy, Resolver;
+var init_resolve = __esm({
+  "core/resolve.js"() {
+    init_archive();
+    init_http();
+    init_paths();
+    init_names();
+    init_versions();
+    init_signatures();
+    MEMBER_STATUS = {
+      [SIGNED]: "verified",
+      [VOUCHED]: "verified",
+      [CONTESTED]: "contested",
+      [UNCHECKED]: "unchecked",
+      [UNSIGNED]: "not a version",
+      [INVALID]: "not a version"
+    };
+    Copy = class {
+      constructor(where2, archive, line) {
+        Object.assign(this, {
+          where: where2,
+          archive,
+          line,
+          id: line.id
+        });
+      }
+      get head() {
+        return this.line.versions.length;
+      }
+      get statuses() {
+        return this.line.statuses;
+      }
+      get latestSigned() {
+        return this.line.latest ? versionNumber(this.line.latest) : 0;
+      }
+      digest(n) {
+        return n > 0 && n <= this.line.versions.length ? this.line.versions[n - 1].digest : null;
+      }
+      status(n) {
+        return n > 0 && n <= this.statuses.length ? this.statuses[n - 1] : null;
+      }
+      find(digest) {
+        const k = this.line.versions.findIndex((v) => v.digest === digest);
+        return k < 0 ? null : k + 1;
+      }
+      obj(n) {
+        return this.line.versions[n - 1]?.obj ?? null;
+      }
+      agrees(other) {
+        const k = Math.min(this.latestSigned, other.latestSigned);
+        return k === 0 || this.digest(k) === other.digest(k);
+      }
+    };
+    Resolver = class _Resolver {
+      constructor(http, home = null, { local = false } = {}) {
+        this.http = http;
+        this.home = home;
+        this.local = local;
+        this.archives = /* @__PURE__ */ new Map();
+        this.logs = /* @__PURE__ */ new Map();
+        this.notes = [];
+        if (home) this.archives.set(home.base, Promise.resolve(home));
+      }
+      again() {
+        const fresh = new _Resolver(this.http.another(), null, {
+          local: this.local
+        });
+        if (this.home) fresh.home = this.home;
+        return fresh;
+      }
+      note(level2, message2) {
+        if (!this.notes.some((n) => n.level === level2 && n.message === message2)) this.notes.push({
+          level: level2,
+          message: message2
+        });
+      }
+      source(where2, options = {}) {
+        const base = baseOf(where2);
+        if (!this.archives.has(base)) {
+          const refused = this.refused(base);
+          if (refused) {
+            this.note("warning", `unavailable: ${where2}: ${refused}`);
+            this.archives.set(base, Promise.resolve(null));
+            return this.archives.get(base);
+          }
+          const opening = Archive.open(this.http, base, options).then((archive) => {
+            if (archive.old || archive.disc.specification !== "0.2") {
+              this.note("warning", `unavailable: ${where2}: not an archive of specification 0.2`);
+              return null;
+            }
+            if (archive.pageProblems?.length) {
+              this.note("warning", `unavailable: ${where2}: ${archive.pageProblems[0]}`);
+              return null;
+            }
+            return archive;
+          }, (error) => {
+            if (error?.kind === "aborted") {
+              this.archives.delete(base);
+              throw error;
+            }
+            this.note("warning", `unavailable: ${where2}: ${error.kind === "not-found" ? "no discovery document opensheaf.json" : error.kind === "json" ? "the discovery document is not JSON" : error.detail || error.message}`);
+            return null;
+          });
+          this.archives.set(base, opening);
+        }
+        return this.archives.get(base);
+      }
+      refused(base) {
+        const kind = localKind(new URL(base).hostname);
+        if (!kind || this.local) return null;
+        if (this.home && localKind(new URL(this.home.base).hostname)) return null;
+        return `not fetched: ${new URL(base).hostname} is ${kind}, which the explorer fetches only for an archive that is itself on a local or private host`;
+      }
+      places(where2) {
+        const out = this.home ? [
+          this.home.base
+        ] : [];
+        const given = [];
+        for (const w of where2) {
+          if (typeof w !== "string" || !w) continue;
+          let base;
+          try {
+            base = baseOf(w);
+          } catch {
+            continue;
+          }
+          if (!out.includes(base) && !given.includes(base)) given.push(base);
+        }
+        if (given.length > LIMITS.mirrors) {
+          this.note("warning", `${given.length - LIMITS.mirrors} more location(s) not tried (at most ${LIMITS.mirrors} are tried, section 15.2)`);
+        }
+        return [
+          ...out,
+          ...given.slice(0, LIMITS.mirrors)
+        ];
+      }
+      async archiveOf(url, options = {}) {
+        this.bases ??= /* @__PURE__ */ new Map();
+        if (this.bases.has(url)) return this.bases.get(url);
+        const out = [];
+        this.bases.set(url, out);
+        let u;
+        try {
+          u = new URL(url);
+        } catch {
+          return out;
+        }
+        if (![
+          "https:",
+          "http:"
+        ].includes(u.protocol) || !u.host) return out;
+        const origin = `${u.protocol}//${u.host}`, path = u.pathname, whole = origin + path;
+        const cuts = [];
+        for (let k = path.length - 2; k >= 0; k--) if (path[k] === "/") cuts.push(k + 1);
+        const guess = path.indexOf("/ocfl/");
+        if (guess >= 0) cuts.unshift(guess + 1);
+        for (const k of [
+          ...new Set(cuts)
+        ].slice(0, LIMITS.probes)) {
+          const base = origin + path.slice(0, k);
+          if (this.refused(base)) continue;
+          let archive = this.archives.has(base) ? await this.archives.get(base) : null;
+          if (!archive) {
+            try {
+              archive = await Archive.open(this.http, base, options);
+            } catch (error) {
+              if (error?.kind === "aborted") throw error;
+              continue;
+            }
+            if (archive.old || archive.disc.specification !== "0.2") continue;
+          }
+          const root = archive.disc.storageRoot ?? "ocfl/";
+          if (typeof root !== "string" || root.includes(":") || !root.endsWith("/") || root.slice(0, -1).split("/").some((x) => [
+            "",
+            ".",
+            ".."
+          ].includes(x)) || root.includes("\\")) continue;
+          if (whole.startsWith(archive.root) && whole.length > archive.root.length) {
+            this.archives.set(base, Promise.resolve(archive));
+            out.push(base);
+            break;
+          }
+        }
+        return out;
+      }
+      async keyLog(owner, where2 = [], options = {}) {
+        if (!this.logs.has(owner)) this.logs.set(owner, {
+          log: null,
+          met: /* @__PURE__ */ new Set(),
+          found: []
+        });
+        const entry = this.logs.get(owner);
+        for (const w of this.places(where2)) {
+          if (entry.met.has(w)) continue;
+          entry.met.add(w);
+          const archive = await this.source(w, options);
+          if (!archive) continue;
+          let log;
+          try {
+            log = await archive.keyLog(owner, options);
+          } catch (error) {
+            if (error?.kind === "aborted") throw error;
+            this.note("warning", `${w}: the key log of ${owner}: ${error.detail || error.message}`);
+            continue;
+          }
+          if (!log || log.owner !== owner) continue;
+          entry.found.push({
+            where: w,
+            log
+          });
+          const before = entry.log;
+          entry.log = before ? await before.meet(log) : log;
+          if (before && before.forkPoint === null && entry.log.forkPoint !== null) {
+            this.note("result", `a fork of the key log of ${owner} at v${entry.log.forkPoint}, met at ${w} (section 6.3)`);
+          }
+        }
+        return entry.log;
+      }
+      ownerNotes(owner) {
+        const log = this.logs.get(owner)?.log;
+        if (!log) return [];
+        const out = [];
+        if (log.forkPoint) out.push(`owner ${owner} ended by a fork of its key log at v${log.forkPoint}`);
+        else if (log.ended) out.push(`owner ${owner} ended`);
+        if (log.successor) out.push(`owner ${owner}: successor ${log.successor} named by its ending version`);
+        for (const did of [
+          ...log.exposedKeys()
+        ].sort()) out.push(`owner ${owner}: exposed key ${did}`);
+        return out;
+      }
+      async copies(name2, owner, where2 = [], options = {}) {
+        const id = objectId(name2, owner);
+        const held2 = [];
+        for (const w of this.places(where2)) {
+          const archive = await this.source(w, options);
+          if (!archive) continue;
+          if (archive !== this.home && !archive.objects().some((o) => o.id === id)) continue;
+          await this.keyLog(owner, archive === this.home ? [] : [
+            w
+          ], options);
+          held2.push({
+            w,
+            archive
+          });
+        }
+        const log = await this.keyLog(owner, [], options);
+        const out = [];
+        for (const { w, archive } of held2) {
+          let line;
+          try {
+            line = await archive.line(id, {
+              log,
+              signal: options.signal
+            });
+          } catch (error) {
+            if (error?.kind === "aborted") throw error;
+            if (error?.kind !== "not-found") this.note("warning", `${w}: ${id}: ${error.detail || error.message}`);
+            continue;
+          }
+          const problem = await this.identityProblem(archive, id, line, options);
+          if (problem) {
+            this.note("warning", `${w}: ${id}: not a copy of the line: ${problem}`);
+            continue;
+          }
+          if (archive !== this.home) {
+            for (const v of line.versions) {
+              if (!v.digest) continue;
+              const sc = await archive.sidecar(id, v.ver, options).catch((error) => {
+                if (error?.kind === "aborted") throw error;
+                return "";
+              });
+              if (sc !== v.digest) {
+                this.note("warning", `${w}: ${id} ${v.ver}: the checksum file of its inventory is missing, or does not state its digest (section 12.3)`);
+              }
+            }
+          }
+          out.push(new Copy(w, archive, line));
+        }
+        if (out.length && await this.tombstoned(id, where2, options)) {
+          this.note("result", `${id}: taken down in an archive read, and found elsewhere (section 12.3)`);
+        }
+        return out;
+      }
+      async identityProblem(archive, id, line, options) {
+        if (line.inv.id !== id) return "its inventory names another object";
+        if (line.inventoriesProblem) return line.inventoriesProblem;
+        const [, name2, owner] = id.split(":");
+        let genesis = null;
+        try {
+          genesis = await archive.bytes(id, line.inv, "v1", "genesis.json", options);
+        } catch (error) {
+          if (error?.kind === "aborted") throw error;
+        }
+        if (!genesis || !await isNameOf(name2, genesis)) return "the name is not a name of its genesis record (section 5.2)";
+        for (const v of line.versions) {
+          if (v.obj?.name !== name2 || v.obj?.owner !== owner) return `${v.ver}: object.json does not record the line`;
+        }
+        return null;
+      }
+      async tombstoned(id, where2 = [], options = {}) {
+        for (const w of this.places(where2)) {
+          const archive = await this.source(w, options);
+          if (archive?.tombstones().some((t) => t.id === id)) return true;
+        }
+        return false;
+      }
+      async pin(name2, owner, version, digest, where2 = [], options = {}) {
+        if (!([
+          name2,
+          owner
+        ].every((x) => typeof x === "string" && NAME.test(x)) && typeof version === "string" && /^v[1-9][0-9]*$/.test(version) && typeof digest === "string" && /^[0-9a-f]{128}$/.test(digest))) {
+          const repr = (x) => typeof x === "string" ? `'${x}'` : "None";
+          this.note("warning", `sheaf:${name2}:${owner}: the pin ${repr(version)} sha512=${repr(digest)} is not a line, an object version and a digest (section 8.5)`);
+          return found("not a version", null, typeof version === "string" ? version : null, digest, []);
+        }
+        this.pinned = (this.pinned ?? 0) + 1;
+        if (this.pinned > LIMITS.pins) {
+          this.note("warning", `at most ${LIMITS.pins} pins are resolved in one run (section 15.2): the others are not`);
+          return found("unavailable", null, version, digest, []);
+        }
+        if (name2 === owner) {
+          const log = await this.keyLog(owner, where2, options);
+          const v = log && isVersion(version) ? log.lookup(versionNumber(version), digest) : null;
+          if (v && log.verified(versionNumber(version), digest)) return found("verified", null, version, digest, [], log);
+          return found(!log ? "unavailable" : v ? "not a version" : "mismatch", null, version, digest, [], log);
+        }
+        const copies = await this.copies(name2, owner, where2, options);
+        const n = isVersion(version) ? versionNumber(version) : 0;
+        for (const c of copies) {
+          const d = n ? c.digest(n) : null;
+          if (d && d !== digest) this.note("warning", `${c.where}: ${objectId(name2, owner)} ${version} does not match the pin (section 12.3)`);
+        }
+        for (const c of copies) {
+          if (n && c.digest(n) === digest) return found(MEMBER_STATUS[c.status(n)] || "not a version", c, version, digest, copies);
+        }
+        if (copies.length) return found("mismatch", null, version, digest, copies);
+        return found(await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable", null, version, digest, copies);
+      }
+      async latest(name2, owner, where2 = [], options = {}) {
+        const copies = await this.copies(name2, owner, where2, options);
+        const signed = copies.filter((c) => c.latestSigned).sort((a, b) => b.latestSigned - a.latestSigned);
+        if (!signed.length) {
+          const status = copies.length ? "not a version" : await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable";
+          return found(status, null, null, null, copies);
+        }
+        const top = signed[0];
+        const forks = signed.filter((c) => !top.agrees(c));
+        for (const c of forks) {
+          this.note("result", `a fork of the line ${top.id}: the copy at ${c.where} (latest signed v${c.latestSigned}) does not agree with the copy at ${top.where} (latest signed v${top.latestSigned}) (section 7.4)`);
+        }
+        if (forks.length) return found("fork", null, null, null, copies);
+        return found("verified", top, `v${top.latestSigned}`, top.digest(top.latestSigned), copies);
+      }
+      async documentVersion(name2, owner, n, where2 = [], options = {}) {
+        const latest = await this.latest(name2, owner, where2, options);
+        if (!latest.copy) return latest;
+        const c = latest.copy;
+        const objOf2 = (v) => c.line.objs.get(v) ?? null;
+        for (const h of historyOf(c.line.inv, objOf2, latest.version)) {
+          if (objOf2(h)?.documentVersion === n) {
+            const k = versionNumber(h);
+            return found(MEMBER_STATUS[c.status(k)] || "not a version", c, h, c.digest(k), latest.copies);
+          }
+        }
+        this.note("warning", `${c.id}: no document version ${n} in the history of ${latest.version}`);
+        return found("unavailable", null, null, null, latest.copies);
+      }
+      async resolve(text3, where2 = [], options = {}) {
+        const u = parseSheaf(text3, {
+          short: true,
+          fold: true
+        });
+        where2 = [
+          ...u.at ? [
+            u.at
+          ] : [],
+          ...where2
+        ];
+        if (u.owner === "*") throw new Error("a work, sheaf:<name>:*, is searched for (section 12.4), which the explorer does not do");
+        const [name2, owner] = await this.expand(u, where2, options);
+        if (name2 === owner) {
+          const id2 = objectId(owner, owner);
+          const log = await this.keyLog(owner, where2, options);
+          if (!log) return {
+            id: id2,
+            found: found("unavailable")
+          };
+          const side = log.side();
+          if (u.version === null) {
+            const v = side[side.length - 1];
+            return {
+              id: id2,
+              found: found("verified", null, `v${v.number}`, v.digest, [], log)
+            };
+          }
+          if (u.sha512 === null) {
+            if (u.version > side.length) return {
+              id: id2,
+              found: found("unavailable", null, null, null, [], log)
+            };
+            return {
+              id: id2,
+              found: found("verified", null, `v${u.version}`, side[u.version - 1].digest, [], log)
+            };
+          }
+          return {
+            id: id2,
+            found: await this.pin(owner, owner, `v${u.version}`, u.sha512, where2, options)
+          };
+        }
+        const id = objectId(name2, owner);
+        if (u.version === null) return {
+          id,
+          found: await this.latest(name2, owner, where2, options)
+        };
+        if (u.sha512 === null) return {
+          id,
+          found: await this.documentVersion(name2, owner, u.version, where2, options)
+        };
+        const copies = await this.copies(name2, owner, where2, options);
+        for (const c of copies) {
+          const k = c.find(u.sha512);
+          if (k === null) continue;
+          const held2 = c.obj(k)?.documentVersion;
+          if (held2 !== u.version) {
+            this.note("warning", `${id}: the version pinned holds document version ${held2}, not ${u.version}`);
+            return {
+              id,
+              found: found("mismatch", c, `v${k}`, u.sha512)
+            };
+          }
+          return {
+            id,
+            found: found(MEMBER_STATUS[c.status(k)] || "not a version", c, `v${k}`, u.sha512)
+          };
+        }
+        const status = copies.length ? "mismatch" : await this.tombstoned(id, where2, options) ? "removed" : "unavailable";
+        return {
+          id,
+          found: found(status, null, null, u.sha512, copies)
+        };
+      }
+      async expand(u, where2, options = {}) {
+        if (u.isComplete() && u.owner !== null) return [
+          u.name,
+          u.owner
+        ];
+        const candidates = /* @__PURE__ */ new Set();
+        for (const w of this.places(where2)) {
+          const archive = await this.source(w, options);
+          if (!archive) continue;
+          for (const o of archive.objects()) {
+            const name2 = typeof o.name === "string" ? o.name : "", owner = typeof o.owner === "string" ? o.owner : "";
+            if (!u.matches(name2, owner)) continue;
+            if (u.owner === null) {
+              if (o.kind === "owner" ? name2 !== owner : await this.originator(archive, o.id, options) !== owner) continue;
+            }
+            candidates.add(`${name2} ${owner}`);
+          }
+        }
+        if (candidates.size !== 1) {
+          const listed = [
+            ...candidates
+          ].sort().map((c) => `  sheaf:${c.replace(" ", ":")}`).join("\n");
+          throw new Error(`${u}: ` + (candidates.size ? "ambiguous, the candidates are:\n" + listed : "no line of that name in the archives read"));
+        }
+        return [
+          ...candidates
+        ][0].split(" ");
+      }
+      async originator(archive, id, options = {}) {
+        try {
+          const inv = await archive.headInventory(id, options);
+          const genesis = await archive.bytes(id, inv, "v1", "genesis.json", options);
+          return genesis ? (await readGenesis(genesis)).originator ?? null : null;
+        } catch (error) {
+          if (error?.kind === "aborted") throw error;
+          return null;
+        }
+      }
+      async describe(result, { presentCurrent = false } = {}, options = {}) {
+        const c = result.copy;
+        if (!c) return null;
+        const objOf2 = (v) => c.line.objs.get(v) ?? null;
+        const shown = presentCurrent ? historyOf(c.line.inv, objOf2, result.version).slice(-1)[0] || result.version : result.version;
+        const { obj, dc } = await c.archive.descriptions(c.id, c.line.inv, shown, options);
+        const latest = c.line.latest ? objOf2(c.line.latest) : null;
+        return {
+          version: shown,
+          title: titleOf(dc),
+          creators: creatorsOf(dc),
+          documentVersion: obj?.documentVersion ?? null,
+          status: latest?.status ?? null,
+          withdrawal: latest?.withdrawal ?? null,
+          archive: c.archive
+        };
+      }
+    };
+  }
+});
+
+// core/verify.js
+async function verify(given, { schemas: schemas2, remote = true, digests = false, signal, progress = () => {
+}, onFinding, pages = true } = {}) {
+  const report = new Report(given, {
+    remote,
+    digests
+  });
+  if (onFinding) report.listeners.add(onFinding);
+  const http = given.http.another({
+    budget: null
+  });
+  const options = {
+    signal
+  };
+  const aborted = (e) => e?.kind === "aborted" || signal?.aborted;
+  const add2 = (level2, place3, message2, context) => report.add(finding(level2, place3, message2, context));
+  const schema4 = (place3, data2, format, level2 = "error", context = {}) => report.add(...schemaFindings(place3, data2, schemas2[`opensheaf-${format}/0.2`], level2, context));
+  let archive;
+  try {
+    archive = await Archive.open(http, given.base, options);
+    archive.lister = given.lister ?? null;
+    archive.unlisted = given.unlisted ?? [];
+    report.archive = archive;
+    if (archive.old) {
+      add2("error", "archive", "specification 0.1: rebuild (section 16.1)");
+    } else {
+      const v = new Verification(archive, {
+        report,
+        add: add2,
+        schema: schema4,
+        options,
+        aborted,
+        remote,
+        digests,
+        progress,
+        http,
+        pages
+      });
+      await v.run();
+    }
+  } catch (error) {
+    if (!aborted(error)) throw error;
+    report.cancelled = true;
+  }
+  report.finished = /* @__PURE__ */ new Date();
+  report.requests = http.requests;
+  report.bytesRead = http.bytesRead;
+  return report;
+}
+function reservedNameErrors(obj, logical) {
+  const out = [];
+  for (const p of [
+    ...logical
+  ].sort()) {
+    const top = p.split("/")[0];
+    if (!RESERVED2.includes(top)) continue;
+    if (p === top && [
+      "object.json",
+      "datacite.json",
+      "genesis.json"
+    ].includes(top)) continue;
+    if (p === top && top === "members.json" && obj?.kind === "collection") continue;
+    if (top === "parent" && p !== top && isObject(obj) && "parent" in obj) continue;
+    out.push(`${p}: the name ${top} is reserved for the file section 4.1 defines`);
+  }
+  return out;
+}
+function isEvidencePath(p) {
+  return p.startsWith("parent/");
+}
+function sameBytes2(x, y) {
+  if (x.length !== y.length) return false;
+  for (let k = 0; k < x.length; k++) if (x[k] !== y[k]) return false;
+  return true;
+}
+function py(value) {
+  return value === null || value === void 0 ? "None" : String(value);
+}
+var Report, Verification, RESERVED2;
+var init_verify = __esm({
+  "core/verify.js"() {
+    init_http();
+    init_archive();
+    init_versions();
+    init_paths();
+    init_rules();
+    init_names();
+    init_owners();
+    init_signatures();
+    init_branches();
+    init_resolve();
+    init_schema();
+    Report = class {
+      constructor(archive, options) {
+        this.archive = archive;
+        this.options = options;
+        this.findings = [];
+        this.stats = {
+          objects: 0,
+          versions: 0,
+          pins: 0,
+          files: 0,
+          filesBytes: 0
+        };
+        this.started = /* @__PURE__ */ new Date();
+        this.finished = null;
+        this.cancelled = false;
+        this.requests = 0;
+        this.bytesRead = 0;
+        this.listeners = /* @__PURE__ */ new Set();
+      }
+      add(...found2) {
+        for (const f of found2) {
+          this.findings.push(f);
+          for (const listen of this.listeners) listen(f);
+        }
+      }
+      counts() {
+        const counts = {
+          error: 0,
+          warning: 0,
+          result: 0
+        };
+        for (const f of this.findings) counts[f.level]++;
+        return counts;
+      }
+      text() {
+        const lines2 = this.findings.map((f) => `${f.level}: ${f.text}`);
+        const c = this.counts();
+        return [
+          ...lines2,
+          (c.error ? `${c.error} error(s)` : "OK") + `, ${c.warning} warning(s), ${c.result} result(s)`
+        ].join("\n");
+      }
+    };
+    Verification = class {
+      constructor(archive, context) {
+        Object.assign(this, context);
+        this.archive = archive;
+        this.found = /* @__PURE__ */ new Map();
+        this.logs = /* @__PURE__ */ new Map();
+        this.statuses = /* @__PURE__ */ new Map();
+        this.tombstoned = new Set(archive.tombstones().map((t) => t.id));
+        this.resolver = context.remote ? new Resolver(context.http, archive) : null;
+      }
+      where(id) {
+        return this.archive.where(id);
+      }
+      async run() {
+        const a = this.archive;
+        this.schema("opensheaf.json", a.disc, "archive");
+        for (const problem of a.pageProblems || []) this.add("error", "opensheaf.json", problem);
+        for (const { path, page } of a.pages || []) this.schema(path, page, "objects");
+        await this.storageRoot();
+        const ids = [
+          ...a.objects().map((o) => o.id),
+          ...a.drafts().map((d) => d.id),
+          ...a.unlisted || []
+        ];
+        const entries = [
+          ...new Set(ids)
+        ].slice(0, LIMITS.objects);
+        if (ids.length > entries.length) this.add("warning", "opensheaf.json", `lists more than ${LIMITS.objects} objects: only the first ${LIMITS.objects} are checked (section 15.2)`);
+        let done = 0;
+        const atOnce = pool(4);
+        this.progress({
+          phase: "objects",
+          done,
+          total: entries.length
+        });
+        await Promise.all(entries.map((id) => atOnce(async () => {
+          if (this.options.signal?.aborted) return;
+          await this.objectStorage(id);
+          this.report.stats.objects++;
+          this.progress({
+            phase: "objects",
+            done: ++done,
+            total: entries.length,
+            current: id
+          });
+        })));
+        this.cancelled();
+        await this.keyLogs();
+        await this.lines();
+        await this.archiveAsAWhole();
+        await this.indexes();
+        if (this.pages) await this.presentation();
+        if (this.digests) await this.contentDigests();
+        for (const { level: level2, message: message2 } of this.resolver?.notes || []) this.add(level2, "resolution", message2);
+      }
+      cancelled() {
+        if (this.options.signal?.aborted) throw this.options.signal.reason;
+      }
+      async fetchOrNull(url, limit = LIMITS.json) {
+        try {
+          return await this.http.request(url, {
+            limit,
+            signal: this.options.signal
+          });
+        } catch (error) {
+          if (this.aborted(error)) throw error;
+          if (error.kind === "not-found") return null;
+          throw error;
+        }
+      }
+      async storageRoot() {
+        const a = this.archive;
+        const root = a.root;
+        const read = async (name2) => {
+          try {
+            return await this.fetchOrNull(root + name2, 1 << 20);
+          } catch (error) {
+            if (this.aborted(error)) throw error;
+            return null;
+          }
+        };
+        if (await read("0=ocfl_1.1") === null) this.add("error", "ocfl", "no OCFL 1.1 storage root (0=ocfl_1.1)");
+        const declared = a.disc.storageLayout;
+        if (declared !== OWNER_NAME_LAYOUT && declared !== HASHED_LAYOUT) {
+          this.add("error", "opensheaf.json", `storageLayout is ${declared}, not a layout of section 3.2`);
+        }
+        if (a.layout === OWNER_NAME_LAYOUT) {
+          if (await read("ocfl_layout.json") !== null) {
+            this.add("error", "ocfl", "ocfl_layout.json names only registered layouts: the owner-name layout has none (section 3.2)");
+          }
+          if (await read(LAYOUT_FILE) === null) this.add("warning", "ocfl", `${LAYOUT_FILE}, which describes the layout, is missing (section 3.2)`);
+        } else {
+          const layout = jsonOrNull(await read("ocfl_layout.json"));
+          if (layout?.extension !== HASHED_LAYOUT) this.add("error", "ocfl", `ocfl_layout.json must name the extension ${HASHED_LAYOUT} (section 3.2)`);
+          const raw = await read(`extensions/${HASHED_LAYOUT}/config.json`);
+          const config = raw === null ? {} : jsonOrNull(raw);
+          if (!isObject(config)) {
+            this.add("error", "ocfl", `extensions/${HASHED_LAYOUT}/config.json is not a JSON object`);
+          } else if ((config.digestAlgorithm ?? "sha256") !== "sha256" || (config.tupleSize ?? 3) !== 3 || (config.numberOfTuples ?? 3) !== 3) {
+            this.add("error", "ocfl", "the hashed layout keeps its default parameters (section 3.2)");
+          }
+        }
+      }
+      async objectStorage(id) {
+        const a = this.archive;
+        const place3 = this.where(id);
+        const options = this.options;
+        const listed = (message2) => this.add("error", "opensheaf.json", message2, {
+          object: id
+        });
+        let rootBytes;
+        try {
+          await a.locate(id);
+          if (await this.fetchOrNull(a.url(id, "0=ocfl_object_1.1"), 4096) === null) {
+            listed(`lists ${id}, which is not an object of the storage root (section 3.1)`);
+            return;
+          }
+          rootBytes = await a.inventoryBytes(id, null, options);
+        } catch (error) {
+          if (this.aborted(error)) throw error;
+          if (error.kind === "not-found") listed(`lists ${id}, which is not an object of the storage root (section 3.1)`);
+          else this.add("error", `ocfl/${(a.paths.get(id) || [
+            id
+          ]).join("/")}`, "an object without a readable inventory", {
+            object: id
+          });
+          return;
+        }
+        const inv = jsonOrNull(rootBytes);
+        if (!isObject(inv) || !isObject(inv.versions) || !isObject(inv.manifest)) {
+          this.add("error", `ocfl/${a.paths.get(id).join("/")}`, "an object without a readable inventory", {
+            object: id
+          });
+          return;
+        }
+        if (inv.id !== id) {
+          const expected = parseId(inv.id) ? (await a.locate(inv.id).catch((e) => {
+            if (this.aborted(e)) throw e;
+            return null;
+          }))?.join("/") : null;
+          this.add("error", this.where(inv.id), expected ? `is at ocfl/${a.paths.get(id).join("/")}, and its identifier puts it at ocfl/${expected} (section 3.2)` : `${inv.id}: not the identifier of a line or of a draft (sections 3.2 and 4)`, {
+            object: id
+          });
+          listed(`lists ${id}, which is not an object of the storage root (section 3.1)`);
+          return;
+        }
+        const kindOfHead = await a.json(id, inv, inv.head, "object.json", options).catch((e) => {
+          if (this.aborted(e)) throw e;
+          return null;
+        });
+        const kind = kindOfHead?.kind;
+        const draft = Boolean(parseId(id).draft);
+        const o = {
+          id,
+          inv,
+          rootBytes,
+          head: kindOfHead,
+          objs: /* @__PURE__ */ new Map(),
+          digests: [],
+          sidecars: [],
+          kind,
+          draft
+        };
+        this.found.set(id, o);
+        const at = (ver) => ({
+          object: id,
+          ver
+        });
+        if (inv.digestAlgorithm !== "sha512") this.add("error", place3, "the digest algorithm is not sha512 (section 4.1)", at());
+        const stated = [
+          ...Object.keys(inv.manifest),
+          ...Object.values(inv.versions).flatMap((v) => Object.keys(isObject(v?.state) ? v.state : {})),
+          ...Object.values(isObject(inv.fixity) ? inv.fixity : {}).flatMap((alg) => Object.keys(isObject(alg) ? alg : {}))
+        ];
+        if (stated.some((x) => x !== x.toLowerCase())) this.add("error", place3, "the inventory has digests not in lower case (section 4.1)", at());
+        const upper = (bytes, file) => {
+          const word = sidecarDigest(bytes);
+          if (word && word !== word.toLowerCase()) this.add("error", place3, `${file} states its digest not in lower case (section 4.1)`, at());
+        };
+        const rootDigest = await sha512(rootBytes);
+        const sc = await a.sidecarBytes(id, null, options).catch((e) => {
+          if (this.aborted(e)) throw e;
+          return null;
+        });
+        upper(sc, "inventory.json.sha512");
+        if (!sc || sidecarDigest(sc) !== rootDigest) this.add("error", place3, "the checksum file of the inventory does not state its digest", at());
+        o.sidecar = sc ? sidecarDigest(sc) : null;
+        const head = typeof inv.head === "string" ? inv.head : "";
+        const headCopy = /^v[0-9]+$/.test(head) ? await this.fetchOrNull(a.inventoryUrl(id, head)).catch((e) => {
+          if (this.aborted(e)) throw e;
+          return null;
+        }) : null;
+        if (!headCopy || await sha512(headCopy) !== rootDigest) this.add("error", place3, `the inventory of ${head} is not the root inventory`, at());
+        const names = Object.keys(inv.versions).sort((x, y) => (Number(x.slice(1)) || 0) - (Number(y.slice(1)) || 0));
+        for (const [k, ver] of names.entries()) {
+          const n = k + 1;
+          const where2 = `${place3} ${ver}`;
+          this.report.stats.versions++;
+          if (ver !== `v${n}`) {
+            this.add("error", where2, "versions are numbered v1, v2, ... without zero padding (section 4.1)", at(ver));
+            continue;
+          }
+          const copy = await this.fetchOrNull(a.inventoryUrl(id, ver)).catch((e) => {
+            if (this.aborted(e)) throw e;
+            return null;
+          });
+          const copySc = await a.sidecarBytes(id, ver, this.options).catch((e) => {
+            if (this.aborted(e)) throw e;
+            return null;
+          });
+          o.digests[k] = copy ? await sha512(copy) : "";
+          o.sidecars[k] = copySc ? sidecarDigest(copySc) : null;
+          upper(copySc, `${ver}/inventory.json.sha512`);
+          if (!copy || !copySc) {
+            this.add("error", where2, "no copy of the inventory with its checksum file in the version folder (section 4.1)", at(ver));
+          } else {
+            if (sidecarDigest(copySc) !== o.digests[k]) this.add("error", where2, "the checksum file of the inventory copy does not state its digest", at(ver));
+            const c = jsonOrNull(copy) || {};
+            const upto = names.slice(0, n);
+            if (c.head !== ver) this.add("error", where2, `the inventory copy has the head ${c.head ?? "None"}`, at(ver));
+            const theirs = isObject(c.versions) ? Object.keys(c.versions).sort() : [];
+            if (!same(theirs, [
+              ...upto
+            ].sort())) {
+              this.add("error", where2, `the inventory copy does not record exactly the versions v1 to ${ver}`, at(ver));
+            } else if (upto.some((v) => !same(c.versions[v], inv.versions[v]))) {
+              this.add("error", where2, "the inventory copy disagrees with the inventory about the versions it records", at(ver));
+            }
+          }
+          const vinfo = isObject(inv.versions[ver]) ? inv.versions[ver] : {};
+          if (!(kind === "owner" && n === 1) && (!vinfo.user?.name || !vinfo.message)) {
+            this.add("error", where2, "a version has a user with a name, and a message (section 4.1)", at(ver));
+          }
+          const logical = Object.keys(filesOf(inv, ver));
+          for (const p of [
+            ...logical
+          ].sort()) {
+            if (logicalPathProblem(p)) this.add("error", where2, `the logical path '${p}' breaks the rules of section 4.1`, at(ver));
+          }
+          const needed = [
+            "object.json",
+            ...kind !== "owner" ? [
+              "datacite.json"
+            ] : [],
+            ...draft ? [] : [
+              "genesis.json"
+            ]
+          ];
+          for (const name2 of needed) if (!logical.includes(name2)) this.add("error", where2, `has no ${name2} (section 4.1)`, at(ver));
+          if (!logical.includes("object.json")) continue;
+          let obj = null;
+          try {
+            obj = await a.json(id, inv, ver, "object.json", this.options);
+          } catch (error) {
+            if (this.aborted(error)) throw error;
+            this.add("error", where2, `object.json cannot be read: ${error.detail || error.message}`, at(ver));
+          }
+          o.objs.set(ver, obj);
+          if (!obj || kind === "owner") continue;
+          this.schema(`${where2}/object.json`, obj, "object", "error", at(ver));
+          for (const message2 of reservedNameErrors(obj, logical)) this.add("error", where2, message2, at(ver));
+          if (n === 1 || draft) {
+            if (isObject(obj) && "previous" in obj) this.add("error", where2, "a first version, or a draft, has no previous (section 4.3)", at(ver));
+          } else if (!isObject(obj) || !("previous" in obj)) {
+            this.add("error", where2, "object.json has no previous (section 4.3)", at(ver));
+          } else if (obj.previous !== o.sidecars[k - 1]) {
+            this.add("error", where2, `previous is not the digest of the inventory of v${n - 1} (section 4.3)`, at(ver));
+          }
+        }
+      }
+      async keyLogs() {
+        for (const [id, o] of this.found) {
+          if (o.kind !== "owner") continue;
+          const place3 = this.where(id);
+          const owner = parseId(id).owner;
+          let log;
+          try {
+            log = await this.archive.keyLog(owner, this.options);
+          } catch (error) {
+            if (this.aborted(error)) throw error;
+            this.add("error", place3, error.detail || error.message, {
+              object: id
+            });
+            continue;
+          }
+          if (!log) continue;
+          const { errors, warnings } = await log.check();
+          for (const e of errors) this.add("error", place3, e, {
+            object: id
+          });
+          for (const w of warnings) this.add("warning", place3, w, {
+            object: id
+          });
+          const genesis = jsonOrNull(log.genesis);
+          if (genesis) this.schema(`${place3} v1/genesis.json`, genesis, "genesis", "error", {
+            object: id,
+            ver: "v1"
+          });
+          for (const v of log.versions) {
+            if (v.keys !== null) this.schema(`${place3} v${v.number}/keys.json`, v.keys, "keys", "error", {
+              object: id,
+              ver: `v${v.number}`
+            });
+          }
+          this.logs.set(log.owner, log);
+          const held2 = log.versions.filter((v) => v.isVersion);
+          if (held2.length) this.add("result", place3, `key log of ${log.owner}: latest version v${held2[held2.length - 1].number}`, {
+            object: id
+          });
+          for (const did of [
+            ...log.exposedKeys()
+          ].sort()) this.add("result", place3, `exposed key ${did}`, {
+            object: id
+          });
+          if (log.forkPoint) this.add("result", place3, `ended by a fork of its key log at v${log.forkPoint} (section 6.3)`, {
+            object: id
+          });
+          else if (log.ended) {
+            this.add("result", place3, "ended (section 6.3)" + (log.successor ? `, successor ${log.successor} (named by the ending version)` : ""), {
+              object: id
+            });
+          }
+        }
+      }
+      async lines() {
+        const genesisNames = /* @__PURE__ */ new Map();
+        for (const [id, o] of this.found) {
+          this.cancelled();
+          const head = o.objs.get(o.inv.head) || {};
+          if (o.kind === "owner") continue;
+          const place3 = this.where(id);
+          const a = this.archive;
+          if (o.draft) {
+            const g = await a.bytes(id, o.inv, o.inv.head, "genesis.json", this.options).catch((e) => {
+              if (this.aborted(e)) throw e;
+              return null;
+            });
+            if ([
+              "name",
+              "owner",
+              "parent"
+            ].some((k) => isObject(head) && k in head) || g) {
+              this.add("error", place3, "a draft has no genesis record, and no name, owner or parent (section 10.1)", {
+                object: id
+              });
+            }
+            continue;
+          }
+          const [, name2, owner] = id.split(":");
+          let genesis = null;
+          for (const ver of versionsOf(o.inv)) {
+            const g = await a.bytes(id, o.inv, ver, "genesis.json", this.options).catch((e) => {
+              if (this.aborted(e)) throw e;
+              return null;
+            });
+            const obj = o.objs.get(ver) || {};
+            if (obj.name !== name2 || obj.owner !== owner) {
+              this.add("error", `${place3} ${ver}`, "object.json does not record the line of the identifier (section 4.3)", {
+                object: id,
+                ver
+              });
+            }
+            if (!g) continue;
+            if (genesis === null) genesis = g;
+            else if (!sameBytes2(g, genesis)) this.add("error", `${place3} ${ver}`, "genesis.json differs from that of v1 (section 5.1)", {
+              object: id,
+              ver
+            });
+          }
+          o.genesis = genesis;
+          let rec = null;
+          if (genesis !== null) {
+            try {
+              rec = await readGenesis(genesis);
+              this.schema(`${place3} genesis.json`, parseJson(genesis, "", {
+                integers: true
+              }), "genesis", "error", {
+                object: id
+              });
+            } catch (error) {
+              this.add("error", place3, `genesis.json: ${error.message}`, {
+                object: id
+              });
+            }
+          }
+          o.rec = rec;
+          if (rec !== null) {
+            const g0 = await nameOf(genesis);
+            if (!genesisNames.has(g0)) genesisNames.set(g0, []);
+            genesisNames.get(g0).push([
+              id,
+              isObject(head) && "parent" in head
+            ]);
+            if (rec.kind !== head.kind) {
+              this.add("error", place3, `its genesis record is of kind ${rec.kind}, its object.json of kind ${head.kind}`, {
+                object: id
+              });
+            }
+            if (!await isNameOf(name2, genesis)) {
+              this.add("error", place3, "its name is not a name of its genesis record (section 5.2)", {
+                object: id
+              });
+            } else if (rec.originator !== owner) {
+              if (isObject(head) && "parent" in head) await this.branch(id, o, genesis);
+              else this.add("error", place3, "a line of another owner than the originator is a branch, and declares its parent (section 5.3)", {
+                object: id
+              });
+            } else if (algorithm(name2) !== 0) {
+              this.add("error", place3, "the originator's line is named by algorithm 0 (section 5.3)", {
+                object: id
+              });
+            } else if ([
+              ...o.objs.values()
+            ].some((x) => isObject(x) && "parent" in x)) {
+              this.add("error", place3, "the originator's line has no parent: an originator never owns a branch of its own work (sections 5.3 and 9)", {
+                object: id
+              });
+            }
+          }
+          for (const ver of versionsOf(o.inv)) {
+            const obj = o.objs.get(ver);
+            if (!obj || !filesOf(o.inv, ver)["datacite.json"]) continue;
+            const dc = await a.json(id, o.inv, ver, "datacite.json", this.options).catch((e) => {
+              if (this.aborted(e)) throw e;
+              return null;
+            });
+            for (const message2 of descriptionErrors(o.inv, ver, obj, dc)) this.add("error", `${place3} ${ver}`, message2, {
+              object: id,
+              ver
+            });
+          }
+          if (head.kind === "document" || head.kind === "collection") {
+            for (const e of documentVersionErrors(o.inv, (v) => o.objs.get(v) ?? null)) this.add("error", place3, `${e.ver} ${e.message}`, {
+              object: id,
+              ver: e.ver
+            });
+            for (const e of noticeWarnings(o.inv, (v) => o.objs.get(v) ?? null)) this.add("warning", place3, `${e.ver} ${e.message}`, {
+              object: id,
+              ver: e.ver
+            });
+          }
+          let log = this.logs.get(owner) ?? null;
+          if (!log) {
+            const ownerId = objectId(owner, owner);
+            this.add(this.tombstoned.has(ownerId) ? "warning" : "error", place3, `the key log of its owner ${owner} is not in the storage root (section 6.5)`, {
+              object: id
+            });
+          }
+          const line = await a.line(id, {
+            log,
+            signal: this.options.signal
+          });
+          o.line = line;
+          this.statuses.set(id, line.statuses);
+          line.statuses.forEach((s, k) => {
+            const ver = `v${k + 1}`, where2 = `${place3} ${ver}`;
+            for (const j of line.judgements[k]) if (j.status !== GOOD) this.add("warning", where2, `${j.file}: ${j.status}: ${j.reason}`, {
+              object: id,
+              ver
+            });
+            for (const n of line.listed?.[k] || []) {
+              if (!(n.startsWith("signature-") && n.endsWith(".json"))) this.add("warning", where2, `${n}: not a witness these tools know (section 7.2)`, {
+                object: id,
+                ver
+              });
+            }
+            if (s === UNSIGNED || s === INVALID) this.add("warning", where2, `not a version of the line: ${s} (sections 7.3 and 7.5)`, {
+              object: id,
+              ver
+            });
+            else if (s === UNCHECKED) this.add("warning", where2, "unchecked: the version of the key log its signatures name is not reached (section 7.3)", {
+              object: id,
+              ver
+            });
+            else if (s === CONTESTED) this.add("result", where2, "contested (section 7.3)", {
+              object: id,
+              ver
+            });
+          });
+          for (const x of await a.listFolder(id, ...WITNESSES.split("/")) || []) {
+            if (!(x.kind === "dir" && Object.hasOwn(o.inv.versions, x.name))) {
+              this.add("warning", place3, `${WITNESSES}/${x.name}: not the folder of a version (section 7.2)`, {
+                object: id
+              });
+            }
+          }
+          const signed = latestSigned(line.statuses);
+          if (signed === null) this.add("warning", place3, "the line has no signed version (section 7.3)", {
+            object: id
+          });
+          else {
+            this.add("result", place3, `latest signed version v${signed}`, {
+              object: id
+            });
+            if (o.objs.get(`v${signed}`)?.status === "withdrawn") this.add("result", place3, "withdrawn (section 13.1)", {
+              object: id
+            });
+            else {
+              const withdrawn = withdrawnVersions(o.inv, (v) => o.objs.get(v) ?? null, `v${signed}`);
+              if (withdrawn.size) this.add("result", place3, `reinstated; withdrawn: document version(s) ${[
+                ...withdrawn.keys()
+              ].sort((x, y) => x - y).join(", ")} (section 13.1)`, {
+                object: id
+              });
+            }
+          }
+        }
+        for (const ids of genesisNames.values()) {
+          const lines2 = ids.filter(([, branch]) => !branch).map(([id]) => id);
+          if (lines2.length > 1) {
+            this.add("error", lines2.map((id) => this.where(id)).join(", "), "objects with the same genesis record: only the originator's line and its branches may share one (section 5.4)");
+          }
+        }
+        for (const [id, o] of this.found) {
+          if (o.kind === "collection" && this.statuses.has(id)) await this.members(id, o);
+        }
+      }
+      async branch(id, o, genesis) {
+        const a = this.archive;
+        const place3 = this.where(id);
+        const [, name2, owner] = id.split(":");
+        let prevObj = null, prevEvidence = null;
+        const verdicts = [];
+        for (const ver of versionsOf(o.inv)) {
+          const where2 = `${place3} ${ver}`;
+          const obj = o.objs.get(ver) || {};
+          const files = filesOf(o.inv, ver);
+          const evidence = Object.fromEntries(Object.entries(files).filter(([p3]) => p3 === "genesis.json" || isEvidencePath(p3)));
+          const p2 = obj.parent;
+          if (!isObject(p2)) {
+            this.add("error", where2, "every version of a branch has parent (section 9.1)", {
+              object: id,
+              ver
+            });
+            continue;
+          }
+          if (prevObj !== null && same(p2, prevObj.parent)) {
+            if (!same(evidence, prevEvidence)) this.add("error", where2, "the identity files change without a new branch point (section 9.4)", {
+              object: id,
+              ver
+            });
+          } else {
+            const [v, problems] = await verdict(levelOfVersion(a, id, o.inv, ver, this.options), obj, genesis, async (who) => this.logs.get(who) ?? null);
+            verdicts.push(v);
+            if (v === INCONSISTENT) this.add("error", where2, "inconsistent branch point: " + problems.join("; "), {
+              object: id,
+              ver
+            });
+            else if (v === UNCHECKED2) this.add("warning", where2, "unchecked branch point: " + problems.join("; "), {
+              object: id,
+              ver
+            });
+            if (prevObj !== null && v !== INCONSISTENT) await this.movedBranchPoint(id, o, ver, p2, prevObj.parent, where2);
+          }
+          prevObj = obj;
+          prevEvidence = evidence;
+        }
+        if (!verdicts.length) return;
+        const worst = verdicts.reduce((x, y) => ORDER[y] > ORDER[x] ? y : x);
+        const p = prevObj.parent;
+        const pid = objectId(p.name, p.owner);
+        this.add("result", place3, `a branch of ${this.where(pid)}: ${worst} (section 9.3)`, {
+          object: id
+        });
+        if (this.found.has(pid)) {
+          const line = await a.line(pid, {
+            log: this.logs.get(p.owner) ?? null,
+            signal: this.options.signal
+          });
+          const status = line.latest ? line.objs.get(line.latest)?.status : null;
+          this.add("result", place3, "the parent's line is held here" + (status === "withdrawn" ? ", withdrawn" : ""), {
+            object: id
+          });
+        } else if (this.tombstoned.has(pid)) {
+          this.add("result", place3, "the parent's line is removed: a tombstone in this archive (section 13.3)", {
+            object: id
+          });
+        } else if (this.resolver) {
+          const at = typeof p.url === "string" ? await this.resolver.archiveOf(p.url, this.options) : [];
+          const res = await this.resolver.latest(p.name, p.owner, at, this.options);
+          this.add("result", place3, `the parent's line: ${res.status}` + (res.copy ? ` at ${res.copy.where}` : ""), {
+            object: id
+          });
+        } else {
+          this.add("result", place3, "the parent's line is not held here (osheaf verify --remote looks for it)", {
+            object: id
+          });
+        }
+        if (name2 !== p.name && algorithm(name2) > algorithm(p.name)) {
+          const gone = new Set(a.tombstones().filter((t) => t.owner === owner).map((t) => t.name));
+          for (let k = algorithm(p.name); k < algorithm(name2); k++) {
+            const other = await nameOf(genesis, k);
+            if (!this.found.has(objectId(other, owner)) && !gone.has(other)) {
+              this.add("warning", place3, `renamed by algorithm ${algorithm(name2)}, though algorithm ${k} gives a line free here (section 5.3)`, {
+                object: id
+              });
+              break;
+            }
+          }
+        }
+        if (owner === o.rec?.originator) this.add("error", place3, "an originator never owns a branch of its own work (section 5.3)", {
+          object: id
+        });
+      }
+      async movedBranchPoint(id, o, ver, p, old, where2) {
+        const a = this.archive;
+        const before = `v${versionNumber(ver) - 1}`;
+        const read = async (v) => jsonOrNull(await a.bytes(id, o.inv, v, "parent/inventory.json", this.options).catch((e) => {
+          if (this.aborted(e)) throw e;
+          return null;
+        })) || {};
+        const [oldInv, newInv] = [
+          await read(before),
+          await read(ver)
+        ];
+        if (p.owner !== old.owner || p.name !== old.name) {
+          this.add("error", where2, "a new branch point is a version of the same parent line (section 9.4)", {
+            object: id,
+            ver
+          });
+        } else if (versionNumber(p.objectVersion) <= versionNumber(old.objectVersion) || p.documentVersion === old.documentVersion) {
+          this.add("error", where2, "a new branch point is a higher object version, holding another document version (section 9.4)", {
+            object: id,
+            ver
+          });
+        }
+        const oldVersions = isObject(oldInv.versions) ? oldInv.versions : {};
+        const newVersions = isObject(newInv.versions) ? newInv.versions : {};
+        const manifest = isObject(newInv.manifest) ? newInv.manifest : {};
+        if (oldInv.id !== newInv.id || Object.entries(oldVersions).some(([v, e]) => !same(newVersions[v], e)) || Object.values(oldVersions).some((e) => Object.keys(isObject(e?.state) ? e.state : {}).some((d) => !Object.hasOwn(manifest, d)))) {
+          this.add("error", where2, "the new parent inventory does not continue the previous one (section 9.4)", {
+            object: id,
+            ver
+          });
+        }
+      }
+      async members(id, o) {
+        const a = this.archive;
+        for (const ver of versionsOf(o.inv)) {
+          this.cancelled();
+          const at = `${this.where(id)} ${ver}`;
+          const mem = await a.json(id, o.inv, ver, "members.json", this.options).catch((e) => {
+            if (this.aborted(e)) throw e;
+            return null;
+          });
+          if (!mem) continue;
+          this.schema(`${at}/members.json`, mem, "collection", "error", {
+            object: id,
+            ver
+          });
+          const type = mem.type;
+          if (type !== "catalogue" && type !== "selection") this.add("error", at, "members.json has no valid type (catalogue or selection)", {
+            object: id,
+            ver
+          });
+          for (const m of Array.isArray(mem.members) ? mem.members : []) {
+            const mid = objectId(m?.name, m?.owner);
+            const who = `${at} member ${this.where(mid)}`;
+            const context = {
+              object: id,
+              ver
+            };
+            for (const message2 of memberErrors(type, m)) this.add("error", who, message2, context);
+            if (this.found.has(mid)) {
+              await this.memberHeld(m, mid, who, type, context, ver === o.inv.head);
+            } else if (ver === o.inv.head) {
+              await this.memberElsewhere(m, mid, who, context);
+            }
+          }
+        }
+      }
+      async memberHeld(m, mid, who, type, context, inHead = false) {
+        const a = this.archive;
+        const held2 = this.found.get(mid);
+        const sts = this.statuses.get(mid) || [];
+        for (const { version: pv, pin, documentVersion: n } of memberPins2(m)) {
+          this.report.stats.pins++;
+          const k = typeof pv === "string" && /^v[1-9][0-9]*$/.test(pv) ? versionNumber(pv) : 0;
+          const digest = k ? held2.digests[k - 1] : void 0;
+          if (!digest) {
+            this.add("warning", `${who} ${pv}`, "unavailable: the copy held here lacks this version", context);
+            continue;
+          }
+          if (digest !== pin) {
+            this.add("error", `${who} ${pv}`, "mismatch: the inventory held here has another digest (section 8.5)", context);
+            continue;
+          }
+          const pobj = held2.objs.get(pv) || {};
+          if (pobj.kind !== m.kind || pobj.name !== m.name || pobj.owner !== m.owner) {
+            this.add("error", `${who} ${pv}`, "kind, name and owner are not those of the version pinned (section 8.5)", context);
+          }
+          if (n !== null && pobj.documentVersion !== n) this.add("error", `${who} ${pv}`, `does not hold document version ${n}`, context);
+          const s = k <= sts.length ? sts[k - 1] : null;
+          if (s === UNSIGNED || s === INVALID) this.add("error", `${who} ${pv}`, "not a version: a collection pins only signed versions (section 8.5)", context);
+          else if (s === UNCHECKED || s === CONTESTED) this.add("warning", `${who} ${pv}`, `${s} (section 8.5)`, context);
+          const log = m.name === m.owner ? this.logs.get(m.owner) ?? null : null;
+          if (log && !log.verified(k, pin)) {
+            this.add("error", `${who} ${pv}`, "not a version of the key log: a collection pins only versions (sections 6.1 and 8.5)", context);
+          }
+          const signed = latestSigned(sts);
+          if (inHead && signed) {
+            const withdrawn = withdrawnVersions(held2.inv, (v) => held2.objs.get(v) ?? null, `v${signed}`);
+            if (withdrawn.has(pobj.documentVersion)) {
+              this.add("result", `${who} ${pv}`, `document version ${pobj.documentVersion} is withdrawn, in ${withdrawn.get(pobj.documentVersion)} (section 13.1)`, context);
+            }
+          }
+        }
+        if (type === "selection" && sts.length) {
+          const signed = latestSigned(sts);
+          const objOf2 = (v) => held2.objs.get(v) ?? null;
+          const order = historyOf(held2.inv, objOf2, signed ? `v${signed}` : held2.inv.head).map((h) => objOf2(h)?.documentVersion);
+          const vetted2 = (Array.isArray(m.revisions) ? m.revisions : []).map((r) => r?.documentVersion);
+          const pos = vetted2.filter((x) => order.includes(x)).map((x) => order.indexOf(x));
+          if (pos.some((p, i) => i > 0 && p < pos[i - 1])) this.add("error", who, "revisions not in the order of the history (section 8.4)", context);
+        }
+      }
+      async memberElsewhere(m, mid, who, context) {
+        if (this.resolver) {
+          for (const { version: pv, pin, documentVersion: n } of memberPins2(m)) {
+            this.report.stats.pins++;
+            const res = await this.resolver.pin(m.name, m.owner, pv, pin, Array.isArray(m.at) ? m.at : [], this.options);
+            if (res.copy) {
+              const pobj = res.copy.obj(versionNumber(pv)) || {};
+              if (pobj.kind !== m.kind || pobj.name !== m.name || pobj.owner !== m.owner || n !== null && pobj.documentVersion !== n) {
+                this.add("error", `${who} ${pv}`, "the version pinned is not of the kind, line and document version the member gives (section 8.5)", context);
+              }
+            }
+            if (res.status === "not a version") this.add("error", `${who} ${pv}`, "not a version: a collection pins only signed versions (section 8.5)", context);
+            else if (res.status === "verified") this.add("result", `${who} ${pv}`, `verified at ${res.copy ? res.copy.where : "?"} (section 8.5)`, context);
+            else this.add("warning", `${who} ${pv}`, `${res.status} (section 8.5)`, context);
+            this.progress({
+              phase: "members",
+              done: this.report.stats.pins,
+              total: this.report.stats.pins,
+              current: mid
+            });
+          }
+        } else if (this.tombstoned.has(mid)) {
+          this.add("result", who, "removed: a tombstone in this archive (section 13.3)", context);
+        } else {
+          this.add("warning", who, "not held in this archive: not resolved (osheaf verify --remote resolves it, section 14.5)", context);
+        }
+      }
+      status(id, o) {
+        if (o.kind === "owner") return "active";
+        const latest = o.line?.latest;
+        return ((latest ? o.objs.get(latest) : o.objs.get(o.inv.head)) || {}).status ?? "active";
+      }
+      async archiveAsAWhole() {
+        const a = this.archive;
+        const disc = a.disc;
+        const listed = /* @__PURE__ */ new Map();
+        for (const e of a.listed()) {
+          if (!isObject(e)) continue;
+          if (listed.has(e.id)) this.add("error", "opensheaf.json", `lists ${this.where(e.id)} twice`);
+          listed.set(e.id, e);
+        }
+        const needed = /* @__PURE__ */ new Set();
+        for (const id of this.found.keys()) {
+          const parts = parseId(id);
+          if (parts && !parts.draft) needed.add(objectId(parts.owner, parts.owner));
+        }
+        for (const kid of needed) {
+          if (this.found.has(kid) || listed.has(kid)) continue;
+          const owner = parseId(kid).owner;
+          const log = await a.keyLog(owner, this.options).catch((e) => {
+            if (this.aborted(e)) throw e;
+            return null;
+          });
+          if (log) this.add("error", "opensheaf.json", `does not list ${this.where(kid)}, an object of the storage root (section 3.1)`);
+        }
+        const fields = [
+          "kind",
+          "name",
+          "owner",
+          "head",
+          "inventorySha512",
+          "status"
+        ];
+        for (const [id, o] of this.found) {
+          if (o.draft) continue;
+          const e = listed.get(id);
+          if (!e) {
+            this.add("error", "opensheaf.json", `does not list ${this.where(id)}, an object of the storage root (section 3.1)`, {
+              object: id
+            });
+            continue;
+          }
+          const expected = {
+            kind: o.head?.kind ?? null,
+            name: o.head?.name ?? null,
+            owner: o.head?.owner ?? null,
+            head: o.inv.head,
+            inventorySha512: o.sidecar,
+            status: this.status(id, o)
+          };
+          const stale = fields.filter((k) => (e?.[k] ?? null) !== expected[k]);
+          if (stale.length) {
+            this.add("error", "opensheaf.json", `the entry of ${this.where(id)} is stale: ` + stale.map((k) => `${k} ${py(e?.[k])} instead of ${py(expected[k])}`).join(", "), {
+              object: id
+            });
+          }
+        }
+        const labels2 = [
+          ...listed.values()
+        ].map((e) => e.label).filter(Boolean);
+        for (const lb of [
+          ...new Set(labels2.filter((x, k) => labels2.indexOf(x) !== k))
+        ].sort()) {
+          this.add("error", "opensheaf.json", `the label ${lb} is given twice (section 3.1)`);
+        }
+        if (!("owners" in disc)) {
+          this.add("error", "opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)");
+        }
+        const seenOwners = /* @__PURE__ */ new Set(), seenCatalogues = /* @__PURE__ */ new Set();
+        for (const e of Array.isArray(disc.owners) ? disc.owners : []) {
+          if (!isObject(e)) continue;
+          const o = e.owner, cat = e.catalogue;
+          if (seenOwners.has(o)) this.add("error", "opensheaf.json", `owners lists ${o} twice (section 3.1)`);
+          if (seenCatalogues.has(cat)) this.add("error", "opensheaf.json", `owners gives ${cat} as the catalogue of two owners (section 3.1)`);
+          seenOwners.add(o);
+          seenCatalogues.add(cat);
+          if (typeof o !== "string" || !OWNER_NAME.test(o)) continue;
+          if (!this.found.has(objectId(o, o))) this.add("warning", "opensheaf.json", `owners lists ${o}, whose key log is not held here (section 3.1)`);
+          const entry = listed.get(cat) || {};
+          if (entry.kind !== "collection" || entry.owner !== o) {
+            this.add("error", "opensheaf.json", `the catalogue of ${o} in owners, ${cat}, is not a collection of that owner it lists (section 8.1)`);
+            continue;
+          }
+          const held2 = this.found.get(cat);
+          if (!held2) continue;
+          const mem = await a.json(cat, held2.inv, held2.inv.head, "members.json", this.options).catch((e2) => {
+            if (this.aborted(e2)) throw e2;
+            return null;
+          }) || {};
+          if (mem.type !== "catalogue") {
+            this.add("error", "opensheaf.json", `the owner catalogue of ${o}, ${this.where(cat)}, is not a catalogue (section 8.1)`);
+          }
+          for (const m of Array.isArray(mem.members) ? mem.members : []) {
+            if (this.tombstoned.has(`sheaf:${m?.name}:${m?.owner}`)) continue;
+            let mine = false;
+            try {
+              mine = m?.owner === o && m?.kind === "document" && this.found.has(objectId(m?.name, o));
+            } catch {
+              mine = false;
+            }
+            if (!mine) {
+              this.add("warning", "opensheaf.json", `the owner catalogue of ${o} lists ${m?.name}, which is not a document of a line of that owner held here (section 8.1)`);
+            }
+          }
+        }
+        for (const d of Array.isArray(disc.drafts) ? disc.drafts : []) {
+          const o = this.found.get(d?.id);
+          if (!o || !o.draft || o.inv.head !== d.head) {
+            this.add("error", "opensheaf.json", `drafts lists ${d?.id}, which is not a draft held with that head`);
+          }
+        }
+        const used = /* @__PURE__ */ new Set();
+        for (const o of this.found.values()) {
+          if (isObject(o.head?.extensions)) for (const k of Object.keys(o.head.extensions)) used.add(k);
+          if (o.kind === "owner") {
+            const log = this.logs.get(parseId(o.id).owner);
+            const ext = log?.extensions();
+            if (isObject(ext)) for (const k of Object.keys(ext)) used.add(k);
+          }
+        }
+        const declared = Array.isArray(disc.extensions) ? disc.extensions : [];
+        for (const e of [
+          ...used
+        ].filter((x) => !declared.includes(x)).sort()) {
+          this.add("warning", "opensheaf.json", `extensions does not list ${e}, which objects use (section 3.1)`);
+        }
+        const seen = /* @__PURE__ */ new Set();
+        for (const t of Array.isArray(disc.tombstones) ? disc.tombstones : []) {
+          const tid = t?.id;
+          if (tid !== objectId(t?.name, t?.owner)) this.add("error", "opensheaf.json", `the tombstone ${tid} is not the line of its name and owner (section 13.3)`);
+          if (seen.has(tid)) this.add("error", "opensheaf.json", `two tombstones of ${tid}`);
+          seen.add(tid);
+          if (this.found.has(tid) || listed.has(tid)) {
+            this.add("error", "opensheaf.json", `${tid} has a tombstone, and is an object of the archive (section 13.3)`);
+          } else if (t?.kind === "owner" && needed.has(tid)) {
+            this.add("warning", "opensheaf.json", `a tombstone stands for the key log ${tid}, which lines of the archive need: only the law or its keeper justifies it (section 13.2)`);
+          } else {
+            this.add("result", "opensheaf.json", `removed: ${tid} (${py(t?.date)}: ${py(t?.reason)})`);
+          }
+        }
+      }
+      async indexes() {
+        const a = this.archive;
+        const declared = isObject(a.disc.indexes) ? a.disc.indexes : {};
+        if (!Object.keys(declared).length) {
+          this.add("warning", "opensheaf.json", "no indexes declared (section 12.5)");
+          return;
+        }
+        const objects = [];
+        for (const [id, o] of this.found) {
+          if (o.draft) continue;
+          if (o.kind === "owner") {
+            const log = this.logs.get(parseId(id).owner);
+            if (!log) continue;
+            objects.push({
+              id,
+              rec: {
+                kind: "owner"
+              },
+              genesis: log.genesis,
+              status: "active",
+              label: a.labelOf(id),
+              sidecars: o.sidecars,
+              carried: log.versions.filter((v) => v.forkRecord).flatMap((v) => v.carried)
+            });
+          } else if (o.rec) {
+            objects.push({
+              id,
+              rec: o.rec,
+              genesis: o.genesis,
+              status: this.status(id, o),
+              label: a.labelOf(id),
+              sidecars: o.sidecars
+            });
+          }
+        }
+        const expected = indexEntries2(objects);
+        const gone = new Map(a.tombstones().map((t) => [
+          t.id,
+          t
+        ]));
+        const listedNames = [];
+        const order = (x) => [
+          "owners",
+          "names",
+          "sha512"
+        ].indexOf(x);
+        for (const [index, length] of Object.entries(declared).sort(([x], [y]) => order(x) - order(y))) {
+          if (!Object.hasOwn(INDEX_KEY2, index)) continue;
+          const key = INDEX_KEY2[index];
+          const want = expected[index];
+          const prefixes = new Set(want.map((e) => String(e[key]).slice(0, length)));
+          if (index === "names") for (const n of listedNames) prefixes.add(n.slice(0, length));
+          for (const t of gone.values()) {
+            const k = index === "names" ? t.name : index === "owners" ? t.owner : t.inventorySha512;
+            if (typeof k === "string") prefixes.add(k.slice(0, length));
+          }
+          const held2 = [];
+          for (const p of [
+            ...prefixes
+          ].sort()) {
+            const place3 = `${index}/${p}.json`;
+            let data2;
+            try {
+              const bytes = await this.fetchOrNull(a.base + place3);
+              if (bytes === null) continue;
+              data2 = parseJson(bytes);
+            } catch (error) {
+              if (this.aborted(error)) throw error;
+              this.add("error", place3, `not JSON: ${error.message}`);
+              continue;
+            }
+            this.schema(place3, data2, "index");
+            if (data2?.index !== index) this.add("error", place3, `an index file of ${index}/ names the index ${data2?.index}`);
+            for (const e of Array.isArray(data2?.entries) ? data2.entries : []) {
+              if (!isObject(e) || String(e[key] ?? "").slice(0, length) !== p || p.length !== length) {
+                this.add("error", place3, `an entry not in the file of its prefix (${JSON.stringify(e).slice(0, 60)}...)`);
+              }
+              held2.push(e);
+              if (index === "owners" && Array.isArray(e?.names)) listedNames.push(...e.names.filter((n) => typeof n === "string"));
+            }
+          }
+          for (const e of want) {
+            if (!held2.some((x) => same(x, e))) {
+              this.add("error", `${index}/`, `no entry, or a stale one, for ${e.id ?? e.owner} ${e.version ?? ""} (section 12.5)`);
+            }
+          }
+          for (const e of held2) {
+            if (want.some((x) => same(x, e))) continue;
+            if (gone.has(e?.id) && e?.status === "removed") continue;
+            this.add("error", `${index}/`, `an entry the storage root does not justify: ${e?.id ?? e?.owner} ${e?.version ?? ""} (section 12.5)`);
+          }
+          for (const [tid, t] of gone) {
+            if ((index === "names" || index === "sha512") && !held2.some((e) => e?.id === tid && e?.status === "removed")) {
+              this.add("error", `${index}/`, `no entry with the status removed for the tombstone ${tid} (section 12.5)`);
+            }
+            if (index === "owners" && held2.some((e) => e?.owner === t.owner && Array.isArray(e?.names) && e.names.includes(t.name))) {
+              this.add("error", `${index}/`, `owners/ lists ${tid}, which is taken down (section 12.5)`);
+            }
+          }
+        }
+      }
+      async presentation() {
+        const a = this.archive;
+        const website = Array.isArray(a.disc.profiles) && a.disc.profiles.includes("website");
+        const home = await this.fetchOrNull(a.base + "index.html", LIMITS.page).catch((e) => {
+          if (this.aborted(e)) throw e;
+          return null;
+        });
+        if (!website && home === null) return;
+        const level2 = website ? "error" : "warning";
+        const note = website ? "" : " (the archive does not declare the profile website)";
+        if (home === null) {
+          this.add(level2, "index.html", "the home page is missing (appendix A.3)" + note);
+          return;
+        }
+        let members = [];
+        for (const e of a.owners()) {
+          const cat = this.found.get(e.catalogue);
+          if (!cat?.line?.latest) continue;
+          const mem = await a.json(cat.id, cat.inv, cat.line.latest, "members.json", this.options).catch((e2) => {
+            if (this.aborted(e2)) throw e2;
+            return null;
+          });
+          if (Array.isArray(mem?.members)) members = members.concat(mem.members);
+        }
+        const page = new TextDecoder().decode(home);
+        for (const m of members) {
+          const mid = objectId(m?.name, m?.owner);
+          if (this.tombstoned.has(mid)) continue;
+          const pins = memberPins2(m);
+          const pin = pins[pins.length - 1]?.pin || "";
+          if (!page.includes(pin.slice(0, 32))) this.add(level2, "index.html", `does not show the pin of ${m?.name}` + note);
+          if (!this.found.has(mid)) continue;
+          const originator = this.found.get(mid).rec?.originator === m.owner;
+          const landing = `paper/${originator ? m.name : `${m.name}-${m.owner}`}/index.html`;
+          const text3 = await this.fetchOrNull(a.base + landing, LIMITS.page).catch((e) => {
+            if (this.aborted(e)) throw e;
+            return null;
+          });
+          const words2 = text3 ? new TextDecoder().decode(text3) : "";
+          if (originator ? !new RegExp(`sheaf:${m.name}(?![a-z0-9:/])`).test(words2) : !words2.includes(mid)) {
+            this.add(level2, landing, `no landing page giving the sheaf: URI of ${this.where(mid)} (appendix A.3)` + note);
+          }
+        }
+      }
+      async contentDigests() {
+        const a = this.archive;
+        const files = [];
+        for (const [id, o] of this.found) {
+          for (const [digest, paths] of Object.entries(o.inv.manifest)) {
+            for (const cp of Array.isArray(paths) ? paths : []) {
+              try {
+                files.push({
+                  id,
+                  url: a.contentUrl(id, o.inv, cp),
+                  cp,
+                  digest
+                });
+              } catch {
+                const outside = typeof cp !== "string" || !cp || cp.startsWith("/") || cp.includes("\\") || cp.split("/").some((p) => [
+                  "",
+                  ".",
+                  ".."
+                ].includes(p));
+                this.add("error", this.where(id), outside ? `the content path ${JSON.stringify(cp).replace(/^"(.*)"$/, "'$1'")} is not a relative path inside the object (section 4.1): it is not read, nor the object checked further` : `missing ${cp}`, {
+                  object: id
+                });
+              }
+            }
+          }
+        }
+        let checked2 = 0;
+        this.progress({
+          phase: "digests",
+          done: 0,
+          total: files.length
+        });
+        await Promise.all(files.map(async ({ id, url, cp, digest }) => {
+          const place3 = this.where(id);
+          try {
+            const bytes = await this.http.request(url, {
+              limit: LIMITS.file,
+              signal: this.options.signal
+            });
+            this.report.stats.files++;
+            this.report.stats.filesBytes += bytes.length;
+            if (await sha512(bytes) !== digest) this.add("error", place3, `${cp} does not have the digest of the manifest`, {
+              object: id
+            });
+          } catch (error) {
+            if (this.aborted(error)) throw error;
+            if (error.kind === "not-found") this.add("error", place3, `missing ${cp}`, {
+              object: id
+            });
+            else if (error.kind === "too-large") this.add("warning", place3, `${cp} is too large to be checked in the browser`, {
+              object: id
+            });
+            else this.add("error", place3, `${cp} cannot be read (${error.detail})`, {
+              object: id
+            });
+          }
+          this.progress({
+            phase: "digests",
+            done: ++checked2,
+            total: files.length,
+            current: cp
+          });
+        }));
+      }
+    };
+    RESERVED2 = [
+      "object.json",
+      "datacite.json",
+      "genesis.json",
+      "members.json",
+      "keys.json",
+      "forked",
+      "parent"
+    ];
   }
 });
 
@@ -9572,6 +11842,14 @@ async function carriedFiles(f, dir, inv) {
   for (const n of head.notices || []) if (n.path) out.set(n.path, await f.readLogical(dir, inv, n.path));
   return out;
 }
+function depositPathProblem(logical, files) {
+  if (!logical || logical.startsWith("/") || logicalPathProblem(logical) || /[\u0000-\u001f\u007f]/.test(logical)) {
+    return `${pyRepr(logical)} is not a logical path of section 4.1 (relative, NFC, no empty, . or .. segments)`;
+  }
+  if (RESERVED2.includes(logical.split("/")[0])) return `${logical}: the name ${logical.split("/")[0]} is reserved by section 4.1`;
+  if (files.has(logical) || logical === "paper.pdf") return `${logical} is another file of the deposit already`;
+  return null;
+}
 async function deposit(f, a) {
   const label = a.label;
   const draft = Boolean(a.draft);
@@ -9633,8 +11911,8 @@ async function deposit(f, a) {
   formats.push("application/pdf");
   for (const extra of a.extraSource || []) {
     const logical = extra.logical || extra.name.slice(extra.name.lastIndexOf("/") + 1);
-    const parts = logical.split("/");
-    if (logical.startsWith("/") || parts.includes("..") || parts.includes(".")) exit(`bad logical path ${logical}`);
+    const problem = depositPathProblem(logical, files);
+    if (problem) exit(`--extra-source ${extra.name}${extra.logical ? `=${extra.logical}` : ""}: ${problem}`);
     files.set(logical, extra.bytes);
     if (logical.endsWith(".bib") && !formats.includes("application/x-bibtex")) formats.push("application/x-bibtex");
   }
@@ -9803,6 +12081,8 @@ var init_deposit = __esm({
     init_write();
     init_discovery();
     init_folder();
+    init_paths();
+    init_verify();
     init_storage();
     RIGHTS = {
       "cc-by-4.0": {
@@ -9885,7 +12165,7 @@ function compareTuples(a, b) {
   }
   return 0;
 }
-function memberOrder(members, order = ORDER) {
+function memberOrder(members, order = ORDER2) {
   const key = (m) => [
     m.cite?.issued || "",
     m.cite?.available || ""
@@ -9931,7 +12211,7 @@ async function collectOwner(f, owner, { curated = false, iKnow = false } = {}) {
     return null;
   }
   const isCurated2 = cinv === null && Boolean(curated);
-  const order = isCurated2 ? "manual" : ORDER;
+  const order = isCurated2 ? "manual" : ORDER2;
   let members = [];
   for (const { dir, signed, obj: obj2, dc } of await documents(f, owner)) {
     const cite2 = {
@@ -10065,7 +12345,7 @@ async function collectOwner(f, owner, { curated = false, iKnow = false } = {}) {
   f.env.out(`Done: the owner catalogue ${label} of ${short(owner)} is at ${inv.head}, with ${members.length ? plural(members.length, "member") : "no members"}.`);
   return inv;
 }
-var ORDER;
+var ORDER2;
 var init_collect = __esm({
   "core/collect.js"() {
     init_versions();
@@ -10076,7 +12356,7 @@ var init_collect = __esm({
     init_names();
     init_discovery();
     init_deposit();
-    ORDER = "issued-desc";
+    ORDER2 = "issued-desc";
   }
 });
 
@@ -10369,543 +12649,6 @@ var init_takedown = __esm({
     init_folder();
     init_describe();
     init_deposit();
-  }
-});
-
-// core/resolve.js
-function found(status, copy = null, version = null, digest = null, copies = [], log = null) {
-  return {
-    status,
-    copy,
-    version,
-    digest,
-    copies,
-    log,
-    ok: status === "verified" || status === "contested"
-  };
-}
-function ipv6Groups(text3) {
-  const halves = text3.split("::");
-  if (halves.length > 2) return null;
-  const groups = (s) => s ? s.split(":").map((g) => parseInt(g, 16)) : [];
-  const head = groups(halves[0]), tail = halves.length === 2 ? groups(halves[1]) : [];
-  if (halves.length === 1 && head.length !== 8) return null;
-  const out = [
-    ...head,
-    ...new Array(8 - head.length - tail.length).fill(0),
-    ...tail
-  ];
-  return out.length === 8 && out.every((g) => Number.isInteger(g) && g >= 0 && g <= 65535) ? out : null;
-}
-function ipv4Kind([a, b]) {
-  if (a === 127) return "a loopback address";
-  if (a === 10 || a === 172 && b >= 16 && b <= 31 || a === 192 && b === 168) return "a private address";
-  if (a === 169 && b === 254) return "a link-local address";
-  if (a === 0) return "an address of this network";
-  return null;
-}
-function localKind(hostname) {
-  const host = String(hostname).toLowerCase().replace(/\.$/, "");
-  if (host === "localhost" || host.endsWith(".localhost")) return "a loopback address";
-  if (host === "local" || host.endsWith(".local")) return "a name of the local network (.local)";
-  if (/^[0-9]+(\.[0-9]+){3}$/.test(host)) return ipv4Kind(host.split(".").map(Number));
-  if (!host.startsWith("[")) return null;
-  const g = ipv6Groups(host.slice(1, -1));
-  if (!g) return null;
-  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 65535) return ipv4Kind([
-    g[6] >> 8,
-    g[6] & 255
-  ]);
-  if (g.slice(0, 7).every((x) => x === 0)) return g[7] === 1 ? "a loopback address" : g[7] === 0 ? "an address of this network" : null;
-  if ((g[0] & 65024) === 64512) return "a unique local address";
-  if ((g[0] & 65472) === 65152) return "a link-local address";
-  return null;
-}
-var MEMBER_STATUS, Copy, Resolver;
-var init_resolve = __esm({
-  "core/resolve.js"() {
-    init_archive();
-    init_http();
-    init_paths();
-    init_names();
-    init_versions();
-    init_signatures();
-    MEMBER_STATUS = {
-      [SIGNED]: "verified",
-      [VOUCHED]: "verified",
-      [CONTESTED]: "contested",
-      [UNCHECKED]: "unchecked",
-      [UNSIGNED]: "not a version",
-      [INVALID]: "not a version"
-    };
-    Copy = class {
-      constructor(where2, archive, line) {
-        Object.assign(this, {
-          where: where2,
-          archive,
-          line,
-          id: line.id
-        });
-      }
-      get head() {
-        return this.line.versions.length;
-      }
-      get statuses() {
-        return this.line.statuses;
-      }
-      get latestSigned() {
-        return this.line.latest ? versionNumber(this.line.latest) : 0;
-      }
-      digest(n) {
-        return n > 0 && n <= this.line.versions.length ? this.line.versions[n - 1].digest : null;
-      }
-      status(n) {
-        return n > 0 && n <= this.statuses.length ? this.statuses[n - 1] : null;
-      }
-      find(digest) {
-        const k = this.line.versions.findIndex((v) => v.digest === digest);
-        return k < 0 ? null : k + 1;
-      }
-      obj(n) {
-        return this.line.versions[n - 1]?.obj ?? null;
-      }
-      agrees(other) {
-        const k = Math.min(this.latestSigned, other.latestSigned);
-        return k === 0 || this.digest(k) === other.digest(k);
-      }
-    };
-    Resolver = class _Resolver {
-      constructor(http, home = null, { local = false } = {}) {
-        this.http = http;
-        this.home = home;
-        this.local = local;
-        this.archives = /* @__PURE__ */ new Map();
-        this.logs = /* @__PURE__ */ new Map();
-        this.notes = [];
-        if (home) this.archives.set(home.base, Promise.resolve(home));
-      }
-      again() {
-        const fresh = new _Resolver(this.http.another(), null, {
-          local: this.local
-        });
-        if (this.home) fresh.home = this.home;
-        return fresh;
-      }
-      note(level2, message2) {
-        if (!this.notes.some((n) => n.level === level2 && n.message === message2)) this.notes.push({
-          level: level2,
-          message: message2
-        });
-      }
-      source(where2, options = {}) {
-        const base = baseOf(where2);
-        if (!this.archives.has(base)) {
-          const refused = this.refused(base);
-          if (refused) {
-            this.note("warning", `unavailable: ${where2}: ${refused}`);
-            this.archives.set(base, Promise.resolve(null));
-            return this.archives.get(base);
-          }
-          const opening = Archive.open(this.http, base, options).then((archive) => {
-            if (archive.old || archive.disc.specification !== "0.2") {
-              this.note("warning", `unavailable: ${where2}: not an archive of specification 0.2`);
-              return null;
-            }
-            if (archive.pageProblems?.length) {
-              this.note("warning", `unavailable: ${where2}: ${archive.pageProblems[0]}`);
-              return null;
-            }
-            return archive;
-          }, (error) => {
-            if (error?.kind === "aborted") {
-              this.archives.delete(base);
-              throw error;
-            }
-            this.note("warning", `unavailable: ${where2}: ${error.kind === "not-found" ? "no discovery document opensheaf.json" : error.kind === "json" ? "the discovery document is not JSON" : error.detail || error.message}`);
-            return null;
-          });
-          this.archives.set(base, opening);
-        }
-        return this.archives.get(base);
-      }
-      refused(base) {
-        const kind = localKind(new URL(base).hostname);
-        if (!kind || this.local) return null;
-        if (this.home && localKind(new URL(this.home.base).hostname)) return null;
-        return `not fetched: ${new URL(base).hostname} is ${kind}, which the explorer fetches only for an archive that is itself on a local or private host`;
-      }
-      places(where2) {
-        const out = this.home ? [
-          this.home.base
-        ] : [];
-        const given = [];
-        for (const w of where2) {
-          if (typeof w !== "string" || !w) continue;
-          let base;
-          try {
-            base = baseOf(w);
-          } catch {
-            continue;
-          }
-          if (!out.includes(base) && !given.includes(base)) given.push(base);
-        }
-        if (given.length > LIMITS.mirrors) {
-          this.note("warning", `${given.length - LIMITS.mirrors} more location(s) not tried (at most ${LIMITS.mirrors} are tried, section 15.2)`);
-        }
-        return [
-          ...out,
-          ...given.slice(0, LIMITS.mirrors)
-        ];
-      }
-      async archiveOf(url, options = {}) {
-        this.bases ??= /* @__PURE__ */ new Map();
-        if (this.bases.has(url)) return this.bases.get(url);
-        const out = [];
-        this.bases.set(url, out);
-        let u;
-        try {
-          u = new URL(url);
-        } catch {
-          return out;
-        }
-        if (![
-          "https:",
-          "http:"
-        ].includes(u.protocol) || !u.host) return out;
-        const origin = `${u.protocol}//${u.host}`, path = u.pathname, whole = origin + path;
-        const cuts = [];
-        for (let k = path.length - 2; k >= 0; k--) if (path[k] === "/") cuts.push(k + 1);
-        const guess = path.indexOf("/ocfl/");
-        if (guess >= 0) cuts.unshift(guess + 1);
-        for (const k of [
-          ...new Set(cuts)
-        ]) {
-          const base = origin + path.slice(0, k);
-          if (this.refused(base)) continue;
-          let archive = this.archives.has(base) ? await this.archives.get(base) : null;
-          if (!archive) {
-            try {
-              archive = await Archive.open(this.http, base, options);
-            } catch (error) {
-              if (error?.kind === "aborted") throw error;
-              continue;
-            }
-            if (archive.old || archive.disc.specification !== "0.2") continue;
-          }
-          const root = archive.disc.storageRoot ?? "ocfl/";
-          if (typeof root !== "string" || root.includes(":") || !root.endsWith("/") || root.slice(0, -1).split("/").some((x) => [
-            "",
-            ".",
-            ".."
-          ].includes(x)) || root.includes("\\")) continue;
-          if (whole.startsWith(archive.root) && whole.length > archive.root.length) {
-            this.archives.set(base, Promise.resolve(archive));
-            out.push(base);
-            break;
-          }
-        }
-        return out;
-      }
-      async keyLog(owner, where2 = [], options = {}) {
-        if (!this.logs.has(owner)) this.logs.set(owner, {
-          log: null,
-          met: /* @__PURE__ */ new Set(),
-          found: []
-        });
-        const entry = this.logs.get(owner);
-        for (const w of this.places(where2)) {
-          if (entry.met.has(w)) continue;
-          entry.met.add(w);
-          const archive = await this.source(w, options);
-          if (!archive) continue;
-          let log;
-          try {
-            log = await archive.keyLog(owner, options);
-          } catch (error) {
-            if (error?.kind === "aborted") throw error;
-            this.note("warning", `${w}: the key log of ${owner}: ${error.detail || error.message}`);
-            continue;
-          }
-          if (!log || log.owner !== owner) continue;
-          entry.found.push({
-            where: w,
-            log
-          });
-          const before = entry.log;
-          entry.log = before ? await before.meet(log) : log;
-          if (before && before.forkPoint === null && entry.log.forkPoint !== null) {
-            this.note("result", `a fork of the key log of ${owner} at v${entry.log.forkPoint}, met at ${w} (section 6.3)`);
-          }
-        }
-        return entry.log;
-      }
-      ownerNotes(owner) {
-        const log = this.logs.get(owner)?.log;
-        if (!log) return [];
-        const out = [];
-        if (log.forkPoint) out.push(`owner ${owner} ended by a fork of its key log at v${log.forkPoint}`);
-        else if (log.ended) out.push(`owner ${owner} ended`);
-        if (log.successor) out.push(`owner ${owner}: successor ${log.successor} named by its ending version`);
-        for (const did of [
-          ...log.exposedKeys()
-        ].sort()) out.push(`owner ${owner}: exposed key ${did}`);
-        return out;
-      }
-      async copies(name2, owner, where2 = [], options = {}) {
-        const id = objectId(name2, owner);
-        const held2 = [];
-        for (const w of this.places(where2)) {
-          const archive = await this.source(w, options);
-          if (!archive) continue;
-          if (archive !== this.home && !archive.objects().some((o) => o.id === id)) continue;
-          await this.keyLog(owner, archive === this.home ? [] : [
-            w
-          ], options);
-          held2.push({
-            w,
-            archive
-          });
-        }
-        const log = await this.keyLog(owner, [], options);
-        const out = [];
-        for (const { w, archive } of held2) {
-          let line;
-          try {
-            line = await archive.line(id, {
-              log,
-              signal: options.signal
-            });
-          } catch (error) {
-            if (error?.kind === "aborted") throw error;
-            if (error?.kind !== "not-found") this.note("warning", `${w}: ${id}: ${error.detail || error.message}`);
-            continue;
-          }
-          const problem = await this.identityProblem(archive, id, line, options);
-          if (problem) {
-            this.note("warning", `${w}: ${id}: not a copy of the line: ${problem}`);
-            continue;
-          }
-          if (archive !== this.home) {
-            for (const v of line.versions) {
-              if (!v.digest) continue;
-              const sc = await archive.sidecar(id, v.ver, options).catch((error) => {
-                if (error?.kind === "aborted") throw error;
-                return "";
-              });
-              if (sc !== v.digest) {
-                this.note("warning", `${w}: ${id} ${v.ver}: the checksum file of its inventory is missing, or does not state its digest (section 12.3)`);
-              }
-            }
-          }
-          out.push(new Copy(w, archive, line));
-        }
-        if (out.length && await this.tombstoned(id, where2, options)) {
-          this.note("result", `${id}: taken down in an archive read, and found elsewhere (section 12.3)`);
-        }
-        return out;
-      }
-      async identityProblem(archive, id, line, options) {
-        if (line.inv.id !== id) return "its inventory names another object";
-        if (line.inventoriesProblem) return line.inventoriesProblem;
-        const [, name2, owner] = id.split(":");
-        let genesis = null;
-        try {
-          genesis = await archive.bytes(id, line.inv, "v1", "genesis.json", options);
-        } catch (error) {
-          if (error?.kind === "aborted") throw error;
-        }
-        if (!genesis || !await isNameOf(name2, genesis)) return "the name is not a name of its genesis record (section 5.2)";
-        for (const v of line.versions) {
-          if (v.obj?.name !== name2 || v.obj?.owner !== owner) return `${v.ver}: object.json does not record the line`;
-        }
-        return null;
-      }
-      async tombstoned(id, where2 = [], options = {}) {
-        for (const w of this.places(where2)) {
-          const archive = await this.source(w, options);
-          if (archive?.tombstones().some((t) => t.id === id)) return true;
-        }
-        return false;
-      }
-      async pin(name2, owner, version, digest, where2 = [], options = {}) {
-        if (name2 === owner) {
-          const log = await this.keyLog(owner, where2, options);
-          const v = log && isVersion(version) ? log.lookup(versionNumber(version), digest) : null;
-          if (v && log.verified(versionNumber(version), digest)) return found("verified", null, version, digest, [], log);
-          return found(!log ? "unavailable" : v ? "not a version" : "mismatch", null, version, digest, [], log);
-        }
-        const copies = await this.copies(name2, owner, where2, options);
-        const n = isVersion(version) ? versionNumber(version) : 0;
-        for (const c of copies) {
-          const d = n ? c.digest(n) : null;
-          if (d && d !== digest) this.note("warning", `${c.where}: ${objectId(name2, owner)} ${version} does not match the pin (section 12.3)`);
-        }
-        for (const c of copies) {
-          if (n && c.digest(n) === digest) return found(MEMBER_STATUS[c.status(n)] || "not a version", c, version, digest, copies);
-        }
-        if (copies.length) return found("mismatch", null, version, digest, copies);
-        return found(await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable", null, version, digest, copies);
-      }
-      async latest(name2, owner, where2 = [], options = {}) {
-        const copies = await this.copies(name2, owner, where2, options);
-        const signed = copies.filter((c) => c.latestSigned).sort((a, b) => b.latestSigned - a.latestSigned);
-        if (!signed.length) {
-          const status = copies.length ? "not a version" : await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable";
-          return found(status, null, null, null, copies);
-        }
-        const top = signed[0];
-        const forks = signed.filter((c) => !top.agrees(c));
-        for (const c of forks) {
-          this.note("result", `a fork of the line ${top.id}: the copy at ${c.where} (latest signed v${c.latestSigned}) does not agree with the copy at ${top.where} (latest signed v${top.latestSigned}) (section 7.4)`);
-        }
-        if (forks.length) return found("fork", null, null, null, copies);
-        return found("verified", top, `v${top.latestSigned}`, top.digest(top.latestSigned), copies);
-      }
-      async documentVersion(name2, owner, n, where2 = [], options = {}) {
-        const latest = await this.latest(name2, owner, where2, options);
-        if (!latest.copy) return latest;
-        const c = latest.copy;
-        const objOf2 = (v) => c.line.objs.get(v) ?? null;
-        for (const h of historyOf(c.line.inv, objOf2, latest.version)) {
-          if (objOf2(h)?.documentVersion === n) {
-            const k = versionNumber(h);
-            return found(MEMBER_STATUS[c.status(k)] || "not a version", c, h, c.digest(k), latest.copies);
-          }
-        }
-        this.note("warning", `${c.id}: no document version ${n} in the history of ${latest.version}`);
-        return found("unavailable", null, null, null, latest.copies);
-      }
-      async resolve(text3, where2 = [], options = {}) {
-        const u = parseSheaf(text3, {
-          short: true,
-          fold: true
-        });
-        where2 = [
-          ...u.at ? [
-            u.at
-          ] : [],
-          ...where2
-        ];
-        if (u.owner === "*") throw new Error("a work, sheaf:<name>:*, is searched for (section 12.4), which the explorer does not do");
-        const [name2, owner] = await this.expand(u, where2, options);
-        if (name2 === owner) {
-          const id2 = objectId(owner, owner);
-          const log = await this.keyLog(owner, where2, options);
-          if (!log) return {
-            id: id2,
-            found: found("unavailable")
-          };
-          const side = log.side();
-          if (u.version === null) {
-            const v = side[side.length - 1];
-            return {
-              id: id2,
-              found: found("verified", null, `v${v.number}`, v.digest, [], log)
-            };
-          }
-          if (u.sha512 === null) {
-            if (u.version > side.length) return {
-              id: id2,
-              found: found("unavailable", null, null, null, [], log)
-            };
-            return {
-              id: id2,
-              found: found("verified", null, `v${u.version}`, side[u.version - 1].digest, [], log)
-            };
-          }
-          return {
-            id: id2,
-            found: await this.pin(owner, owner, `v${u.version}`, u.sha512, where2, options)
-          };
-        }
-        const id = objectId(name2, owner);
-        if (u.version === null) return {
-          id,
-          found: await this.latest(name2, owner, where2, options)
-        };
-        if (u.sha512 === null) return {
-          id,
-          found: await this.documentVersion(name2, owner, u.version, where2, options)
-        };
-        const copies = await this.copies(name2, owner, where2, options);
-        for (const c of copies) {
-          const k = c.find(u.sha512);
-          if (k === null) continue;
-          const held2 = c.obj(k)?.documentVersion;
-          if (held2 !== u.version) {
-            this.note("warning", `${id}: the version pinned holds document version ${held2}, not ${u.version}`);
-            return {
-              id,
-              found: found("mismatch", c, `v${k}`, u.sha512)
-            };
-          }
-          return {
-            id,
-            found: found(MEMBER_STATUS[c.status(k)] || "not a version", c, `v${k}`, u.sha512)
-          };
-        }
-        const status = copies.length ? "mismatch" : await this.tombstoned(id, where2, options) ? "removed" : "unavailable";
-        return {
-          id,
-          found: found(status, null, null, u.sha512, copies)
-        };
-      }
-      async expand(u, where2, options = {}) {
-        if (u.isComplete() && u.owner !== null) return [
-          u.name,
-          u.owner
-        ];
-        const candidates = /* @__PURE__ */ new Set();
-        for (const w of this.places(where2)) {
-          const archive = await this.source(w, options);
-          if (!archive) continue;
-          for (const o of archive.objects()) {
-            const name2 = typeof o.name === "string" ? o.name : "", owner = typeof o.owner === "string" ? o.owner : "";
-            if (!u.matches(name2, owner)) continue;
-            if (u.owner === null) {
-              if (o.kind === "owner" ? name2 !== owner : await this.originator(archive, o.id, options) !== owner) continue;
-            }
-            candidates.add(`${name2} ${owner}`);
-          }
-        }
-        if (candidates.size !== 1) {
-          const listed = [
-            ...candidates
-          ].sort().map((c) => `  sheaf:${c.replace(" ", ":")}`).join("\n");
-          throw new Error(`${u}: ` + (candidates.size ? "ambiguous, the candidates are:\n" + listed : "no line of that name in the archives read"));
-        }
-        return [
-          ...candidates
-        ][0].split(" ");
-      }
-      async originator(archive, id, options = {}) {
-        try {
-          const inv = await archive.headInventory(id, options);
-          const genesis = await archive.bytes(id, inv, "v1", "genesis.json", options);
-          return genesis ? (await readGenesis(genesis)).originator ?? null : null;
-        } catch (error) {
-          if (error?.kind === "aborted") throw error;
-          return null;
-        }
-      }
-      async describe(result, { presentCurrent = false } = {}, options = {}) {
-        const c = result.copy;
-        if (!c) return null;
-        const objOf2 = (v) => c.line.objs.get(v) ?? null;
-        const shown = presentCurrent ? historyOf(c.line.inv, objOf2, result.version).slice(-1)[0] || result.version : result.version;
-        const { obj, dc } = await c.archive.descriptions(c.id, c.line.inv, shown, options);
-        const latest = c.line.latest ? objOf2(c.line.latest) : null;
-        return {
-          version: shown,
-          title: titleOf(dc),
-          creators: creatorsOf(dc),
-          documentVersion: obj?.documentVersion ?? null,
-          status: latest?.status ?? null,
-          withdrawal: latest?.withdrawal ?? null,
-          archive: c.archive
-        };
-      }
-    };
   }
 });
 
@@ -18437,7 +20180,7 @@ async function syncMember(f, r, entry, kind, oldMembers) {
     uri: entry
   };
   const text3 = entry.uri || entry.label;
-  if (!text3) exit(`a member needs uri or label: ${pyRepr(entry)}`);
+  if (!text3) exit(`a member needs uri or label: ${pyRepr2(entry)}`);
   let at = entry.at || [];
   at = typeof at === "string" ? [
     at
@@ -18496,7 +20239,7 @@ async function syncMember(f, r, entry, kind, oldMembers) {
   }
   return m;
 }
-function pyRepr(entry) {
+function pyRepr2(entry) {
   return "{" + Object.entries(entry).map(([k, v]) => `'${k}': ${typeof v === "string" ? `'${v}'` : JSON.stringify(v)}`).join(", ") + "}";
 }
 var KINDS3, ORDERS, FORMAT, objOf;
@@ -18536,6 +20279,7 @@ init_schema();
 
 // core/keepers.js
 init_names();
+init_http();
 var KEEPER_FORMAT = "opensheaf-keeper/0.2";
 var CONFIRMED = "confirmed";
 var CLAIMED = "claimed only";
@@ -18564,7 +20308,7 @@ function fetchJsonWith(fetch2 = globalThis.fetch?.bind(globalThis)) {
     const data2 = new Uint8Array(await response.arrayBuffer());
     if (data2.length > 1 << 20) throw new KeeperUnreachable(`${url}: more than 1 MB`);
     try {
-      return JSON.parse(new TextDecoder().decode(data2));
+      return parseJson(data2, url);
     } catch {
       throw new KeeperUnreachable(`${url}: not JSON`);
     }
@@ -18595,6 +20339,7 @@ async function keeperLink(log, fetchJson = null) {
     successor
   });
   const orcid = keeper.startsWith("https://orcid.org/");
+  if (!orcid && !keeperDomain(keeper)) return link2(NOT_CHECKED, "not a DNS name (an address, localhost): not fetched");
   const url = orcid ? ORCID_API.replace("{}", keeper.slice(keeper.lastIndexOf("/") + 1)) : keeper + ".well-known/opensheaf";
   let data2;
   try {
@@ -18719,14 +20464,14 @@ function candidateWallets(config, env, owner = null) {
       WALLET
     ]
   ];
-  const out = hints(config, owner).map((w) => [
-    w,
-    CONFIG_FILE
-  ]);
-  const seen = new Set(out.map(([w]) => w));
-  for (const w of userWallets(env)) if (!seen.has(w)) out.push([
+  const out = userWallets(env).map((w) => [
     w,
     env.wallets.userConfigPath()
+  ]);
+  const seen = new Set(out.map(([w]) => w));
+  for (const w of hints(config, owner)) if (!seen.has(w)) out.push([
+    w,
+    CONFIG_FILE
   ]);
   return out;
 }
@@ -19121,9 +20866,9 @@ function keysFile({ keys = null, threshold = null, next = null, nextThreshold = 
   ];
   return jsonBytes(d);
 }
-async function extendInventory(prev, id, number, files, created, message2 = null, user = null) {
-  const v = `v${number}`;
-  if (prev.head !== `v${number - 1}` || prev.id !== id) throw new OwnerError(`${v} must follow v${number - 1} of ${id}`);
+async function extendInventory(prev, id, number2, files, created, message2 = null, user = null) {
+  const v = `v${number2}`;
+  if (prev.head !== `v${number2 - 1}` || prev.id !== id) throw new OwnerError(`${v} must follow v${number2 - 1} of ${id}`);
   const inv = JSON.parse(JSON.stringify(prev));
   const content = inv.contentDirectory || "content";
   inv.head = v;
@@ -19162,7 +20907,12 @@ async function checked(log) {
   log.checked = null;
   return log.check();
 }
+var ORPHAN_HELP = "an earlier write of the key log was interrupted before its root inventory was replaced; osheaf owner complete settles it (it completes a signed version, removes an unsigned one), and signing another version of that number would fork the key log (section 6.3)";
+function refuseOrphan(log) {
+  if (log.orphan) throw new OwnerError(`v${log.orphan.number} of the key log of ${log.owner} is on disk after its head: ${ORPHAN_HELP}`);
+}
 async function prepare(log, signers2) {
+  refuseOrphan(log);
   const { errors } = await checked(log);
   if (errors.length) throw new OwnerError("the key log has errors: " + errors.join("; "));
   if (log.ended) throw new OwnerError(`the owner ${log.owner} has ended (section 6.3): nothing is signed for it`);
@@ -19177,6 +20927,7 @@ async function prepare(log, signers2) {
   return prev;
 }
 async function append(log, version) {
+  refuseOrphan(log);
   log.versions.push(version);
   const { errors } = await checked(log);
   if (errors.length) {
@@ -19393,8 +21144,32 @@ async function loadKeyLog(storage, dir, where2 = dir) {
   }
   const log = await KeyLog.of(versions2[0].files.get(GENESIS), versions2, problems);
   if (rootInv.id !== log.id) problems.push(`the identifier of the object is not ${log.id}, that of the owner its genesis record names`);
+  log.orphan = await readOrphan(storage, dir, head + 1);
   await log.check();
   return log;
+}
+async function readOrphan(storage, dir, n) {
+  const vdir = joinPath(dir, `v${n}`);
+  if (await storage.kind(vdir) !== "dir") return null;
+  const invBytes = await storage.read(joinPath(vdir, "inventory.json")) || new Uint8Array();
+  const sc = await storage.read(joinPath(vdir, "inventory.json.sha512")) || new Uint8Array();
+  const files = /* @__PURE__ */ new Map();
+  const entry = jsonOrNull(invBytes);
+  const state = entry?.versions?.[`v${n}`]?.state;
+  if (isObject(state) && isObject(entry.manifest)) {
+    for (const [d, paths] of Object.entries(state)) {
+      const cp = entry.manifest[d]?.[0];
+      if (!Array.isArray(paths) || !contentPath2(cp, entry, n)) continue;
+      const bytes = await storage.read(joinPath(dir, cp));
+      if (bytes) for (const p of paths) files.set(p, bytes);
+    }
+  }
+  const witnesses = /* @__PURE__ */ new Map();
+  const wdir = joinPath(dir, WITNESSES, `v${n}`);
+  for (const { name: name2, kind } of await storage.list(wdir) || []) {
+    if (kind === "file") witnesses.set(name2, await storage.read(joinPath(wdir, name2)));
+  }
+  return Version.make(n, files, invBytes, sc, witnesses);
 }
 
 // core/passkey.js
@@ -19692,9 +21467,9 @@ function link(u, label, cls = "") {
   if (safe) return `<a${attr} href="${esc(safe)}">${label}</a>`;
   return cls ? `<span${attr}>${label}</span>` : label;
 }
+var PLACEHOLDER = /\{\{([A-Za-z0-9_]+)\}\}/g;
 function fill(text3, values) {
-  for (const [k, v] of Object.entries(values)) text3 = text3.split(`{{${k}}}`).join(v);
-  return text3;
+  return text3.replace(PLACEHOLDER, (all, k) => Object.hasOwn(values, k) ? values[k] : all);
 }
 var MONTHS = [
   "January",
@@ -19780,6 +21555,21 @@ function lastPin(m) {
     p.version,
     p.pin
   ];
+}
+var PIN = /^[0-9a-f]{128}$/;
+var OBJECT_VERSION = /^v[1-9][0-9]*$/;
+var DAY = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+function number(n) {
+  return Number.isInteger(n) && n > 0 ? String(n) : "?";
+}
+function pinHtml(pin) {
+  if (typeof pin === "string" && PIN.test(pin)) return `<span class="pin" title="${pin}">pin ${pin.slice(0, 32)}\u2026</span>`;
+  return '<span class="contested">no valid pin</span>';
+}
+function pinsOk(m, line = null) {
+  if (m === null || typeof m !== "object" || Object.hasOwn(m, "revisions") && !Array.isArray(m.revisions)) return false;
+  const pins = memberPins(m);
+  return pins.length > 0 && pins.every(({ version: v, pin: d }) => typeof v === "string" && OBJECT_VERSION.test(v) && typeof d === "string" && PIN.test(d) && (line === null || Object.hasOwn(line.inv.versions, v)));
 }
 async function pageAddress(f, id) {
   return f.labelOf(id) || nameAddress(f, id);
@@ -19885,10 +21675,10 @@ function withdrawalHtml(state, where2 = "") {
 }
 function versionsLine(m, obj) {
   if (m.revisions?.length) {
-    const ns = m.revisions.map((r) => String(r.documentVersion));
+    const ns = m.revisions.map((r) => number(r?.documentVersion));
     return `vetted: version${ns.length > 1 ? "s" : ""} ${ns.join(", ")}`;
   }
-  return `version ${obj.documentVersion}`;
+  return `version ${number(obj.documentVersion)}`;
 }
 async function versionBlock(f, line, ver, shown, notices, root, vetted2 = null) {
   const obj = await line.json(OBJ2, ver);
@@ -19901,7 +21691,7 @@ async function versionBlock(f, line, ver, shown, notices, root, vetted2 = null) 
   if (par && (vs.indexOf(first) === 0 || !same(line.objOf(vs[vs.indexOf(first) - 1])?.parent ?? null, par))) {
     labels2.unshift(`the parent's version ${par.documentVersion}`);
   }
-  let head = `Version ${n}` + (labels2.length ? ` (${esc(labels2.join(", "))})` : "");
+  let head = `Version ${number(n)}` + (labels2.length ? ` (${esc(labels2.join(", "))})` : "");
   if (obj.stage) head += ` <span class="stage">${esc(obj.stage.value)}</span>`;
   if (vetted2 !== null && vetted2.has(n)) head += ' <span class="current">vetted</span>';
   else if (vetted2 === null && n === shown) head += ' <span class="current">current</span>';
@@ -19936,7 +21726,7 @@ async function versionBlock(f, line, ver, shown, notices, root, vetted2 = null) 
   }
   if (dc.doi) files.push(`<a href="https://doi.org/${esc(dc.doi)}">doi:${esc(dc.doi)}</a>`);
   const out = [
-    `<li class="version${n === shown ? " is-current" : ""}" id="v${n}">`,
+    `<li class="version${n === shown ? " is-current" : ""}" id="v${number(n)}">`,
     `<div class="version-head">${head}</div>`
   ];
   if (when) out.push(`<div class="version-date">${esc(when)}</div>`);
@@ -20182,7 +21972,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
     while (queue.length) {
       const qm = queue.shift();
       const line = await site.held(qm);
-      if (!line) continue;
+      if (!line || !pinsOk(qm, line)) continue;
       if (!pages.has(line.id)) pages.set(line.id, qm);
       if (qm.kind === "collection" && !followed.has(line.id)) {
         followed.add(line.id);
@@ -20261,7 +22051,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
       versions: blocks.join("\n"),
       licence: licence2,
       cite: cite2,
-      pin,
+      pin: esc(pin),
       pin_url: `${root}ocfl/${at}/${pinVer}/inventory.json`,
       sheaf_uri: esc(fullUri(line)),
       sheaf_short: esc(shortUri(line)),
@@ -20291,7 +22081,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
         ...common,
         authors: esc(authorsOf(dc)),
         abstract: abstractHtml(dc),
-        pdf: esc(await fileUrl(f, root, line, cur, pdfOf(obj)) || `#v${obj.documentVersion}`),
+        pdf: esc(await fileUrl(f, root, line, cur, pdfOf(obj)) || `#v${number(obj.documentVersion)}`),
         html_link: htmlLink
       });
     }
@@ -20302,7 +22092,8 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
       await f.storage.write(`paper/${address}/index.html`, new TextEncoder().encode(page));
       written.push(address);
     }
-    const lastmod = line.inv.versions[line.inv.head].created.slice(0, 10);
+    let lastmod = String(line.inv.versions[line.inv.head].created ?? "").slice(0, 10);
+    lastmod = DAY.test(lastmod) ? lastmod : null;
     urls.push([
       `${base}paper/${line.slug}/`,
       lastmod
@@ -20474,6 +22265,7 @@ ${body}`).join("");
 async function localEntry(site, m, root = "", showOwner = false) {
   const f = site.f;
   const line = await site.held(m);
+  if (!pinsOk(m, line)) return remoteEntry(site, m, root, showOwner);
   const cur = presentedVersion(m, line.inv, line.objOf);
   const [pinVer, pin] = lastPin(m);
   const obj = await line.json(OBJ2, cur);
@@ -20490,7 +22282,7 @@ async function localEntry(site, m, root = "", showOwner = false) {
     `<li class="paper${line.withdrawn ? " withdrawn" : ""}">`,
     `<a class="paper-title" href="${root}paper/${line.slug}/">${esc(dc.titles[0].title)}</a>`,
     `<div class="paper-authors">${esc(authorsOf(dc))}</div>`,
-    `<div class="paper-meta">${esc((issued || "").slice(0, 4))}` + (showOwner ? ` \xB7 ${await ownerTag(site, m.owner, root)}` : "") + ` \xB7 ${versionsLine(m, obj)}` + (pdf ? ` \xB7 <a href="${esc(pdf)}">PDF</a>` : "") + (contested ? ' \xB7 <span class="contested">contested</span>' : "") + ` \xB7 <span class="pin" title="${pin}">pin ${pin.slice(0, 32)}\u2026</span></div>`,
+    `<div class="paper-meta">${esc((issued || "").slice(0, 4))}` + (showOwner ? ` \xB7 ${await ownerTag(site, m.owner, root)}` : "") + ` \xB7 ${versionsLine(m, obj)}` + (pdf ? ` \xB7 <a href="${esc(pdf)}">PDF</a>` : "") + (contested ? ' \xB7 <span class="contested">contested</span>' : "") + ` \xB7 ${pinHtml(pin)}</div>`,
     abstract ? `<details><summary>${summary}</summary>${abstract}</details>` : "",
     "</li>"
   ].join("\n");
@@ -20499,14 +22291,15 @@ async function remoteEntry(site, m, root = "", showOwner = false) {
   const cite2 = m.cite || {};
   let title = cite2.title || m.name, by = namesJoined(cite2.creators || []);
   const year = cite2.year ?? "";
-  const pin = lastPin(m)[1];
+  const pin = pinsOk(m) ? lastPin(m)[1] : null;
   const links = [];
   let abstract = "", landing = "", withdrawn = "";
-  let at = (m.at?.length ? m.at : [
+  let at = (Array.isArray(m.at) && m.at.length ? m.at : [
     ""
   ])[0];
+  at = typeof at === "string" ? at : "";
   let archiveName = at;
-  const view = await remoteView(site, m);
+  const view = pin ? await remoteView(site, m) : null;
   if (view === null) {
     links.push('<span class="missing">archive unavailable: cached citation</span>');
   } else if (view.mismatch) {
@@ -20521,7 +22314,7 @@ async function remoteEntry(site, m, root = "", showOwner = false) {
     `<li class="paper member${withdrawn ? " withdrawn" : ""}">`,
     link(landing, esc(title), "paper-title"),
     `<div class="paper-authors">${esc(by)}</div>`,
-    `<div class="paper-meta">${esc(String(year))}` + (showOwner ? ` \xB7 ${await ownerTag(site, m.owner, root)}` : "") + ` \xB7 in ${link(at, esc(archiveName))}` + (m.revisions ? ` \xB7 ${versionsLine(m, {})}` : "") + (links.length ? " \xB7 " + links.join(" \xB7 ") : "") + ` \xB7 <span class="pin" title="${pin}">pin ${pin.slice(0, 32)}\u2026</span></div>`,
+    `<div class="paper-meta">${esc(String(year))}` + (showOwner ? ` \xB7 ${await ownerTag(site, m.owner, root)}` : "") + ` \xB7 in ${link(at, esc(archiveName))}` + (m.revisions ? ` \xB7 ${versionsLine(m, {})}` : "") + (links.length ? " \xB7 " + links.join(" \xB7 ") : "") + ` \xB7 ${pinHtml(pin)}</div>`,
     withdrawn,
     abstract ? `<details><summary>Abstract</summary>${abstract}</details>` : "",
     "</li>"
@@ -20548,7 +22341,7 @@ async function remoteSource(site, at) {
       };
       const raw = await get("opensheaf.json");
       if (raw === null) throw new Error("no discovery document");
-      const disc = JSON.parse(new TextDecoder().decode(raw));
+      const disc = parseJson(raw, url + "opensheaf.json");
       if (disc === null || typeof disc !== "object" || disc.specification !== "0.2") throw new Error("not 0.2");
       if (Object.hasOwn(disc, "objectPages")) disc.objects = await listedObjects(disc, get);
       const root = disc.storageRoot ?? "ocfl/";
@@ -20567,9 +22360,11 @@ async function remoteSource(site, at) {
   return site.remotes.get(at);
 }
 async function remoteView(site, m) {
+  if (!pinsOk(m) || !Array.isArray(m.at) || (site.lookedUp ?? 0) >= LIMITS.pins) return null;
+  site.lookedUp = (site.lookedUp ?? 0) + 1;
   const id = objectId(m.name, m.owner);
   const [pinVer, pin] = lastPin(m);
-  for (const at of m.at || []) {
+  for (const at of m.at.filter((x) => typeof x === "string").slice(0, LIMITS.mirrors)) {
     try {
       const src = await remoteSource(site, at);
       const path = src.root + (await pathOf(id, src.disc.storageLayout)).join("/");
@@ -20584,13 +22379,13 @@ async function remoteView(site, m) {
         ...view,
         mismatch: true
       };
-      const inv = JSON.parse(new TextDecoder().decode(data2));
+      const inv = parseJson(data2);
       const read = async (ver, logical, from = inv) => {
         const dig = Object.entries(from.versions[ver].state).find(([, ps]) => ps.includes(logical))?.[0] ?? null;
         const cp2 = dig ? from.manifest[dig][0] : null;
         const raw = cp2 && safePath(cp2) ? await src.get(`${path}/${cp2}`) : null;
         if (raw !== null && await sha512hex(raw) !== dig) throw new Error(`${cp2}: not the file its inventory names`);
-        return raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
+        return raw ? parseJson(raw) : null;
       };
       let shown;
       if (m.revisions) {
@@ -20601,7 +22396,10 @@ async function remoteView(site, m) {
           shown = hist[hist.length - 1];
         } else {
           const last = /* @__PURE__ */ new Map();
-          for (let k = 1; k <= Number(pinVer.slice(1)); k++) {
+          if (inv.head !== pinVer || !inv.versions || Object.keys(inv.versions).length !== Number(pinVer.slice(1))) {
+            throw new Error(`the inventory pinned is not that of ${pinVer}`);
+          }
+          for (let k = 1; k <= Object.keys(inv.versions).length; k++) {
             const o = Object.hasOwn(inv.versions, `v${k}`) ? await read(`v${k}`, OBJ2) : null;
             if (o) last.set(o.documentVersion, `v${k}`);
           }
@@ -20615,7 +22413,7 @@ async function remoteView(site, m) {
       if (cp && safePath(cp) && src.at) view.pdf = `${src.at}${path}/${cp}`;
       const entry = (src.disc.objects || []).find((o) => o && typeof o === "object" && o.id === id) || {};
       if (entry.status === "withdrawn") {
-        const rootInv = JSON.parse(new TextDecoder().decode(await src.get(`${path}/inventory.json`) || new TextEncoder().encode("{}")));
+        const rootInv = parseJson(await src.get(`${path}/inventory.json`) || new TextEncoder().encode("{}"));
         const state = rootInv.versions ? await read(rootInv.head ?? pinVer, OBJ2, rootInv) : null;
         view.state = state?.status === "withdrawn" ? state : {
           status: "withdrawn"
@@ -20845,8 +22643,11 @@ async function ownerInit(f, args, { done = true } = {}) {
   if (!(nextThreshold >= 1 && nextThreshold <= nRot) || !(threshold >= 1 && threshold <= 1 + others.length)) {
     stop("a threshold is at least 1, and at most the number of keys (section 6.1, rule 1)");
   }
-  if (args.keeper && !keeperValid(args.keeper)) {
+  if (args.keeper && !keeperValid(args.keeper, true)) {
     stop(`a keeper is an ORCID iD (with its check digit) or https://<domain>/: ${args.keeper}`);
+  }
+  if (args.print && !args.export) {
+    stop("--print prints the sheets of the rotation keys exported with --export DIR: give --export DIR with it (in a wallet, the keys are not exported, and no sheet is printed)");
   }
   const w = await levelWallet(f, args);
   if (!w && !args.export) {
@@ -20921,6 +22722,20 @@ owners/**      -text -filter -ident -working-tree-encoding -export-subst -merge
 sha512/**      -text -filter -ident -working-tree-encoding -export-subst -merge
 *.pdf binary
 `;
+var GITIGNORE = [
+  "texmacs_home/",
+  ".staging-*"
+];
+async function keepOutOfGit(storage) {
+  const bytes = await storage.kind(".gitignore") === "file" ? await storage.read(".gitignore") : null;
+  const ignore = bytes ? new TextDecoder().decode(bytes) : "";
+  const lines2 = ignore.split(/\r\n|\r|\n/);
+  const missing = GITIGNORE.filter((x) => !lines2.includes(x));
+  if (missing.length) {
+    await writeText(storage, ".gitignore", ignore + (ignore && !ignore.endsWith("\n") ? "\n" : "") + missing.map((x) => `${x}
+`).join(""));
+  }
+}
 async function init(storage, env, args, where2) {
   for (const n of CONFIG_NAMES) if (await storage.kind(n)) exit(`${where2} has a configuration already`);
   const layout = LAYOUTS[args.layout || "owner-name"];
@@ -20997,6 +22812,7 @@ async function init(storage, env, args, where2) {
   if (args.newOwner && walletConfig(args, log.owner)) cfg.keys = walletConfig(args, log.owner);
   await writeText(storage, CONFIG_NAME, jsonText(cfg));
   if (!await storage.kind(".gitattributes")) await writeText(storage, ".gitattributes", GITATTRIBUTES);
+  await keepOutOfGit(storage);
   for (const name2 of TEMPLATES) {
     if (!await storage.kind(`templates/${name2}`)) await storage.write(`templates/${name2}`, await env.template(name2));
   }
@@ -21275,7 +23091,7 @@ async function walletEntries(w, owner) {
   }
 }
 async function walletPassphrase(env, w, owner) {
-  if (env.passphrase.known?.()) return env.passphrase({
+  if (env.passphrase.known?.(w.name)) return env.passphrase({
     where: w.name
   });
   let texts = [];
@@ -21784,1557 +23600,8 @@ init_discovery();
 // core/check.js
 init_http();
 init_archive();
-
-// core/verify.js
-init_http();
-init_archive();
-init_versions();
-init_paths();
-
-// core/rules.js
-init_schema();
-init_versions();
-init_names();
-function finding(level2, place3, message2, { object = null, ver = null } = {}) {
-  const section = /\(sections? ([0-9A-Z][^)]*)\)/.exec(message2)?.[1]?.split(/,| and /)[0].trim() ?? null;
-  return {
-    level: level2,
-    place: place3,
-    message: message2,
-    object,
-    ver,
-    section,
-    text: `${place3}: ${message2}`
-  };
-}
-function schemaFindings(place3, data2, schema4, level2 = "error", context = {}) {
-  if (!schema4) return [];
-  return validate(schema4, data2).map((e) => finding(level2, place3, `${e.path ? e.path + ": " : ""}${e.message}`, context));
-}
-function descriptionErrors(inv, ver, obj, dc) {
-  const out = [];
-  const logical = Object.keys(filesOf(inv, ver));
-  if (!isObject(obj) || !isObject(dc)) return out;
-  if (String(obj.documentVersion) !== dc.version) out.push("datacite.json and object.json disagree on the version");
-  if (obj.status === "withdrawn" && dateOf(dc, "Withdrawn") !== (obj.withdrawal?.date ?? null)) out.push("withdrawal dates disagree");
-  for (const k of [
-    "titles",
-    "creators",
-    "publicationYear",
-    "types",
-    "version",
-    "publisher"
-  ]) {
-    if (!Object.hasOwn(dc, k)) out.push(`datacite.json lacks ${k}`);
-  }
-  if (!(Array.isArray(dc.rightsList) ? dc.rightsList.length : dc.rightsList)) {
-    out.push("datacite.json has no licence or rights statement in rightsList (section 4.4)");
-  }
-  for (const r of Array.isArray(dc.rightsList) ? dc.rightsList : []) {
-    const ident = r?.rightsIdentifier;
-    if (ident == null) continue;
-    if (r?.rightsIdentifierScheme !== "SPDX") {
-      out.push(`rightsList: ${ident} is not given as an SPDX identifier (section 4.4)`);
-    } else if (String(ident) !== String(ident).toLowerCase()) {
-      out.push(`rightsList: ${ident} is not in lower case (section 4.4)`);
-    }
-  }
-  const notes = [
-    obj.changes,
-    obj.sourcesMissing,
-    obj.licence,
-    ...Array.isArray(obj.notices) ? obj.notices : [],
-    obj.withdrawal?.reason
-  ];
-  for (const note of notes) {
-    if (note?.path && !logical.includes(note.path)) out.push(`note file ${note.path} not in the version`);
-  }
-  if (obj.kind === "document") {
-    if (obj.mainSource && !logical.includes(obj.mainSource)) out.push("main source not in the version");
-    if (obj.sourcesMissing && obj.mainSource) out.push("sourcesMissing together with a main source");
-  } else if (obj.kind === "collection" && !logical.includes("members.json")) {
-    out.push("collection without members.json");
-  }
-  for (const r of Array.isArray(obj.renditions) ? obj.renditions : []) {
-    if (!logical.includes(r?.path)) out.push(`rendition ${r?.path} not in the version`);
-  }
-  return out;
-}
-function memberErrors(type, m) {
-  const out = [];
-  if (type === "catalogue" && (!m?.version || !m?.inventorySha512 || isObject(m) && Object.hasOwn(m, "revisions"))) {
-    out.push("a member of a catalogue needs version and inventorySha512, and no revisions");
-  }
-  if (type === "selection") {
-    const revs = m?.revisions;
-    if ([
-      "version",
-      "inventorySha512",
-      "follow"
-    ].some((k) => isObject(m) && Object.hasOwn(m, k))) {
-      out.push("a member of a selection has no version, inventorySha512 or follow");
-    }
-    if (!Array.isArray(revs) || !revs.length || revs.some((r) => ![
-      "documentVersion",
-      "version",
-      "inventorySha512"
-    ].every((k) => r?.[k]))) {
-      out.push("a member of a selection needs revisions, each with documentVersion, version and inventorySha512");
-    } else if (new Set(revs.map((r) => r.documentVersion)).size !== revs.length) {
-      out.push("a document version is vetted twice");
-    }
-  }
-  return out;
-}
-function memberPins2(m) {
-  if (isObject(m) && Object.hasOwn(m, "revisions")) {
-    return (Array.isArray(m.revisions) ? m.revisions : []).map((r) => ({
-      version: r?.version,
-      pin: r?.inventorySha512,
-      documentVersion: r?.documentVersion ?? null
-    }));
-  }
-  return [
-    {
-      version: m?.version,
-      pin: m?.inventorySha512,
-      documentVersion: null
-    }
-  ];
-}
-var INDEX_KEY2 = {
-  names: "name",
-  owners: "owner",
-  sha512: "inventorySha512"
-};
-function indexEntries2(objects) {
-  const out = {
-    names: [],
-    owners: [],
-    sha512: []
-  };
-  const lines2 = /* @__PURE__ */ new Map();
-  for (const o of objects) {
-    const [, name2, owner] = o.id.split(":");
-    const entry = {
-      name: name2,
-      owner,
-      id: o.id,
-      status: o.status,
-      originator: o.rec.kind === "owner" ? owner : o.rec.originator ?? null,
-      genesis: new TextDecoder().decode(o.genesis)
-    };
-    if (o.label) entry.label = o.label;
-    out.names.push(entry);
-    if (!lines2.has(owner)) lines2.set(owner, []);
-    lines2.get(owner).push(name2);
-    o.sidecars.forEach((digest, k) => {
-      if (digest !== null) out.sha512.push({
-        inventorySha512: digest,
-        id: o.id,
-        version: `v${k + 1}`,
-        status: o.status
-      });
-    });
-    for (const c of o.carried || []) {
-      out.sha512.push({
-        inventorySha512: c.digest,
-        id: o.id,
-        version: `v${c.number}`,
-        status: "active"
-      });
-    }
-  }
-  out.owners = [
-    ...lines2
-  ].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([owner, names]) => ({
-    owner,
-    names: names.sort()
-  }));
-  return out;
-}
-
-// core/verify.js
-init_names();
-init_owners();
-init_signatures();
-
-// core/branches.js
-init_http();
-init_names();
-init_owners();
-init_signatures();
-init_versions();
-var INCONSISTENT = "inconsistent";
-var CONFIRMED2 = "confirmed";
-var UNCHECKED2 = "unchecked";
-var ORDER2 = {
-  [CONFIRMED2]: 0,
-  [UNCHECKED2]: 1,
-  [INCONSISTENT]: 2
-};
-var MAX_DEPTH = 64;
-function level(digests, read) {
-  return {
-    digests,
-    read,
-    sub(prefix) {
-      const below = /* @__PURE__ */ new Map();
-      for (const [p, d] of digests) if (p.startsWith(prefix)) below.set(p.slice(prefix.length), d);
-      return level(below, (p) => read(prefix + p));
-    },
-    async json(path) {
-      return digests.has(path) ? jsonOrNull(await read(path)) : null;
-    }
-  };
-}
-function levelOfVersion(archive, id, inv, ver, options = {}) {
-  const digests = new Map(Object.entries(filesOf(inv, ver)));
-  return level(digests, (p) => archive.bytes(id, inv, ver, p, options));
-}
-async function verdict(lv, obj, genesis, logs, depth = 0) {
-  const p = obj?.parent;
-  if (!isObject(p)) return [
-    INCONSISTENT,
-    [
-      "object.json has no parent"
-    ]
-  ];
-  if (depth > MAX_DEPTH) return [
-    UNCHECKED2,
-    [
-      `the chain is not followed beyond ${MAX_DEPTH} levels`
-    ]
-  ];
-  const problems = [];
-  let rec;
-  try {
-    rec = await readGenesis(genesis);
-  } catch (error) {
-    return [
-      INCONSISTENT,
-      [
-        `genesis.json: ${error.message}`
-      ]
-    ];
-  }
-  const name2 = typeof obj.name === "string" ? obj.name : "", pname = typeof p.name === "string" ? p.name : "";
-  if (!await isNameOf(name2, genesis) || !await isNameOf(pname, genesis)) {
-    problems.push("the name and parent.name are not names of genesis.json (section 5.2)");
-  } else if (name2 !== pname && algorithm(name2) <= algorithm(pname)) {
-    problems.push("a branch renamed after a clash has a greater algorithm number than parent.name (section 5.3)");
-  }
-  const pinvBytes = lv.digests.has("parent/inventory.json") ? await lv.read("parent/inventory.json") : null;
-  const pinv = jsonOrNull(pinvBytes);
-  const pobjBytes = lv.digests.has("parent/object.json") ? await lv.read("parent/object.json") : null;
-  const pobj = jsonOrNull(pobjBytes);
-  if (!isObject(pinv) || !isObject(pobj)) {
-    return [
-      INCONSISTENT,
-      [
-        ...problems,
-        "parent/inventory.json or parent/object.json is missing (section 9.2)"
-      ]
-    ];
-  }
-  if (await sha512(pinvBytes) !== p.inventorySha512 || pinv.head !== p.objectVersion) {
-    problems.push("parent/inventory.json is not the inventory the pin of parent names");
-  }
-  const pstate = /* @__PURE__ */ new Map();
-  const state = pinv.versions?.[pinv.head]?.state;
-  for (const [d, paths] of Object.entries(isObject(state) ? state : {})) {
-    for (const path of Array.isArray(paths) ? paths : []) pstate.set(path, d);
-  }
-  if (!pstate.has("object.json") || pstate.get("object.json") !== await sha512(pobjBytes)) {
-    problems.push("parent/object.json is not the object.json the parent inventory records");
-  }
-  if (depth === 0) {
-    const own2 = [
-      "datacite.json",
-      "object.json",
-      ...(Array.isArray(obj.notices) ? obj.notices : []).map((n) => n?.path).filter((x) => typeof x === "string")
-    ];
-    for (const [path, d] of pstate) {
-      if (own2.includes(path) || isEvidence(path)) continue;
-      if (lv.digests.get(path) !== d) problems.push(`${path}: a file of the parent version is missing, or differs (section 9.3)`);
-    }
-    for (const path of lv.digests.keys()) {
-      if (!own2.includes(path) && !isEvidence(path) && !pstate.has(path)) problems.push(`${path}: not a file of the parent version (section 9.3)`);
-    }
-  }
-  if (p.owner !== pobj.owner || p.name !== pobj.name || p.documentVersion !== pobj.documentVersion) {
-    problems.push("parent does not agree with parent/object.json");
-  }
-  if (obj.owner === p.owner || obj.owner === rec.originator) {
-    problems.push("the owner of a branch is neither the parent's owner nor the originator (section 9.3)");
-  }
-  if (!(p.owner === rec.originator && !("parent" in pobj) || "parent" in pobj)) {
-    problems.push("the parent is the originator's line, or a branch with its own parent (section 9.3)");
-  }
-  const log = await logs(p.owner);
-  if (log) await log.check();
-  const pid = NAME.test(pname) && OWNER_NAME.test(p.owner || "") ? objectId(pname, p.owner) : null;
-  if (pid === null) return [
-    INCONSISTENT,
-    [
-      ...problems,
-      "parent does not name a line"
-    ]
-  ];
-  const witnesses = /* @__PURE__ */ new Map();
-  for (const path of lv.digests.keys()) {
-    const rest = path.slice("parent/signatures/".length);
-    if (path.startsWith("parent/signatures/") && !rest.includes("/")) witnesses.set(rest, await lv.read(path));
-  }
-  const judgements = await judgeFolder(witnesses, {
-    objectId: pid,
-    version: p.objectVersion,
-    inventory: p.inventorySha512,
-    owner: p.owner,
-    lookup: log ? (n, d) => log.lookup(n, d) : () => null
-  });
-  const status = lineStatuses([
-    judgements
-  ], log ? {
-    exposed: log.exposedKeys(),
-    forkPoint: log.forkPoint
-  } : {})[0];
-  if (status === UNSIGNED || status === INVALID) problems.push(`the parent version is not a version: ${status} (sections 7.3 and 9.3)`);
-  let result = status === SIGNED || status === VOUCHED ? CONFIRMED2 : UNCHECKED2;
-  const notes = result === CONFIRMED2 ? [] : [
-    `the parent version is ${status} (section 9.3)`
-  ];
-  if (problems.length) return [
-    INCONSISTENT,
-    problems
-  ];
-  if ("parent" in pobj) {
-    const inner = lv.sub("parent/");
-    const chain = level(new Map([
-      ...inner.digests
-    ].filter(([path]) => isEvidence(path))), inner.read);
-    const evidence = new Map([
-      ...pstate
-    ].filter(([path]) => isEvidence(path)));
-    if (chain.digests.size !== evidence.size || [
-      ...evidence
-    ].some(([path, d]) => chain.digests.get(path) !== d)) {
-      return [
-        INCONSISTENT,
-        [
-          "parent/parent/ is not the evidence of the parent version (section 9.3)"
-        ]
-      ];
-    }
-    const [sub, more] = await verdict(chain, pobj, genesis, logs, depth + 1);
-    if (sub === INCONSISTENT) return [
-      INCONSISTENT,
-      more.map((m) => `parent/parent/: ${m}`)
-    ];
-    notes.push(...more.map((m) => `parent/parent/: ${m}`));
-    if (ORDER2[sub] > ORDER2[result]) result = sub;
-  }
-  return [
-    result,
-    notes
-  ];
-}
-
-// core/verify.js
-init_resolve();
-init_schema();
-var Report = class {
-  constructor(archive, options) {
-    this.archive = archive;
-    this.options = options;
-    this.findings = [];
-    this.stats = {
-      objects: 0,
-      versions: 0,
-      pins: 0,
-      files: 0,
-      filesBytes: 0
-    };
-    this.started = /* @__PURE__ */ new Date();
-    this.finished = null;
-    this.cancelled = false;
-    this.requests = 0;
-    this.bytesRead = 0;
-    this.listeners = /* @__PURE__ */ new Set();
-  }
-  add(...found2) {
-    for (const f of found2) {
-      this.findings.push(f);
-      for (const listen of this.listeners) listen(f);
-    }
-  }
-  counts() {
-    const counts = {
-      error: 0,
-      warning: 0,
-      result: 0
-    };
-    for (const f of this.findings) counts[f.level]++;
-    return counts;
-  }
-  text() {
-    const lines2 = this.findings.map((f) => `${f.level}: ${f.text}`);
-    const c = this.counts();
-    return [
-      ...lines2,
-      (c.error ? `${c.error} error(s)` : "OK") + `, ${c.warning} warning(s), ${c.result} result(s)`
-    ].join("\n");
-  }
-};
-async function verify(given, { schemas: schemas2, remote = true, digests = false, signal, progress = () => {
-}, onFinding, pages = true } = {}) {
-  const report = new Report(given, {
-    remote,
-    digests
-  });
-  if (onFinding) report.listeners.add(onFinding);
-  const http = given.http.another({
-    budget: null
-  });
-  const options = {
-    signal
-  };
-  const aborted = (e) => e?.kind === "aborted" || signal?.aborted;
-  const add2 = (level2, place3, message2, context) => report.add(finding(level2, place3, message2, context));
-  const schema4 = (place3, data2, format, level2 = "error", context = {}) => report.add(...schemaFindings(place3, data2, schemas2[`opensheaf-${format}/0.2`], level2, context));
-  let archive;
-  try {
-    archive = await Archive.open(http, given.base, options);
-    archive.lister = given.lister ?? null;
-    archive.unlisted = given.unlisted ?? [];
-    report.archive = archive;
-    if (archive.old) {
-      add2("error", "archive", "specification 0.1: rebuild (section 16.1)");
-    } else {
-      const v = new Verification(archive, {
-        report,
-        add: add2,
-        schema: schema4,
-        options,
-        aborted,
-        remote,
-        digests,
-        progress,
-        http,
-        pages
-      });
-      await v.run();
-    }
-  } catch (error) {
-    if (!aborted(error)) throw error;
-    report.cancelled = true;
-  }
-  report.finished = /* @__PURE__ */ new Date();
-  report.requests = http.requests;
-  report.bytesRead = http.bytesRead;
-  return report;
-}
-var Verification = class {
-  constructor(archive, context) {
-    Object.assign(this, context);
-    this.archive = archive;
-    this.found = /* @__PURE__ */ new Map();
-    this.logs = /* @__PURE__ */ new Map();
-    this.statuses = /* @__PURE__ */ new Map();
-    this.tombstoned = new Set(archive.tombstones().map((t) => t.id));
-    this.resolver = context.remote ? new Resolver(context.http, archive) : null;
-  }
-  where(id) {
-    return this.archive.where(id);
-  }
-  async run() {
-    const a = this.archive;
-    this.schema("opensheaf.json", a.disc, "archive");
-    for (const problem of a.pageProblems || []) this.add("error", "opensheaf.json", problem);
-    for (const { path, page } of a.pages || []) this.schema(path, page, "objects");
-    await this.storageRoot();
-    const ids = [
-      ...a.objects().map((o) => o.id),
-      ...a.drafts().map((d) => d.id),
-      ...a.unlisted || []
-    ];
-    const entries = [
-      ...new Set(ids)
-    ].slice(0, LIMITS.objects);
-    if (ids.length > entries.length) this.add("warning", "opensheaf.json", `lists more than ${LIMITS.objects} objects: only the first ${LIMITS.objects} are checked (section 15.2)`);
-    let done = 0;
-    const atOnce = pool(4);
-    this.progress({
-      phase: "objects",
-      done,
-      total: entries.length
-    });
-    await Promise.all(entries.map((id) => atOnce(async () => {
-      if (this.options.signal?.aborted) return;
-      await this.objectStorage(id);
-      this.report.stats.objects++;
-      this.progress({
-        phase: "objects",
-        done: ++done,
-        total: entries.length,
-        current: id
-      });
-    })));
-    this.cancelled();
-    await this.keyLogs();
-    await this.lines();
-    await this.archiveAsAWhole();
-    await this.indexes();
-    if (this.pages) await this.presentation();
-    if (this.digests) await this.contentDigests();
-    for (const { level: level2, message: message2 } of this.resolver?.notes || []) this.add(level2, "resolution", message2);
-  }
-  cancelled() {
-    if (this.options.signal?.aborted) throw this.options.signal.reason;
-  }
-  async fetchOrNull(url, limit = LIMITS.json) {
-    try {
-      return await this.http.request(url, {
-        limit,
-        signal: this.options.signal
-      });
-    } catch (error) {
-      if (this.aborted(error)) throw error;
-      if (error.kind === "not-found") return null;
-      throw error;
-    }
-  }
-  async storageRoot() {
-    const a = this.archive;
-    const root = a.root;
-    const read = async (name2) => {
-      try {
-        return await this.fetchOrNull(root + name2, 1 << 20);
-      } catch (error) {
-        if (this.aborted(error)) throw error;
-        return null;
-      }
-    };
-    if (await read("0=ocfl_1.1") === null) this.add("error", "ocfl", "no OCFL 1.1 storage root (0=ocfl_1.1)");
-    const declared = a.disc.storageLayout;
-    if (declared !== OWNER_NAME_LAYOUT && declared !== HASHED_LAYOUT) {
-      this.add("error", "opensheaf.json", `storageLayout is ${declared}, not a layout of section 3.2`);
-    }
-    if (a.layout === OWNER_NAME_LAYOUT) {
-      if (await read("ocfl_layout.json") !== null) {
-        this.add("error", "ocfl", "ocfl_layout.json names only registered layouts: the owner-name layout has none (section 3.2)");
-      }
-      if (await read(LAYOUT_FILE) === null) this.add("warning", "ocfl", `${LAYOUT_FILE}, which describes the layout, is missing (section 3.2)`);
-    } else {
-      const layout = jsonOrNull(await read("ocfl_layout.json"));
-      if (layout?.extension !== HASHED_LAYOUT) this.add("error", "ocfl", `ocfl_layout.json must name the extension ${HASHED_LAYOUT} (section 3.2)`);
-      const config = jsonOrNull(await read(`extensions/${HASHED_LAYOUT}/config.json`));
-      if (config && ((config.digestAlgorithm ?? "sha256") !== "sha256" || (config.tupleSize ?? 3) !== 3 || (config.numberOfTuples ?? 3) !== 3)) {
-        this.add("error", "ocfl", "the hashed layout keeps its default parameters (section 3.2)");
-      }
-    }
-  }
-  async objectStorage(id) {
-    const a = this.archive;
-    const place3 = this.where(id);
-    const options = this.options;
-    const listed = (message2) => this.add("error", "opensheaf.json", message2, {
-      object: id
-    });
-    let rootBytes;
-    try {
-      await a.locate(id);
-      if (await this.fetchOrNull(a.url(id, "0=ocfl_object_1.1"), 4096) === null) {
-        listed(`lists ${id}, which is not an object of the storage root (section 3.1)`);
-        return;
-      }
-      rootBytes = await a.inventoryBytes(id, null, options);
-    } catch (error) {
-      if (this.aborted(error)) throw error;
-      if (error.kind === "not-found") listed(`lists ${id}, which is not an object of the storage root (section 3.1)`);
-      else this.add("error", `ocfl/${(a.paths.get(id) || [
-        id
-      ]).join("/")}`, "an object without a readable inventory", {
-        object: id
-      });
-      return;
-    }
-    const inv = jsonOrNull(rootBytes);
-    if (!isObject(inv) || !isObject(inv.versions) || !isObject(inv.manifest)) {
-      this.add("error", `ocfl/${a.paths.get(id).join("/")}`, "an object without a readable inventory", {
-        object: id
-      });
-      return;
-    }
-    if (inv.id !== id) {
-      const expected = parseId(inv.id) ? (await a.locate(inv.id).catch((e) => {
-        if (this.aborted(e)) throw e;
-        return null;
-      }))?.join("/") : null;
-      this.add("error", this.where(inv.id), expected ? `is at ocfl/${a.paths.get(id).join("/")}, and its identifier puts it at ocfl/${expected} (section 3.2)` : `${inv.id}: not the identifier of a line or of a draft (sections 3.2 and 4)`, {
-        object: id
-      });
-      listed(`lists ${id}, which is not an object of the storage root (section 3.1)`);
-      return;
-    }
-    const kindOfHead = await a.json(id, inv, inv.head, "object.json", options).catch((e) => {
-      if (this.aborted(e)) throw e;
-      return null;
-    });
-    const kind = kindOfHead?.kind;
-    const draft = Boolean(parseId(id).draft);
-    const o = {
-      id,
-      inv,
-      rootBytes,
-      head: kindOfHead,
-      objs: /* @__PURE__ */ new Map(),
-      digests: [],
-      sidecars: [],
-      kind,
-      draft
-    };
-    this.found.set(id, o);
-    const at = (ver) => ({
-      object: id,
-      ver
-    });
-    if (inv.digestAlgorithm !== "sha512") this.add("error", place3, "the digest algorithm is not sha512 (section 4.1)", at());
-    const stated = [
-      ...Object.keys(inv.manifest),
-      ...Object.values(inv.versions).flatMap((v) => Object.keys(isObject(v?.state) ? v.state : {})),
-      ...Object.values(isObject(inv.fixity) ? inv.fixity : {}).flatMap((alg) => Object.keys(isObject(alg) ? alg : {}))
-    ];
-    if (stated.some((x) => x !== x.toLowerCase())) this.add("error", place3, "the inventory has digests not in lower case (section 4.1)", at());
-    const upper = (bytes, file) => {
-      const word = sidecarDigest(bytes);
-      if (word && word !== word.toLowerCase()) this.add("error", place3, `${file} states its digest not in lower case (section 4.1)`, at());
-    };
-    const rootDigest = await sha512(rootBytes);
-    const sc = await a.sidecarBytes(id, null, options).catch((e) => {
-      if (this.aborted(e)) throw e;
-      return null;
-    });
-    upper(sc, "inventory.json.sha512");
-    if (!sc || sidecarDigest(sc) !== rootDigest) this.add("error", place3, "the checksum file of the inventory does not state its digest", at());
-    o.sidecar = sc ? sidecarDigest(sc) : null;
-    const head = typeof inv.head === "string" ? inv.head : "";
-    const headCopy = /^v[0-9]+$/.test(head) ? await this.fetchOrNull(a.inventoryUrl(id, head)).catch((e) => {
-      if (this.aborted(e)) throw e;
-      return null;
-    }) : null;
-    if (!headCopy || await sha512(headCopy) !== rootDigest) this.add("error", place3, `the inventory of ${head} is not the root inventory`, at());
-    const names = Object.keys(inv.versions).sort((x, y) => (Number(x.slice(1)) || 0) - (Number(y.slice(1)) || 0));
-    for (const [k, ver] of names.entries()) {
-      const n = k + 1;
-      const where2 = `${place3} ${ver}`;
-      this.report.stats.versions++;
-      if (ver !== `v${n}`) {
-        this.add("error", where2, "versions are numbered v1, v2, ... without zero padding (section 4.1)", at(ver));
-        continue;
-      }
-      const copy = await this.fetchOrNull(a.inventoryUrl(id, ver)).catch((e) => {
-        if (this.aborted(e)) throw e;
-        return null;
-      });
-      const copySc = await a.sidecarBytes(id, ver, this.options).catch((e) => {
-        if (this.aborted(e)) throw e;
-        return null;
-      });
-      o.digests[k] = copy ? await sha512(copy) : "";
-      o.sidecars[k] = copySc ? sidecarDigest(copySc) : null;
-      upper(copySc, `${ver}/inventory.json.sha512`);
-      if (!copy || !copySc) {
-        this.add("error", where2, "no copy of the inventory with its checksum file in the version folder (section 4.1)", at(ver));
-      } else {
-        if (sidecarDigest(copySc) !== o.digests[k]) this.add("error", where2, "the checksum file of the inventory copy does not state its digest", at(ver));
-        const c = jsonOrNull(copy) || {};
-        const upto = names.slice(0, n);
-        if (c.head !== ver) this.add("error", where2, `the inventory copy has the head ${c.head ?? "None"}`, at(ver));
-        const theirs = isObject(c.versions) ? Object.keys(c.versions).sort() : [];
-        if (!same(theirs, [
-          ...upto
-        ].sort())) {
-          this.add("error", where2, `the inventory copy does not record exactly the versions v1 to ${ver}`, at(ver));
-        } else if (upto.some((v) => !same(c.versions[v], inv.versions[v]))) {
-          this.add("error", where2, "the inventory copy disagrees with the inventory about the versions it records", at(ver));
-        }
-      }
-      const vinfo = isObject(inv.versions[ver]) ? inv.versions[ver] : {};
-      if (!(kind === "owner" && n === 1) && (!vinfo.user?.name || !vinfo.message)) {
-        this.add("error", where2, "a version has a user with a name, and a message (section 4.1)", at(ver));
-      }
-      const logical = Object.keys(filesOf(inv, ver));
-      for (const p of [
-        ...logical
-      ].sort()) {
-        if (logicalPathProblem(p)) this.add("error", where2, `the logical path '${p}' breaks the rules of section 4.1`, at(ver));
-      }
-      const needed = [
-        "object.json",
-        ...kind !== "owner" ? [
-          "datacite.json"
-        ] : [],
-        ...draft ? [] : [
-          "genesis.json"
-        ]
-      ];
-      for (const name2 of needed) if (!logical.includes(name2)) this.add("error", where2, `has no ${name2} (section 4.1)`, at(ver));
-      if (!logical.includes("object.json")) continue;
-      let obj = null;
-      try {
-        obj = await a.json(id, inv, ver, "object.json", this.options);
-      } catch (error) {
-        if (this.aborted(error)) throw error;
-        this.add("error", where2, `object.json cannot be read: ${error.detail || error.message}`, at(ver));
-      }
-      o.objs.set(ver, obj);
-      if (!obj || kind === "owner") continue;
-      this.schema(`${where2}/object.json`, obj, "object", "error", at(ver));
-      if (n === 1 || draft) {
-        if (isObject(obj) && "previous" in obj) this.add("error", where2, "a first version, or a draft, has no previous (section 4.3)", at(ver));
-      } else if (!isObject(obj) || !("previous" in obj)) {
-        this.add("error", where2, "object.json has no previous (section 4.3)", at(ver));
-      } else if (obj.previous !== o.sidecars[k - 1]) {
-        this.add("error", where2, `previous is not the digest of the inventory of v${n - 1} (section 4.3)`, at(ver));
-      }
-    }
-  }
-  async keyLogs() {
-    for (const [id, o] of this.found) {
-      if (o.kind !== "owner") continue;
-      const place3 = this.where(id);
-      const owner = parseId(id).owner;
-      let log;
-      try {
-        log = await this.archive.keyLog(owner, this.options);
-      } catch (error) {
-        if (this.aborted(error)) throw error;
-        this.add("error", place3, error.detail || error.message, {
-          object: id
-        });
-        continue;
-      }
-      if (!log) continue;
-      const { errors, warnings } = await log.check();
-      for (const e of errors) this.add("error", place3, e, {
-        object: id
-      });
-      for (const w of warnings) this.add("warning", place3, w, {
-        object: id
-      });
-      const genesis = jsonOrNull(log.genesis);
-      if (genesis) this.schema(`${place3} v1/genesis.json`, genesis, "genesis", "error", {
-        object: id,
-        ver: "v1"
-      });
-      for (const v of log.versions) {
-        if (v.keys !== null) this.schema(`${place3} v${v.number}/keys.json`, v.keys, "keys", "error", {
-          object: id,
-          ver: `v${v.number}`
-        });
-      }
-      this.logs.set(log.owner, log);
-      const held2 = log.versions.filter((v) => v.isVersion);
-      if (held2.length) this.add("result", place3, `key log of ${log.owner}: latest version v${held2[held2.length - 1].number}`, {
-        object: id
-      });
-      for (const did of [
-        ...log.exposedKeys()
-      ].sort()) this.add("result", place3, `exposed key ${did}`, {
-        object: id
-      });
-      if (log.forkPoint) this.add("result", place3, `ended by a fork of its key log at v${log.forkPoint} (section 6.3)`, {
-        object: id
-      });
-      else if (log.ended) {
-        this.add("result", place3, "ended (section 6.3)" + (log.successor ? `, successor ${log.successor} (named by the ending version)` : ""), {
-          object: id
-        });
-      }
-    }
-  }
-  async lines() {
-    const genesisNames = /* @__PURE__ */ new Map();
-    for (const [id, o] of this.found) {
-      this.cancelled();
-      const head = o.objs.get(o.inv.head) || {};
-      if (o.kind === "owner") continue;
-      const place3 = this.where(id);
-      const a = this.archive;
-      if (o.draft) {
-        const g = await a.bytes(id, o.inv, o.inv.head, "genesis.json", this.options).catch((e) => {
-          if (this.aborted(e)) throw e;
-          return null;
-        });
-        if ([
-          "name",
-          "owner",
-          "parent"
-        ].some((k) => isObject(head) && k in head) || g) {
-          this.add("error", place3, "a draft has no genesis record, and no name, owner or parent (section 10.1)", {
-            object: id
-          });
-        }
-        continue;
-      }
-      const [, name2, owner] = id.split(":");
-      let genesis = null;
-      for (const ver of versionsOf(o.inv)) {
-        const g = await a.bytes(id, o.inv, ver, "genesis.json", this.options).catch((e) => {
-          if (this.aborted(e)) throw e;
-          return null;
-        });
-        const obj = o.objs.get(ver) || {};
-        if (obj.name !== name2 || obj.owner !== owner) {
-          this.add("error", `${place3} ${ver}`, "object.json does not record the line of the identifier (section 4.3)", {
-            object: id,
-            ver
-          });
-        }
-        if (!g) continue;
-        if (genesis === null) genesis = g;
-        else if (!sameBytes2(g, genesis)) this.add("error", `${place3} ${ver}`, "genesis.json differs from that of v1 (section 5.1)", {
-          object: id,
-          ver
-        });
-      }
-      o.genesis = genesis;
-      let rec = null;
-      if (genesis !== null) {
-        try {
-          rec = await readGenesis(genesis);
-          this.schema(`${place3} genesis.json`, parseJson(genesis, "", {
-            integers: true
-          }), "genesis", "error", {
-            object: id
-          });
-        } catch (error) {
-          this.add("error", place3, `genesis.json: ${error.message}`, {
-            object: id
-          });
-        }
-      }
-      o.rec = rec;
-      if (rec !== null) {
-        const g0 = await nameOf(genesis);
-        if (!genesisNames.has(g0)) genesisNames.set(g0, []);
-        genesisNames.get(g0).push([
-          id,
-          isObject(head) && "parent" in head
-        ]);
-        if (rec.kind !== head.kind) {
-          this.add("error", place3, `its genesis record is of kind ${rec.kind}, its object.json of kind ${head.kind}`, {
-            object: id
-          });
-        }
-        if (!await isNameOf(name2, genesis)) {
-          this.add("error", place3, "its name is not a name of its genesis record (section 5.2)", {
-            object: id
-          });
-        } else if (rec.originator !== owner) {
-          if (isObject(head) && "parent" in head) await this.branch(id, o, genesis);
-          else this.add("error", place3, "a line of another owner than the originator is a branch, and declares its parent (section 5.3)", {
-            object: id
-          });
-        } else if (algorithm(name2) !== 0) {
-          this.add("error", place3, "the originator's line is named by algorithm 0 (section 5.3)", {
-            object: id
-          });
-        } else if ([
-          ...o.objs.values()
-        ].some((x) => isObject(x) && "parent" in x)) {
-          this.add("error", place3, "the originator's line has no parent: an originator never owns a branch of its own work (sections 5.3 and 9)", {
-            object: id
-          });
-        }
-      }
-      for (const ver of versionsOf(o.inv)) {
-        const obj = o.objs.get(ver);
-        if (!obj || !filesOf(o.inv, ver)["datacite.json"]) continue;
-        const dc = await a.json(id, o.inv, ver, "datacite.json", this.options).catch((e) => {
-          if (this.aborted(e)) throw e;
-          return null;
-        });
-        for (const message2 of descriptionErrors(o.inv, ver, obj, dc)) this.add("error", `${place3} ${ver}`, message2, {
-          object: id,
-          ver
-        });
-      }
-      if (head.kind === "document" || head.kind === "collection") {
-        for (const e of documentVersionErrors(o.inv, (v) => o.objs.get(v) ?? null)) this.add("error", place3, `${e.ver} ${e.message}`, {
-          object: id,
-          ver: e.ver
-        });
-        for (const e of noticeWarnings(o.inv, (v) => o.objs.get(v) ?? null)) this.add("warning", place3, `${e.ver} ${e.message}`, {
-          object: id,
-          ver: e.ver
-        });
-      }
-      let log = this.logs.get(owner) ?? null;
-      if (!log) {
-        const ownerId = objectId(owner, owner);
-        this.add(this.tombstoned.has(ownerId) ? "warning" : "error", place3, `the key log of its owner ${owner} is not in the storage root (section 6.5)`, {
-          object: id
-        });
-      }
-      const line = await a.line(id, {
-        log,
-        signal: this.options.signal
-      });
-      o.line = line;
-      this.statuses.set(id, line.statuses);
-      line.statuses.forEach((s, k) => {
-        const ver = `v${k + 1}`, where2 = `${place3} ${ver}`;
-        for (const j of line.judgements[k]) if (j.status !== GOOD) this.add("warning", where2, `${j.file}: ${j.status}: ${j.reason}`, {
-          object: id,
-          ver
-        });
-        for (const n of line.listed?.[k] || []) {
-          if (!(n.startsWith("signature-") && n.endsWith(".json"))) this.add("warning", where2, `${n}: not a witness these tools know (section 7.2)`, {
-            object: id,
-            ver
-          });
-        }
-        if (s === UNSIGNED || s === INVALID) this.add("warning", where2, `not a version of the line: ${s} (sections 7.3 and 7.5)`, {
-          object: id,
-          ver
-        });
-        else if (s === UNCHECKED) this.add("warning", where2, "unchecked: the version of the key log its signatures name is not reached (section 7.3)", {
-          object: id,
-          ver
-        });
-        else if (s === CONTESTED) this.add("result", where2, "contested (section 7.3)", {
-          object: id,
-          ver
-        });
-      });
-      for (const x of await a.listFolder(id, ...WITNESSES.split("/")) || []) {
-        if (!(x.kind === "dir" && Object.hasOwn(o.inv.versions, x.name))) {
-          this.add("warning", place3, `${WITNESSES}/${x.name}: not the folder of a version (section 7.2)`, {
-            object: id
-          });
-        }
-      }
-      const signed = latestSigned(line.statuses);
-      if (signed === null) this.add("warning", place3, "the line has no signed version (section 7.3)", {
-        object: id
-      });
-      else {
-        this.add("result", place3, `latest signed version v${signed}`, {
-          object: id
-        });
-        if (o.objs.get(`v${signed}`)?.status === "withdrawn") this.add("result", place3, "withdrawn (section 13.1)", {
-          object: id
-        });
-        else {
-          const withdrawn = withdrawnVersions(o.inv, (v) => o.objs.get(v) ?? null, `v${signed}`);
-          if (withdrawn.size) this.add("result", place3, `reinstated; withdrawn: document version(s) ${[
-            ...withdrawn.keys()
-          ].sort((x, y) => x - y).join(", ")} (section 13.1)`, {
-            object: id
-          });
-        }
-      }
-    }
-    for (const ids of genesisNames.values()) {
-      const lines2 = ids.filter(([, branch]) => !branch).map(([id]) => id);
-      if (lines2.length > 1) {
-        this.add("error", lines2.map((id) => this.where(id)).join(", "), "objects with the same genesis record: only the originator's line and its branches may share one (section 5.4)");
-      }
-    }
-    for (const [id, o] of this.found) {
-      if (o.kind === "collection" && this.statuses.has(id)) await this.members(id, o);
-    }
-  }
-  async branch(id, o, genesis) {
-    const a = this.archive;
-    const place3 = this.where(id);
-    const [, name2, owner] = id.split(":");
-    let prevObj = null, prevEvidence = null;
-    const verdicts = [];
-    for (const ver of versionsOf(o.inv)) {
-      const where2 = `${place3} ${ver}`;
-      const obj = o.objs.get(ver) || {};
-      const files = filesOf(o.inv, ver);
-      const evidence = Object.fromEntries(Object.entries(files).filter(([p3]) => p3 === "genesis.json" || isEvidencePath(p3)));
-      const p2 = obj.parent;
-      if (!isObject(p2)) {
-        this.add("error", where2, "every version of a branch has parent (section 9.1)", {
-          object: id,
-          ver
-        });
-        continue;
-      }
-      if (prevObj !== null && same(p2, prevObj.parent)) {
-        if (!same(evidence, prevEvidence)) this.add("error", where2, "the identity files change without a new branch point (section 9.4)", {
-          object: id,
-          ver
-        });
-      } else {
-        const [v, problems] = await verdict(levelOfVersion(a, id, o.inv, ver, this.options), obj, genesis, async (who) => this.logs.get(who) ?? null);
-        verdicts.push(v);
-        if (v === INCONSISTENT) this.add("error", where2, "inconsistent branch point: " + problems.join("; "), {
-          object: id,
-          ver
-        });
-        else if (v === UNCHECKED2) this.add("warning", where2, "unchecked branch point: " + problems.join("; "), {
-          object: id,
-          ver
-        });
-        if (prevObj !== null && v !== INCONSISTENT) await this.movedBranchPoint(id, o, ver, p2, prevObj.parent, where2);
-      }
-      prevObj = obj;
-      prevEvidence = evidence;
-    }
-    if (!verdicts.length) return;
-    const worst = verdicts.reduce((x, y) => ORDER2[y] > ORDER2[x] ? y : x);
-    const p = prevObj.parent;
-    const pid = objectId(p.name, p.owner);
-    this.add("result", place3, `a branch of ${this.where(pid)}: ${worst} (section 9.3)`, {
-      object: id
-    });
-    if (this.found.has(pid)) {
-      const line = await a.line(pid, {
-        log: this.logs.get(p.owner) ?? null,
-        signal: this.options.signal
-      });
-      const status = line.latest ? line.objs.get(line.latest)?.status : null;
-      this.add("result", place3, "the parent's line is held here" + (status === "withdrawn" ? ", withdrawn" : ""), {
-        object: id
-      });
-    } else if (this.tombstoned.has(pid)) {
-      this.add("result", place3, "the parent's line is removed: a tombstone in this archive (section 13.3)", {
-        object: id
-      });
-    } else if (this.resolver) {
-      const at = typeof p.url === "string" ? await this.resolver.archiveOf(p.url, this.options) : [];
-      const res = await this.resolver.latest(p.name, p.owner, at, this.options);
-      this.add("result", place3, `the parent's line: ${res.status}` + (res.copy ? ` at ${res.copy.where}` : ""), {
-        object: id
-      });
-    } else {
-      this.add("result", place3, "the parent's line is not held here (osheaf verify --remote looks for it)", {
-        object: id
-      });
-    }
-    if (name2 !== p.name && algorithm(name2) > algorithm(p.name)) {
-      const gone = new Set(a.tombstones().filter((t) => t.owner === owner).map((t) => t.name));
-      for (let k = algorithm(p.name); k < algorithm(name2); k++) {
-        const other = await nameOf(genesis, k);
-        if (!this.found.has(objectId(other, owner)) && !gone.has(other)) {
-          this.add("warning", place3, `renamed by algorithm ${algorithm(name2)}, though algorithm ${k} gives a line free here (section 5.3)`, {
-            object: id
-          });
-          break;
-        }
-      }
-    }
-    if (owner === o.rec?.originator) this.add("error", place3, "an originator never owns a branch of its own work (section 5.3)", {
-      object: id
-    });
-  }
-  async movedBranchPoint(id, o, ver, p, old, where2) {
-    const a = this.archive;
-    const before = `v${versionNumber(ver) - 1}`;
-    const read = async (v) => jsonOrNull(await a.bytes(id, o.inv, v, "parent/inventory.json", this.options).catch((e) => {
-      if (this.aborted(e)) throw e;
-      return null;
-    })) || {};
-    const [oldInv, newInv] = [
-      await read(before),
-      await read(ver)
-    ];
-    if (p.owner !== old.owner || p.name !== old.name) {
-      this.add("error", where2, "a new branch point is a version of the same parent line (section 9.4)", {
-        object: id,
-        ver
-      });
-    } else if (versionNumber(p.objectVersion) <= versionNumber(old.objectVersion) || p.documentVersion === old.documentVersion) {
-      this.add("error", where2, "a new branch point is a higher object version, holding another document version (section 9.4)", {
-        object: id,
-        ver
-      });
-    }
-    const oldVersions = isObject(oldInv.versions) ? oldInv.versions : {};
-    const newVersions = isObject(newInv.versions) ? newInv.versions : {};
-    const manifest = isObject(newInv.manifest) ? newInv.manifest : {};
-    if (oldInv.id !== newInv.id || Object.entries(oldVersions).some(([v, e]) => !same(newVersions[v], e)) || Object.values(oldVersions).some((e) => Object.keys(isObject(e?.state) ? e.state : {}).some((d) => !Object.hasOwn(manifest, d)))) {
-      this.add("error", where2, "the new parent inventory does not continue the previous one (section 9.4)", {
-        object: id,
-        ver
-      });
-    }
-  }
-  async members(id, o) {
-    const a = this.archive;
-    for (const ver of versionsOf(o.inv)) {
-      this.cancelled();
-      const at = `${this.where(id)} ${ver}`;
-      const mem = await a.json(id, o.inv, ver, "members.json", this.options).catch((e) => {
-        if (this.aborted(e)) throw e;
-        return null;
-      });
-      if (!mem) continue;
-      this.schema(`${at}/members.json`, mem, "collection", "error", {
-        object: id,
-        ver
-      });
-      const type = mem.type;
-      if (type !== "catalogue" && type !== "selection") this.add("error", at, "members.json has no valid type (catalogue or selection)", {
-        object: id,
-        ver
-      });
-      for (const m of Array.isArray(mem.members) ? mem.members : []) {
-        const mid = objectId(m?.name, m?.owner);
-        const who = `${at} member ${this.where(mid)}`;
-        const context = {
-          object: id,
-          ver
-        };
-        for (const message2 of memberErrors(type, m)) this.add("error", who, message2, context);
-        if (this.found.has(mid)) {
-          await this.memberHeld(m, mid, who, type, context, ver === o.inv.head);
-        } else if (ver === o.inv.head) {
-          await this.memberElsewhere(m, mid, who, context);
-        }
-      }
-    }
-  }
-  async memberHeld(m, mid, who, type, context, inHead = false) {
-    const a = this.archive;
-    const held2 = this.found.get(mid);
-    const sts = this.statuses.get(mid) || [];
-    for (const { version: pv, pin, documentVersion: n } of memberPins2(m)) {
-      this.report.stats.pins++;
-      const k = typeof pv === "string" && /^v[1-9][0-9]*$/.test(pv) ? versionNumber(pv) : 0;
-      const digest = k ? held2.digests[k - 1] : void 0;
-      if (!digest) {
-        this.add("warning", `${who} ${pv}`, "unavailable: the copy held here lacks this version", context);
-        continue;
-      }
-      if (digest !== pin) {
-        this.add("error", `${who} ${pv}`, "mismatch: the inventory held here has another digest (section 8.5)", context);
-        continue;
-      }
-      const pobj = held2.objs.get(pv) || {};
-      if (pobj.kind !== m.kind || pobj.name !== m.name || pobj.owner !== m.owner) {
-        this.add("error", `${who} ${pv}`, "kind, name and owner are not those of the version pinned (section 8.5)", context);
-      }
-      if (n !== null && pobj.documentVersion !== n) this.add("error", `${who} ${pv}`, `does not hold document version ${n}`, context);
-      const s = k <= sts.length ? sts[k - 1] : null;
-      if (s === UNSIGNED || s === INVALID) this.add("error", `${who} ${pv}`, "not a version: a collection pins only signed versions (section 8.5)", context);
-      else if (s === UNCHECKED || s === CONTESTED) this.add("warning", `${who} ${pv}`, `${s} (section 8.5)`, context);
-      const log = m.name === m.owner ? this.logs.get(m.owner) ?? null : null;
-      if (log && !log.verified(k, pin)) {
-        this.add("error", `${who} ${pv}`, "not a version of the key log: a collection pins only versions (sections 6.1 and 8.5)", context);
-      }
-      const signed = latestSigned(sts);
-      if (inHead && signed) {
-        const withdrawn = withdrawnVersions(held2.inv, (v) => held2.objs.get(v) ?? null, `v${signed}`);
-        if (withdrawn.has(pobj.documentVersion)) {
-          this.add("result", `${who} ${pv}`, `document version ${pobj.documentVersion} is withdrawn, in ${withdrawn.get(pobj.documentVersion)} (section 13.1)`, context);
-        }
-      }
-    }
-    if (type === "selection" && sts.length) {
-      const signed = latestSigned(sts);
-      const objOf2 = (v) => held2.objs.get(v) ?? null;
-      const order = historyOf(held2.inv, objOf2, signed ? `v${signed}` : held2.inv.head).map((h) => objOf2(h)?.documentVersion);
-      const vetted2 = (Array.isArray(m.revisions) ? m.revisions : []).map((r) => r?.documentVersion);
-      const pos = vetted2.filter((x) => order.includes(x)).map((x) => order.indexOf(x));
-      if (pos.some((p, i) => i > 0 && p < pos[i - 1])) this.add("error", who, "revisions not in the order of the history (section 8.4)", context);
-    }
-  }
-  async memberElsewhere(m, mid, who, context) {
-    if (this.resolver) {
-      for (const { version: pv, pin, documentVersion: n } of memberPins2(m)) {
-        this.report.stats.pins++;
-        const res = await this.resolver.pin(m.name, m.owner, pv, pin, Array.isArray(m.at) ? m.at : [], this.options);
-        if (res.copy) {
-          const pobj = res.copy.obj(versionNumber(pv)) || {};
-          if (pobj.kind !== m.kind || pobj.name !== m.name || pobj.owner !== m.owner || n !== null && pobj.documentVersion !== n) {
-            this.add("error", `${who} ${pv}`, "the version pinned is not of the kind, line and document version the member gives (section 8.5)", context);
-          }
-        }
-        if (res.status === "not a version") this.add("error", `${who} ${pv}`, "not a version: a collection pins only signed versions (section 8.5)", context);
-        else if (res.status === "verified") this.add("result", `${who} ${pv}`, `verified at ${res.copy ? res.copy.where : "?"} (section 8.5)`, context);
-        else this.add("warning", `${who} ${pv}`, `${res.status} (section 8.5)`, context);
-        this.progress({
-          phase: "members",
-          done: this.report.stats.pins,
-          total: this.report.stats.pins,
-          current: mid
-        });
-      }
-    } else if (this.tombstoned.has(mid)) {
-      this.add("result", who, "removed: a tombstone in this archive (section 13.3)", context);
-    } else {
-      this.add("warning", who, "not held in this archive: not resolved (osheaf verify --remote resolves it, section 14.5)", context);
-    }
-  }
-  status(id, o) {
-    if (o.kind === "owner") return "active";
-    const latest = o.line?.latest;
-    return ((latest ? o.objs.get(latest) : o.objs.get(o.inv.head)) || {}).status ?? "active";
-  }
-  async archiveAsAWhole() {
-    const a = this.archive;
-    const disc = a.disc;
-    const listed = /* @__PURE__ */ new Map();
-    for (const e of a.listed()) {
-      if (!isObject(e)) continue;
-      if (listed.has(e.id)) this.add("error", "opensheaf.json", `lists ${this.where(e.id)} twice`);
-      listed.set(e.id, e);
-    }
-    const needed = /* @__PURE__ */ new Set();
-    for (const id of this.found.keys()) {
-      const parts = parseId(id);
-      if (parts && !parts.draft) needed.add(objectId(parts.owner, parts.owner));
-    }
-    for (const kid of needed) {
-      if (this.found.has(kid) || listed.has(kid)) continue;
-      const owner = parseId(kid).owner;
-      const log = await a.keyLog(owner, this.options).catch((e) => {
-        if (this.aborted(e)) throw e;
-        return null;
-      });
-      if (log) this.add("error", "opensheaf.json", `does not list ${this.where(kid)}, an object of the storage root (section 3.1)`);
-    }
-    const fields = [
-      "kind",
-      "name",
-      "owner",
-      "head",
-      "inventorySha512",
-      "status"
-    ];
-    for (const [id, o] of this.found) {
-      if (o.draft) continue;
-      const e = listed.get(id);
-      if (!e) {
-        this.add("error", "opensheaf.json", `does not list ${this.where(id)}, an object of the storage root (section 3.1)`, {
-          object: id
-        });
-        continue;
-      }
-      const expected = {
-        kind: o.head?.kind ?? null,
-        name: o.head?.name ?? null,
-        owner: o.head?.owner ?? null,
-        head: o.inv.head,
-        inventorySha512: o.sidecar,
-        status: this.status(id, o)
-      };
-      const stale = fields.filter((k) => (e?.[k] ?? null) !== expected[k]);
-      if (stale.length) {
-        this.add("error", "opensheaf.json", `the entry of ${this.where(id)} is stale: ` + stale.map((k) => `${k} ${py(e?.[k])} instead of ${py(expected[k])}`).join(", "), {
-          object: id
-        });
-      }
-    }
-    const labels2 = [
-      ...listed.values()
-    ].map((e) => e.label).filter(Boolean);
-    for (const lb of [
-      ...new Set(labels2.filter((x, k) => labels2.indexOf(x) !== k))
-    ].sort()) {
-      this.add("error", "opensheaf.json", `the label ${lb} is given twice (section 3.1)`);
-    }
-    if (!("owners" in disc)) {
-      this.add("error", "opensheaf.json", "no owners: the owners hosted and their catalogues are not named (section 3.1)");
-    }
-    const seenOwners = /* @__PURE__ */ new Set(), seenCatalogues = /* @__PURE__ */ new Set();
-    for (const e of Array.isArray(disc.owners) ? disc.owners : []) {
-      if (!isObject(e)) continue;
-      const o = e.owner, cat = e.catalogue;
-      if (seenOwners.has(o)) this.add("error", "opensheaf.json", `owners lists ${o} twice (section 3.1)`);
-      if (seenCatalogues.has(cat)) this.add("error", "opensheaf.json", `owners gives ${cat} as the catalogue of two owners (section 3.1)`);
-      seenOwners.add(o);
-      seenCatalogues.add(cat);
-      if (typeof o !== "string" || !OWNER_NAME.test(o)) continue;
-      if (!this.found.has(objectId(o, o))) this.add("warning", "opensheaf.json", `owners lists ${o}, whose key log is not held here (section 3.1)`);
-      const entry = listed.get(cat) || {};
-      if (entry.kind !== "collection" || entry.owner !== o) {
-        this.add("error", "opensheaf.json", `the catalogue of ${o} in owners, ${cat}, is not a collection of that owner it lists (section 8.1)`);
-        continue;
-      }
-      const held2 = this.found.get(cat);
-      if (!held2) continue;
-      const mem = await a.json(cat, held2.inv, held2.inv.head, "members.json", this.options).catch((e2) => {
-        if (this.aborted(e2)) throw e2;
-        return null;
-      }) || {};
-      if (mem.type !== "catalogue") {
-        this.add("error", "opensheaf.json", `the owner catalogue of ${o}, ${this.where(cat)}, is not a catalogue (section 8.1)`);
-      }
-      for (const m of Array.isArray(mem.members) ? mem.members : []) {
-        if (this.tombstoned.has(`sheaf:${m?.name}:${m?.owner}`)) continue;
-        let mine = false;
-        try {
-          mine = m?.owner === o && m?.kind === "document" && this.found.has(objectId(m?.name, o));
-        } catch {
-          mine = false;
-        }
-        if (!mine) {
-          this.add("warning", "opensheaf.json", `the owner catalogue of ${o} lists ${m?.name}, which is not a document of a line of that owner held here (section 8.1)`);
-        }
-      }
-    }
-    for (const d of Array.isArray(disc.drafts) ? disc.drafts : []) {
-      const o = this.found.get(d?.id);
-      if (!o || !o.draft || o.inv.head !== d.head) {
-        this.add("error", "opensheaf.json", `drafts lists ${d?.id}, which is not a draft held with that head`);
-      }
-    }
-    const used = /* @__PURE__ */ new Set();
-    for (const o of this.found.values()) {
-      if (isObject(o.head?.extensions)) for (const k of Object.keys(o.head.extensions)) used.add(k);
-      if (o.kind === "owner") {
-        const log = this.logs.get(parseId(o.id).owner);
-        const ext = log?.extensions();
-        if (isObject(ext)) for (const k of Object.keys(ext)) used.add(k);
-      }
-    }
-    const declared = Array.isArray(disc.extensions) ? disc.extensions : [];
-    for (const e of [
-      ...used
-    ].filter((x) => !declared.includes(x)).sort()) {
-      this.add("warning", "opensheaf.json", `extensions does not list ${e}, which objects use (section 3.1)`);
-    }
-    const seen = /* @__PURE__ */ new Set();
-    for (const t of Array.isArray(disc.tombstones) ? disc.tombstones : []) {
-      const tid = t?.id;
-      if (tid !== objectId(t?.name, t?.owner)) this.add("error", "opensheaf.json", `the tombstone ${tid} is not the line of its name and owner (section 13.3)`);
-      if (seen.has(tid)) this.add("error", "opensheaf.json", `two tombstones of ${tid}`);
-      seen.add(tid);
-      if (this.found.has(tid) || listed.has(tid)) {
-        this.add("error", "opensheaf.json", `${tid} has a tombstone, and is an object of the archive (section 13.3)`);
-      } else if (t?.kind === "owner" && needed.has(tid)) {
-        this.add("warning", "opensheaf.json", `a tombstone stands for the key log ${tid}, which lines of the archive need: only the law or its keeper justifies it (section 13.2)`);
-      } else {
-        this.add("result", "opensheaf.json", `removed: ${tid} (${py(t?.date)}: ${py(t?.reason)})`);
-      }
-    }
-  }
-  async indexes() {
-    const a = this.archive;
-    const declared = isObject(a.disc.indexes) ? a.disc.indexes : {};
-    if (!Object.keys(declared).length) {
-      this.add("warning", "opensheaf.json", "no indexes declared (section 12.5)");
-      return;
-    }
-    const objects = [];
-    for (const [id, o] of this.found) {
-      if (o.draft) continue;
-      if (o.kind === "owner") {
-        const log = this.logs.get(parseId(id).owner);
-        if (!log) continue;
-        objects.push({
-          id,
-          rec: {
-            kind: "owner"
-          },
-          genesis: log.genesis,
-          status: "active",
-          label: a.labelOf(id),
-          sidecars: o.sidecars,
-          carried: log.versions.filter((v) => v.forkRecord).flatMap((v) => v.carried)
-        });
-      } else if (o.rec) {
-        objects.push({
-          id,
-          rec: o.rec,
-          genesis: o.genesis,
-          status: this.status(id, o),
-          label: a.labelOf(id),
-          sidecars: o.sidecars
-        });
-      }
-    }
-    const expected = indexEntries2(objects);
-    const gone = new Map(a.tombstones().map((t) => [
-      t.id,
-      t
-    ]));
-    const listedNames = [];
-    const order = (x) => [
-      "owners",
-      "names",
-      "sha512"
-    ].indexOf(x);
-    for (const [index, length] of Object.entries(declared).sort(([x], [y]) => order(x) - order(y))) {
-      if (!Object.hasOwn(INDEX_KEY2, index)) continue;
-      const key = INDEX_KEY2[index];
-      const want = expected[index];
-      const prefixes = new Set(want.map((e) => String(e[key]).slice(0, length)));
-      if (index === "names") for (const n of listedNames) prefixes.add(n.slice(0, length));
-      for (const t of gone.values()) {
-        const k = index === "names" ? t.name : index === "owners" ? t.owner : t.inventorySha512;
-        if (typeof k === "string") prefixes.add(k.slice(0, length));
-      }
-      const held2 = [];
-      for (const p of [
-        ...prefixes
-      ].sort()) {
-        const place3 = `${index}/${p}.json`;
-        let data2;
-        try {
-          const bytes = await this.fetchOrNull(a.base + place3);
-          if (bytes === null) continue;
-          data2 = parseJson(bytes);
-        } catch (error) {
-          if (this.aborted(error)) throw error;
-          this.add("error", place3, `not JSON: ${error.message}`);
-          continue;
-        }
-        this.schema(place3, data2, "index");
-        if (data2?.index !== index) this.add("error", place3, `an index file of ${index}/ names the index ${data2?.index}`);
-        for (const e of Array.isArray(data2?.entries) ? data2.entries : []) {
-          if (!isObject(e) || String(e[key] ?? "").slice(0, length) !== p || p.length !== length) {
-            this.add("error", place3, `an entry not in the file of its prefix (${JSON.stringify(e).slice(0, 60)}...)`);
-          }
-          held2.push(e);
-          if (index === "owners" && Array.isArray(e?.names)) listedNames.push(...e.names.filter((n) => typeof n === "string"));
-        }
-      }
-      for (const e of want) {
-        if (!held2.some((x) => same(x, e))) {
-          this.add("error", `${index}/`, `no entry, or a stale one, for ${e.id ?? e.owner} ${e.version ?? ""} (section 12.5)`);
-        }
-      }
-      for (const e of held2) {
-        if (want.some((x) => same(x, e))) continue;
-        if (gone.has(e?.id) && e?.status === "removed") continue;
-        this.add("error", `${index}/`, `an entry the storage root does not justify: ${e?.id ?? e?.owner} ${e?.version ?? ""} (section 12.5)`);
-      }
-      for (const [tid, t] of gone) {
-        if ((index === "names" || index === "sha512") && !held2.some((e) => e?.id === tid && e?.status === "removed")) {
-          this.add("error", `${index}/`, `no entry with the status removed for the tombstone ${tid} (section 12.5)`);
-        }
-        if (index === "owners" && held2.some((e) => e?.owner === t.owner && Array.isArray(e?.names) && e.names.includes(t.name))) {
-          this.add("error", `${index}/`, `owners/ lists ${tid}, which is taken down (section 12.5)`);
-        }
-      }
-    }
-  }
-  async presentation() {
-    const a = this.archive;
-    const website = Array.isArray(a.disc.profiles) && a.disc.profiles.includes("website");
-    const home = await this.fetchOrNull(a.base + "index.html", LIMITS.page).catch((e) => {
-      if (this.aborted(e)) throw e;
-      return null;
-    });
-    if (!website && home === null) return;
-    const level2 = website ? "error" : "warning";
-    const note = website ? "" : " (the archive does not declare the profile website)";
-    if (home === null) {
-      this.add(level2, "index.html", "the home page is missing (appendix A.3)" + note);
-      return;
-    }
-    let members = [];
-    for (const e of a.owners()) {
-      const cat = this.found.get(e.catalogue);
-      if (!cat?.line?.latest) continue;
-      const mem = await a.json(cat.id, cat.inv, cat.line.latest, "members.json", this.options).catch((e2) => {
-        if (this.aborted(e2)) throw e2;
-        return null;
-      });
-      if (Array.isArray(mem?.members)) members = members.concat(mem.members);
-    }
-    const page = new TextDecoder().decode(home);
-    for (const m of members) {
-      const mid = objectId(m?.name, m?.owner);
-      if (this.tombstoned.has(mid)) continue;
-      const pins = memberPins2(m);
-      const pin = pins[pins.length - 1]?.pin || "";
-      if (!page.includes(pin.slice(0, 32))) this.add(level2, "index.html", `does not show the pin of ${m?.name}` + note);
-      if (!this.found.has(mid)) continue;
-      const originator = this.found.get(mid).rec?.originator === m.owner;
-      const landing = `paper/${originator ? m.name : `${m.name}-${m.owner}`}/index.html`;
-      const text3 = await this.fetchOrNull(a.base + landing, LIMITS.page).catch((e) => {
-        if (this.aborted(e)) throw e;
-        return null;
-      });
-      const words2 = text3 ? new TextDecoder().decode(text3) : "";
-      if (originator ? !new RegExp(`sheaf:${m.name}(?![a-z0-9:/])`).test(words2) : !words2.includes(mid)) {
-        this.add(level2, landing, `no landing page giving the sheaf: URI of ${this.where(mid)} (appendix A.3)` + note);
-      }
-    }
-  }
-  async contentDigests() {
-    const a = this.archive;
-    const files = [];
-    for (const [id, o] of this.found) {
-      for (const [digest, paths] of Object.entries(o.inv.manifest)) {
-        for (const cp of Array.isArray(paths) ? paths : []) {
-          try {
-            files.push({
-              id,
-              url: a.contentUrl(id, o.inv, cp),
-              cp,
-              digest
-            });
-          } catch {
-            this.add("error", this.where(id), `missing ${cp}`, {
-              object: id
-            });
-          }
-        }
-      }
-    }
-    let checked2 = 0;
-    this.progress({
-      phase: "digests",
-      done: 0,
-      total: files.length
-    });
-    await Promise.all(files.map(async ({ id, url, cp, digest }) => {
-      const place3 = this.where(id);
-      try {
-        const bytes = await this.http.request(url, {
-          limit: LIMITS.file,
-          signal: this.options.signal
-        });
-        this.report.stats.files++;
-        this.report.stats.filesBytes += bytes.length;
-        if (await sha512(bytes) !== digest) this.add("error", place3, `${cp} does not have the digest of the manifest`, {
-          object: id
-        });
-      } catch (error) {
-        if (this.aborted(error)) throw error;
-        if (error.kind === "not-found") this.add("error", place3, `missing ${cp}`, {
-          object: id
-        });
-        else if (error.kind === "too-large") this.add("warning", place3, `${cp} is too large to be checked in the browser`, {
-          object: id
-        });
-        else this.add("error", place3, `${cp} cannot be read (${error.detail})`, {
-          object: id
-        });
-      }
-      this.progress({
-        phase: "digests",
-        done: ++checked2,
-        total: files.length,
-        current: cp
-      });
-    }));
-  }
-};
-function isEvidencePath(p) {
-  return p.startsWith("parent/");
-}
-function sameBytes2(x, y) {
-  if (x.length !== y.length) return false;
-  for (let k = 0; k < x.length; k++) if (x[k] !== y[k]) return false;
-  return true;
-}
-function py(value) {
-  return value === null || value === void 0 ? "None" : String(value);
-}
-
-// core/check.js
+init_verify();
+init_rules();
 init_storage();
 init_keys();
 init_crypto();
@@ -23369,8 +23636,8 @@ async function verifyFolder(storage, { schemas: schemas2, remote = false, fetch:
     });
     if (!archive.old) {
       if (f) {
-        report.add(...await keeperFindings(f, remote, fetchJson));
-        report.add(...await presentationFindings(f, archive.disc));
+        report.add(...await guarded("the keepers", () => keeperFindings(f, remote, fetchJson)));
+        report.add(...await guarded("the presentation files", () => presentationFindings(f, archive.disc)));
       }
     }
   } catch (error) {
@@ -23379,12 +23646,22 @@ async function verifyFolder(storage, { schemas: schemas2, remote = false, fetch:
       remote,
       digests
     });
-    report.add(finding("error", "opensheaf.json", error.kind === "not-found" ? "the discovery document is missing (section 3.1)" : `not JSON: ${error.detail}`));
+    report.add(finding("error", "opensheaf.json", error.kind === "not-found" ? "the discovery document is missing (section 3.1)" : error.detail === "is not a JSON object" ? "the discovery document is a JSON object (section 3.1)" : `not JSON: ${error.detail}`));
   }
   if (!report.findings.some((f) => f.message === "specification 0.1: rebuild (section 16.1)")) {
     report.add(...await lookForKeys(storage));
   }
   return report;
+}
+async function guarded(what, step) {
+  try {
+    return await step();
+  } catch (error) {
+    if (error?.kind === "aborted") throw error;
+    return [
+      finding("error", "archive", `the checks of ${what} stopped on a file they cannot read (${error?.constructor?.name ?? "Error"}: ${String(error?.message ?? error).slice(0, 300)}); the rest of them are not made`)
+    ];
+  }
 }
 async function unlistedObjects(f, archive) {
   const listed = /* @__PURE__ */ new Set([
@@ -23413,7 +23690,13 @@ async function keeperFindings(f, remote, fetchJson = null) {
   const out = [];
   for (const { id, dir, inv } of await f.objects()) {
     if (!inv || typeof id !== "string") continue;
-    if ((await f.readObjectJson(dir, inv, "object.json"))?.kind !== "owner") continue;
+    let kind;
+    try {
+      kind = (await f.readObjectJson(dir, inv, "object.json"))?.kind;
+    } catch {
+      continue;
+    }
+    if (kind !== "owner") continue;
     let log;
     try {
       log = await f.keyLog(id.split(":")[2]);
@@ -23571,8 +23854,10 @@ init_inputs();
 init_http();
 init_resolve();
 init_names();
+init_owners();
 init_signatures();
 init_versions();
+init_branches();
 init_paths();
 init_write();
 init_storage();
@@ -23664,8 +23949,10 @@ async function branchPointFiles(c, k) {
 }
 function chainOwners(files) {
   const out = [];
-  for (let prefix = ""; files.has(prefix + "parent/object.json"); prefix += "parent/") {
-    out.push(JSON.parse(new TextDecoder().decode(files.get(prefix + "parent/object.json"))).owner);
+  for (let prefix = ""; files.has(prefix + "parent/object.json") && out.length <= MAX_DEPTH; prefix += "parent/") {
+    const owner = jsonOrNull(files.get(prefix + "parent/object.json"))?.owner;
+    if (typeof owner !== "string" || !OWNER_NAME.test(owner)) break;
+    out.push(owner);
   }
   return out;
 }
@@ -25432,16 +25719,16 @@ async function directRecordWallet({ repo, github, env, owner, wallet, mirror = n
 function walletRotationKeys(entries, next) {
   return entries.filter((e) => e.fields.kind === ROTATION && next.includes(e.fields.digest)).map((e) => e.fields.digest);
 }
-async function signing(rk, { owner, number, next }, where2) {
+async function signing(rk, { owner, number: number2, next }, where2) {
   if (rk.owner !== null && rk.owner !== owner || rk.kind !== ROTATION || !next.includes(rk.key.digest)) {
     rk.key.seed?.fill(0);
-    throw new KeyError(rk.owner !== null && rk.owner !== owner ? `${where2} is a rotation key of ${short(rk.owner)}, not of ${short(owner)}` : rk.kind !== ROTATION ? `${where2} is a ${rk.kind} key, not a rotation key` : `${where2}: ${rk.key.did} is not a rotation key that v${number} of the key log commits (used up already, or of another version)`);
+    throw new KeyError(rk.owner !== null && rk.owner !== owner ? `${where2} is a rotation key of ${short(rk.owner)}, not of ${short(owner)}` : rk.kind !== ROTATION ? `${where2} is a ${rk.kind} key, not a rotation key` : `${where2}: ${rk.key.did} is not a rotation key that v${number2} of the key log commits (used up already, or of another version)`);
   }
   return sealedKey(rk.key);
 }
-function enough(keys, { number, nextThreshold }, where2) {
+function enough(keys, { number: number2, nextThreshold }, where2) {
   if (keys.length < nextThreshold) {
-    throw new KeyError(`${where2} ${plural(keys.length, "rotation key")} of v${number} of the key log, and ${nextThreshold} sign the next version`);
+    throw new KeyError(`${where2} ${plural(keys.length, "rotation key")} of v${number2} of the key log, and ${nextThreshold} sign the next version`);
   }
   return keys;
 }
@@ -25628,7 +25915,7 @@ async function newOwnerKeys({ workflows = true, rotation = ROTATION_KEYS } = {})
   return keys;
 }
 async function ownerKeyLog(keys, { keeper = null, created = null, nonce = null } = {}) {
-  if (keeper && !keeperValid(keeper)) {
+  if (keeper && !keeperValid(keeper, true)) {
     throw new OwnerError(`a keeper is an ORCID iD (with its check digit) or https://<domain>/: ${keeper}`);
   }
   return newOwner([
