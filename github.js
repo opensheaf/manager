@@ -12,7 +12,7 @@ export class GitHubError extends Error {
   }
 }
 
-export async function api(token, path, { method = "GET", body, accept, fetchImpl = fetch, fresh = false } = {}) {
+export async function api(token, path, { method = "GET", body, accept, fetchImpl = fetch, fresh = false, paged = false } = {}) {
   const headers = {
     Accept: accept || "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
@@ -35,7 +35,30 @@ export async function api(token, path, { method = "GET", body, accept, fetchImpl
     const message = (data && data.message) || `GitHub answered ${response.status}`;
     throw new GitHubError(message, response.status);
   }
-  return data;
+  return paged ? { data, next: nextPage(response.headers.get("link")) } : data;
+}
+
+// The next page of a listing, from the Link header GitHub sends with it;
+// only an address of the API itself is followed, the token going nowhere else.
+export function nextPage(link) {
+  const m = /<([^>]*)>\s*;\s*rel="next"/.exec(link || "");
+  return m && m[1].startsWith(API + "/") ? m[1] : null;
+}
+
+// Every page of a listing, up to MOST pages of 100: PICK takes the items
+// out of a page (GitHub wraps some listings in an object); null when the
+// first page is not such a listing.
+async function allPages(token, path, pick, fetchImpl, most = 50) {
+  const out = [];
+  let next = path;
+  for (let n = 0; next && n < most; n++) {
+    const page = await api(token, next, { fetchImpl, paged: true });
+    const items = pick(page.data);
+    if (!Array.isArray(items)) return n === 0 ? null : out;
+    out.push(...items);
+    next = page.next;
+  }
+  return out;
 }
 
 // The user, and the repositories the token reaches: through the app's
@@ -49,21 +72,21 @@ export async function repositories(token, fetchImpl) {
   const out = new Map();
   let installations = null;
   try {
-    installations = await api(token, "/user/installations?per_page=100", { fetchImpl });
+    installations = await allPages(token, "/user/installations?per_page=100", (d) => d && d.installations, fetchImpl);
   } catch (e) {
     if (e.status !== 403 && e.status !== 401) throw e;
   }
-  if (installations && installations.installations) {
-    for (const inst of installations.installations) {
-      const repos = await api(token, `/user/installations/${inst.id}/repositories?per_page=100`,
-                              { fetchImpl });
-      for (const r of repos.repositories) out.set(r.full_name, r);
+  if (installations) {
+    for (const inst of installations) {
+      const repos = await allPages(token, `/user/installations/${inst.id}/repositories?per_page=100`,
+                                   (d) => d && d.repositories, fetchImpl);
+      for (const r of repos) out.set(r.full_name, r);
     }
-    return { repos: [...out.values()], installations: installations.installations };
+    return { repos: [...out.values()], installations };
   }
-  const repos = await api(token, "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=pushed",
-                          { fetchImpl });
-  return { repos, installations: null };
+  const repos = await allPages(token, "/user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=pushed",
+                               (d) => d, fetchImpl);
+  return { repos: repos || [], installations: null };
 }
 
 // The options of the reading functions: a fetch to use instead of the

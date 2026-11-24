@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { requestId, safeName, buildRequest, base64, commitFiles } from "../github.js";
+import { requestId, safeName, buildRequest, base64, commitFiles, repositories } from "../github.js";
 import { check, FORMS } from "../forms.js";
 
 test("request identifiers sort by time", () => {
@@ -181,4 +181,37 @@ test("whether a secret is set: true, false, or unknown without the permission", 
   assert.equal(await secretExists("t", "o/r", "OPENSHEAF_SIGNING_KEY", reply(200)), true);
   assert.equal(await secretExists("t", "o/r", "OPENSHEAF_SIGNING_KEY", reply(404)), false);
   assert.equal(await secretExists("t", "o/r", "OPENSHEAF_SIGNING_KEY", reply(403)), null);
+});
+
+test("repositories: every page of the installations and of their repositories, then of the user's", async () => {
+  const API = "https://api.github.com";
+  const repos = (from, n) => Array.from({ length: n }, (_, k) => ({ full_name: `me/r${from + k}` }));
+  const pages = {
+    "/user/installations?per_page=100": [{ installations: [{ id: 1 }] }, "/user/installations?per_page=100&page=2"],
+    "/user/installations?per_page=100&page=2": [{ installations: [{ id: 2 }] }, null],
+    "/user/installations/1/repositories?per_page=100": [{ repositories: repos(0, 100) }, "/user/installations/1/repositories?per_page=100&page=2"],
+    "/user/installations/1/repositories?per_page=100&page=2": [{ repositories: repos(100, 30) }, null],
+    "/user/installations/2/repositories?per_page=100": [{ repositories: repos(500, 1) }, "https://elsewhere.example/steal"],
+  };
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const [data, next] = pages[url.slice(API.length)] || [{ message: "Not Found" }, null];
+    const headers = { "content-type": "application/json" };
+    if (next) headers.link = `<${next.startsWith("http") ? next : API + next}>; rel="next", <${API}/x?page=9>; rel="last"`;
+    return new Response(JSON.stringify(data), { status: pages[url.slice(API.length)] ? 200 : 404, headers });
+  };
+  const { repos: found, installations } = await repositories("t", fetchImpl);
+  assert.deepEqual(installations.map((i) => i.id), [1, 2]);
+  assert.equal(found.length, 131);
+  assert.ok(found.some((r) => r.full_name === "me/r129") && found.some((r) => r.full_name === "me/r500"));
+  assert.ok(!calls.some((u) => u.includes("elsewhere")));
+  const user = await repositories("t", async (url) => {
+    if (url.includes("/user/installations")) return new Response("{}", { status: 403, headers: { "content-type": "application/json" } });
+    const page = url.includes("page=2") ? 2 : 1;
+    return new Response(JSON.stringify(repos(page * 100, page === 1 ? 100 : 5)), { status: 200, headers: {
+      "content-type": "application/json", ...(page === 1 ? { link: `<${API}/user/repos?per_page=100&page=2>; rel="next"` } : {}) } });
+  });
+  assert.equal(user.installations, null);
+  assert.equal(user.repos.length, 105);
 });
