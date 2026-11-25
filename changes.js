@@ -16,10 +16,13 @@ const SENT = new RegExp(`^Request (${ID}): `);
 export const WORKFLOW_AUTHOR = "github-actions[bot]";
 
 // How a commit of GitHub's list was made: "page", "workflow", "request"
-// (sent from a page) or "other"; and the request it answers, if any.
+// (sent from a page) or "other"; and the request it answers, if any. The
+// workflow is known by the GitHub account the commit's author is linked to
+// (its login), never by the author's name written in the commit, which
+// whoever pushes chooses.
 export function howMade(c) {
   const subject = String((c.commit && c.commit.message) || "").split("\n")[0];
-  const author = (c.author && c.author.login) || (c.commit && c.commit.author && c.commit.author.name) || "";
+  const author = (c.author && typeof c.author.login === "string" && c.author.login) || "";
   const answer = ANSWER.exec(subject);
   if (author === WORKFLOW_AUTHOR) return { how: "workflow", answers: answer ? answer[1] || answer[2] : null };
   if (subject.includes(PAGE_ORIGIN)) return { how: "page", answers: null };

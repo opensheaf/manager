@@ -127,7 +127,8 @@ test("a key wallet recorded in osheaf.json as a hint for the owner, once", async
   const after = JSON.parse(text(g.files(REPO).get("osheaf.json")));
   assert.deepEqual(after.keys, { [owner]: { wallets: [WALLET] } });
   assert.equal(walletHinted(after), true);
-  assert.equal(walletName(after, "github:other/keys"), WALLET);
+  assert.equal(walletName(after), WALLET);
+  assert.equal(walletName(after, "github:other/keys"), "github:other/keys");   // the person's own first
   const again = await recordWallet({ gh, repo: REPO, owner, wallet: WALLET, fetchImpl: noNetwork });
   assert.deepEqual([again.recorded, again.commit], [false, null]);
 });

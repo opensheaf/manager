@@ -43,10 +43,15 @@ passkeys of those who use them (`osheaf key enroll`). Wallets and owners
 are many to many: a wallet may hold the keys of several owners (an
 institution's wallet), several people may share a wallet and its owner
 (a group), each with a passkey of their own, and an owner's keys may be in
-several wallets. Under "Write directly", the page lists the wallets that
-the archive's `osheaf.json` hints for each owner it hosts (`"keys":
-{"<owner>": {"wallets": [...]}}`), then those added by name in the page (kept in
-this browser: names, not secrets). Choosing a wallet (step 1) and then
+several wallets. Under "Write directly", the page lists the wallets
+added by name in the page (kept in this browser: names, not secrets),
+then those that the archive's `osheaf.json` hints for each owner it hosts
+(`"keys": {"<owner>": {"wallets": [...]}}`), in the order `osheaf` tries
+them: `osheaf.json` is written by whoever can change the archive, and its
+hints come after the person's own wallets. The wallet chosen at first is
+the first of them that holds keys of the archive's owners; the setup
+below warns before putting keys into a wallet that only `osheaf.json`
+names. Choosing a wallet (step 1) and then
 the owners to unlock in it (step 2, the owners of the archive whose keys
 it holds, read from it) are two steps; "Unlock the chosen owners with
 your passkey" then unlocks them, and owners unlocked from several wallets
@@ -62,8 +67,9 @@ unlocks two owners when one passkey opens both (version 2 of the popup's
 request, see opensheaf/unlock), else one; the others are unlocked by
 "Unlock the next", a touch each, since a browser opens a popup only from
 a click. The keys are kept in the page's memory only, as WebCrypto keys
-that cannot be exported, until the page is closed or locked ("Lock");
-they are never written to the browser's storage. The GitHub sign-in must
+that cannot be exported, until the page is closed or locked ("Lock"),
+another archive is opened, or the person signs out; they are never
+written to the browser's storage. The GitHub sign-in must
 be able to read the wallet: install the OpenSheaf app on the wallet's
 repository too (the page only reads it, except to set it up, below).
 
@@ -263,7 +269,10 @@ script, and tells the user of an older `osheaf` to update it.
 ## Its own origin
 
 The page is served at `https://manager.opensheaf.org` (the file `CNAME`;
-GitHub Pages redirects `https://opensheaf.org/manager/` there). An origin
+GitHub Pages redirects `https://opensheaf.org/manager/` there), as the
+files are, without Jekyll (the file `.nojekyll`), so that no page this
+repository does not hold, such as one made of `README.md`, is served at
+that origin. An origin
 of its own keeps the page apart from the other pages of the project's
 sites, the archives and collections served under `https://opensheaf.org/`
 among them: only this origin receives tokens from the sign-in service,
@@ -293,7 +302,13 @@ them, the page says what to do by hand. GitHub lets only an administrator
 of the repository set its secrets or Pages.
 
 The token stays in the tab (`sessionStorage`), and goes only to GitHub's
-API. Only those who may write to the repository can commit to it or send
+API. Signing out forgets it, the keys unlocked and the secrets of a setup
+not finished, and asks the sign-in service to revoke the app's tokens at
+GitHub (`POST /revoke`), which ends the app's sign-in on the person's
+other devices too; the page does not wait for the answer, and a service
+that cannot revoke leaves the token to expire by itself. The page refuses
+to run inside another page's frame (GitHub Pages sends no header that
+forbids framing, and a `meta` tag cannot). Only those who may write to the repository can commit to it or send
 requests, so the archive's workflow needs no further check. A personal
 access token limited to the archive's repository cannot read the key
 wallet: give it the wallet's repository too (Contents: read).
@@ -306,6 +321,9 @@ wallet: give it the wallet's repository too (Contents: read).
   connections over https only: GitHub's API, the sign-in service, the
   archive's own site (a faster copy of its files, each checked against
   its git name), and the other archives whose papers a collection holds.
+  The last two may be on any host (an archive's site on a domain of its
+  own), and a `meta` policy cannot be widened once the page knows them,
+  so connections are not limited to a list of hosts.
 - `app.js`: the interface: signing in, choosing the repository, showing
   the archive, the setup of a repository not set up (the owner made in the
   page, or the key ceremony), the forms,
@@ -317,8 +335,11 @@ wallet: give it the wallet's repository too (Contents: read).
   afresh from the head of its branch whenever the panel opens and after
   each change: each with its time, its subject, a link to it on GitHub,
   and how it was made: signed in this page (its subject names the
-  manager, "(the OpenSheaf manager)"), by the archive's workflow (by
-  `github-actions[bot]`), a request sent from this page, or pushed. A
+  manager, "(the OpenSheaf manager)"), by the archive's workflow (its
+  author linked by GitHub to the account `github-actions[bot]`, never
+  by the name written in the commit alone), a request sent from this
+  page, or pushed. These are hints, not proofs: who can push can write
+  any subject, and any author's e-mail address. A
   commit of the workflow that answers a request has the answer folded
   under it (`requests/results/ID.json` at that commit), with "Correct and
   send again" for a request refused.

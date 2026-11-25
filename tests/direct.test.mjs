@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as core from "../vendor/opensheaf-manager.js";
-import { unlockWithPopup, walletName, walletHinted, locksOf, Keys, github } from "../direct.js";
+import { unlockWithPopup, walletName, walletChoices, walletHinted, hintedOnly, locksOf, Keys, github } from "../direct.js";
 
 import { seal, windows, owner, cred } from "./popup-double.mjs";
 
@@ -74,11 +74,19 @@ test("the wallet: named by the archive, or by the person", () => {
   assert.equal(walletName({}, "github:jane/my-keys"), "github:jane/my-keys");
   assert.equal(walletName({ keys: "command" }, "offline"), "");
   assert.equal(walletName({}, "github:../x"), "");
-  // the hints of osheaf.json for the owner, before the one given
+  // the one given, before the hints of osheaf.json for the owner (as osheaf orders them)
   const o = "a".repeat(52), p = "b".repeat(52);
   const settings = { owner: o, keys: { [o]: { wallets: ["github:jane/keys", "github:inst/keys"] }, wallet: "github:all/keys" } };
-  assert.equal(walletName(settings, "github:other/x"), "github:jane/keys");
+  assert.equal(walletName(settings, "github:other/x"), "github:other/x");
+  assert.equal(walletName(settings, ""), "github:jane/keys");
+  assert.equal(walletName(settings, "offline"), "github:jane/keys");
   assert.equal(walletName(settings, "", p), "");
+  const choices = walletChoices(settings, ["github:me/opensheaf-keys", "github:inst/keys"]);
+  assert.deepEqual(choices.map((c) => [c.wallet, c.given, c.hinted.length]),
+                   [["github:me/opensheaf-keys", true, 0], ["github:inst/keys", true, 1], ["github:jane/keys", false, 1]]);
+  assert.equal(hintedOnly(choices, "github:jane/keys"), true);
+  assert.equal(hintedOnly(choices, "github:inst/keys"), false);
+  assert.equal(hintedOnly(choices, "github:me/opensheaf-keys"), false);
   assert.equal(walletName({ owner: o, keys: { [p]: { wallets: ["github:p/keys"] } } }, "github:mine/keys"), "github:mine/keys");
   assert.equal(walletHinted(settings), true);
   assert.equal(walletHinted({ owner: o, keys: { [p]: { wallet: "github:p/keys" } } }), false);

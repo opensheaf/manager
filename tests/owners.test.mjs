@@ -17,10 +17,11 @@ test("the owners an archive hosts, and the wallets offered for them, many to man
   const settings = { owner: A, owners: [B, C],
                      keys: { [A]: { wallets: ["github:inst/keys", "github:jane/keys"] }, [B]: { wallets: ["github:inst/keys"] },
                              wallet: "github:all/keys" } };
+  // the person's own wallets first, then the hints of osheaf.json (as osheaf orders them)
   assert.deepEqual(walletChoices(settings, ["github:me/keys", "github:jane/keys", "not a wallet"]), [
-    { wallet: "github:inst/keys", hinted: [A, B], given: false },
-    { wallet: "github:jane/keys", hinted: [A], given: true },
     { wallet: "github:me/keys", hinted: [], given: true },
+    { wallet: "github:jane/keys", hinted: [A], given: true },
+    { wallet: "github:inst/keys", hinted: [A, B], given: false },
   ]);
   // the forms of the draft, one wallet for the archive, are no longer read
   assert.deepEqual(walletChoices({ owner: A, keys: "github:old/keys" }), []);

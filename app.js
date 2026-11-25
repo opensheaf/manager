@@ -9,7 +9,7 @@
 // forms; the result then comes back in requests/results/ID.json.
 
 import { SERVICE, APP_SLUG, TEMPLATE } from "./config.js";
-import { signIn, refresh } from "./gh-auth.js";
+import { signIn, refresh, revoke } from "./gh-auth.js";
 import * as gh from "./github.js";
 import { FORMS, NEW_VERSION, check, subject } from "./forms.js";
 import { memberUri, memberLink, explorerLink, canonicalUri, originatorOf, shortForms, ownerShown, foreignName,
@@ -272,7 +272,7 @@ const token = tokenSource({
   get: () => state.auth,
   set: (auth) => { state.auth = auth; saveAuth(); },
   renew: (refreshToken) => refresh(SERVICE, refreshToken),
-  expired: () => { signOut(); message("bad", "Your sign-in has expired: sign in again."); },
+  expired: () => { signOut({ quiet: true }); message("bad", "Your sign-in has expired: sign in again."); },
 });
 
 // The open repository is kept in the page's address (#repo=owner/name), so
@@ -298,15 +298,44 @@ async function afterSignIn() {
   if (repo) await openArchive(repo);
 }
 
-function signOut() {
+// Signing out forgets, in this tab, the keys unlocked and the secrets of a
+// setup or of a new owner not finished (passphrase, seeds), and revokes the
+// sign-in at GitHub through the sign-in service (which ends the app's
+// sign-in on every device of the person). The tokens are forgotten here
+// whatever the service answers: a service without /revoke, or one that
+// does not answer in a few seconds, leaves the token to expire by itself.
+function signOut({ quiet = false } = {}) {
   state.keys.forget();
+  forgetPending();
+  const auth = state.auth;
   state.auth = state.user = state.repo = null;
   saveAuth();
+  if (auth && auth.kind === "app") revokeQuietly(auth, quiet === true);
   setRepoInAddress("");
   show("#archive");
   show("#form");
   showDock(false);
   showSignIn();
+}
+
+function forgetPending() {
+  direct.forgetNewKey(setup.pending);
+  direct.forgetOwner(creating.pending);
+  setup.repo = setup.node = setup.body = setup.state = setup.pending = null;
+  creating.repo = creating.node = creating.pending = null;
+  creating.values = {};
+}
+
+const REVOKE_TIMEOUT = 4000;
+
+function revokeQuietly(auth, quiet) {
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(null), REVOKE_TIMEOUT));
+  Promise.race([revoke(SERVICE, auth).catch(() => false), timeout]).then((done) => {
+    if (!done && !quiet && !state.auth) {
+      message("info", "Signed out in this tab. The sign-in service could not revoke the token at GitHub: " +
+                      "it expires by itself within eight hours.");
+    }
+  });
 }
 
 function showSignIn() {
@@ -353,7 +382,9 @@ async function showRepositories() {
   show("#account",
     el("p", { class: "signed-in" }, "Signed in as ", el("strong", {}, state.user.login),
        state.auth.kind === "pat" ? " (personal access token)" : "", " ",
-       el("button", { class: "small", onclick: signOut }, "Sign out")),
+       el("button", { class: "small", onclick: signOut }, "Sign out"),
+       state.auth.kind === "app" ? el("span", { class: "small muted" }, " (also ends the sign-in on your other " +
+         "devices; GitHub asks to authorise the app again at the next sign-in)") : null),
     el("form", { class: "controls", onsubmit: (ev) => {
       ev.preventDefault();
       const repo = typed.value.trim() || select.value;
@@ -399,6 +430,8 @@ async function openArchive(repo) {
     state.signers = null;
     state.signersBy = new Map();
     state.wallets = { chosen: "", owners: new Map(), selected: new Map(), next: null, open: false };
+    // keys unlocked for another archive are not carried over to this one
+    state.keys.forget();
   }
   state.repo = repo;
   state.ref = "";
@@ -1277,13 +1310,18 @@ function removeWallet(w) {
 
 const walletChoices = () => direct.walletChoices(state.settings, givenWallets());
 
-// The wallet chosen (step 1): the one chosen in this tab, else the first
-// hinted for the default owner, else the first.
+// The wallet chosen (step 1): the one chosen in this tab, else, as osheaf
+// finds an owner's wallet, the first of the choices (the person's own
+// before the hints of osheaf.json) that holds keys of the archive's
+// owners, one read already and holding none, or that cannot be read,
+// passed over; else the first.
 function chosenWallet() {
   const all = walletChoices();
   if (state.wallets.chosen && all.some((c) => c.wallet === state.wallets.chosen)) return state.wallets.chosen;
-  const s = state.settings;
-  const first = all.find((c) => c.hinted.includes(s.owner)) || all[0];
+  const first = all.find((c) => {
+    const known = state.wallets.owners.get(c.wallet);
+    return !known || known.loading || (!known.error && known.list.length);
+  }) || all[0];
   return first ? first.wallet : "";
 }
 
@@ -1632,6 +1670,9 @@ function renderSetup() {
     el("p", {}, "A private repository, never the archive's: the wallet chosen above, or a new one (add its name above): "),
     el("div", { class: "controls" }, walletInput, el("button", { onclick: check }, "Check the wallet")),
     el("p", {}, links),
+    direct.hintedOnly(walletChoices(), name()) ? el("p", { class: "small bad" }, `${name()} is named by osheaf.json of ` +
+      "this archive, which whoever can change the archive writes, and not by you: put keys there only if it is your " +
+      "own wallet, or add yours above.") : null,
   ];
   if (st) {
     const signers = setupSigners();
@@ -2016,6 +2057,7 @@ function unlockNext() {
 
 function runUnlock(wallet, planned) {
   if (state.unlocking) return state.unlocking;
+  const repo = state.repo;
   message("info", "Unlocking in the window of unlock.opensheaf.org: use your passkey there ...");
   state.unlocking = direct.unlockBatch({
     askCode,
@@ -2029,6 +2071,7 @@ function runUnlock(wallet, planned) {
     },
   }).then(async (got) => {
     const p = await planned;
+    if (state.repo !== repo) throw new Error(`another archive was opened meanwhile: the keys unlocked for ${repo} are not kept`);
     for (const [o, keys] of got) state.keys.add(o, keys, wallet);
     const rest = p.batches.slice(1);
     state.wallets.next = rest.length ? { wallet, plan: { batches: rest, none: p.none } } : null;
@@ -2459,6 +2502,15 @@ async function showResults() {
 // --- start ---------------------------------------------------------------------
 
 async function start() {
+  // Inside another page's frame, the page does nothing: a frame has this
+  // page's origin, which the popups of the sign-in and of the passkeys
+  // trust, and clicks could be led onto it (GitHub Pages sends no header
+  // that forbids framing, and a meta tag cannot).
+  if (window.top !== window.self) {
+    show("#account", el("p", { class: "bad" }, "The manager does not run inside another page. Open it on its own, " +
+                                               "at https://manager.opensheaf.org/."));
+    return;
+  }
   initDock();
   try { state.auth = JSON.parse(sessionStorage.getItem(KEY) || "null"); } catch (_) { state.auth = null; }
   if (state.auth) {

@@ -1,10 +1,11 @@
 // Client side of opensheaf/gh-auth, for pages that write to GitHub.
 //
-//   import { signIn, refresh } from "./gh-auth.js";
+//   import { signIn, refresh, revoke } from "./gh-auth.js";
 //   const auth = await signIn("https://gh-auth.example.workers.dev");
 //   // auth.access_token, and for a GitHub App also auth.expires_in,
 //   // auth.refresh_token, auth.refresh_token_expires_in
 //   const renewed = await refresh(service, auth.refresh_token);
+//   await revoke(service, auth);   // sign-out: revokes the tokens at GitHub
 //
 // signIn must be called from a user action (a click), or the browser blocks
 // the popup.
@@ -62,6 +63,31 @@ export async function refresh(service, refreshToken) {
                 `Refresh failed (status ${response.status}).`),
       { code: data && data.error });
   return withExpiry(data);
+}
+
+// Revokes the user's tokens at GitHub (the service deletes the user's
+// authorisation of the app, which ends every token of the app for them).
+// Takes { access_token, refresh_token }, either may be missing. Resolves to
+// true once the tokens are revoked, false when the service has no /revoke
+// (an older deployment); throws when the revocation failed. Forget the
+// tokens in any case.
+export async function revoke(service, { access_token, refresh_token } = {}) {
+  const body = {};
+  if (access_token) body.access_token = access_token;
+  if (refresh_token) body.refresh_token = refresh_token;
+  if (!body.access_token && !body.refresh_token) return true;
+  const response = await fetch(new URL("/revoke", service), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response.status === 204) return true;
+  if (response.status === 404) return false;
+  const data = await response.json().catch(() => null);
+  throw Object.assign(
+    new Error((data && (data.error_description || data.error)) ||
+              `Revocation failed (status ${response.status}).`),
+    { code: data && data.error });
 }
 
 // Adds absolute expiry times (milliseconds since the epoch), easier to

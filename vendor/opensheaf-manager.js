@@ -1,4 +1,4 @@
-// opensheaf-js 26788be0d639b621fd248de74d6390c143818f21: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 867169a15227d1df8164996ffd97688ba19dc016: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -20639,19 +20639,18 @@ var GitHubWallet = class {
     this.forbidden = new Set([
       ...forbidden
     ].map((f) => f.toLowerCase()));
-    this.token = void 0;
     this.checked = false;
   }
   async api(method, path, body = null) {
-    if (this.token === void 0) this.token = await this.github.token();
-    if (!this.token) throw new WalletError("gh is not signed in to GitHub, and GITHUB_TOKEN is not set: run gh auth login");
+    const token = await this.github.token();
+    if (!token) throw new WalletError("gh is not signed in to GitHub, and GITHUB_TOKEN is not set: run gh auth login");
     let r;
     try {
       r = await this.github.fetch(`${this.github.api.replace(/\/$/, "")}/${path}`, {
         method,
         headers: {
           Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${this.token}`,
+          Authorization: `Bearer ${token}`,
           "X-GitHub-Api-Version": "2022-11-28",
           "User-Agent": "opensheaf-js",
           ...body ? {
@@ -25777,8 +25776,8 @@ async function enrollPasskey(wallet, plan, passphrase, cred, prf, { cost = {}, p
 function walletCandidates(settings2, owner, given = []) {
   const out = [];
   for (const w of [
-    ...hints(settings2?.keys, owner),
-    ...given
+    ...given,
+    ...hints(settings2?.keys, owner)
   ]) {
     if (typeof w === "string" && /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(w) && !out.includes(w)) out.push(w);
   }

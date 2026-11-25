@@ -23,6 +23,10 @@ test("how a commit was made", () => {
   assert.deepEqual(howMade(commit("f", "Request 20261121-100000-abcd: Notice: first", "jane")),
                    { how: "request", answers: null, sent: "20261121-100000-abcd" });
   assert.deepEqual(howMade(commit("g", "Fix the README", "jane")), { how: "other", answers: null });
+  // a commit whose author is named github-actions[bot] but linked to no account is not the workflow's
+  const named = { sha: "h", author: null, commit: { message: "Notice (request 20261121-100000-abcd)",
+                                                    author: { name: "github-actions[bot]", date: "2026-11-21T10:00:00Z" } } };
+  assert.deepEqual(howMade(named), { how: "other", answers: null });
 });
 
 test("the changes are read from the head, past the cache; an answer at its commit", async () => {

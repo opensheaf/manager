@@ -71,10 +71,12 @@ export function hostedOwners(settings) {
 
 const WALLET_NAME = /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/;
 
-// The wallets the page offers: those osheaf.json hints, for each owner the
-// archive hosts, then those the person added (kept in
-// this browser). Wallets and owners are many to many: each wallet with the
-// owners it is hinted for, and whether the person added it.
+// The wallets the page offers: those the person added (kept in this
+// browser), then those osheaf.json hints, for each owner the archive hosts,
+// as osheaf orders them: osheaf.json is written by whoever can change the
+// archive, and a hint of it must not come before the person's own wallets.
+// Wallets and owners are many to many: each wallet with the owners it is
+// hinted for, and whether the person added it.
 // [{ wallet, hinted: [owner], given: bool }]
 export function walletChoices(settings, given = []) {
   const out = new Map();
@@ -87,10 +89,10 @@ export function walletChoices(settings, given = []) {
     out.set(w, e);
   };
   const keys = settings && settings.keys;
+  for (const w of given) add(w, null, true);
   for (const o of hostedOwners(settings)) {
     for (const w of core.walletHints(keys, o)) add(w, o, false);
   }
-  for (const w of given) add(w, null, true);
   return [...out.values()];
 }
 
@@ -179,14 +181,22 @@ export function github(token, fetchImpl = globalThis.fetch && globalThis.fetch.b
   return new core.GitHub({ token, fetch: fetchImpl });
 }
 
-// The wallet of the owner's keys: the first wallet the archive's osheaf.json
-// hints for the owner ("keys": {"<owner>": {"wallets": [...]}}), else the one the person
-// gave (kept in this browser: a name, not a secret). Only GitHub wallets can
-// be read from a page. OWNER: by default the archive's owner.
+// The wallet of the owner's keys: the one the person gave (kept in this
+// browser: a name, not a secret), else the first wallet the archive's
+// osheaf.json hints for the owner ("keys": {"<owner>": {"wallets": [...]}}),
+// as osheaf orders them (core.walletCandidates). Only GitHub wallets can be
+// read from a page. OWNER: by default the archive's owner.
 export function walletName(settings, given = "", owner = settings && settings.owner) {
-  const named = core.walletCandidates(settings || {}, owner || null)[0] || "";
-  const name = (named.startsWith("github:") ? named : String(given || "")).trim();
-  return /^github:[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(name) ? name : "";
+  const mine = String(given || "").trim();
+  return core.walletCandidates(settings || {}, owner || null, WALLET_NAME.test(mine) ? [mine] : [])[0] || "";
+}
+
+// Whether wallet W is offered only because the archive's osheaf.json hints
+// it, not because the person added it (osheaf key push asks before putting
+// keys into such a wallet).
+export function hintedOnly(choices, w) {
+  const c = choices.find((x) => x.wallet === w);
+  return Boolean(c && !c.given && c.hinted.length);
 }
 
 // Whether the archive's osheaf.json hints a wallet for OWNER.
