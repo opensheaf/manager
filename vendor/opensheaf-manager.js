@@ -1,4 +1,4 @@
-// opensheaf-js 1edf2ea965f4e10b1e74241c636cb76883fbc6bf: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 26788be0d639b621fd248de74d6390c143818f21: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -105,7 +105,11 @@ function pause(ms, signal) {
 }
 function watchdog() {
   const controller = new AbortController();
-  let timer = null, ms = 0;
+  let timer = null, ms = 0, end2 = null, left = Infinity, since = 0, late = "";
+  const fire = (dog, why) => {
+    dog.fired = why;
+    controller.abort();
+  };
   return {
     signal: controller.signal,
     fired: null,
@@ -115,15 +119,27 @@ function watchdog() {
       this.why = why;
       this.rearm();
     },
+    within(limit, why) {
+      left = limit;
+      late = why;
+      this.resume();
+    },
     rearm() {
       clearTimeout(timer);
-      timer = setTimeout(() => {
-        this.fired = this.why;
-        controller.abort();
-      }, ms);
+      timer = setTimeout(() => fire(this, this.why), ms);
+      this.resume();
+    },
+    resume() {
+      if (end2 !== null || left === Infinity) return;
+      since = Date.now();
+      end2 = setTimeout(() => fire(this, late), left);
     },
     stop() {
       clearTimeout(timer);
+      if (end2 === null) return;
+      clearTimeout(end2);
+      end2 = null;
+      left = Math.max(0, left - (Date.now() - since));
     }
   };
 }
@@ -272,6 +288,7 @@ var init_http = __esm({
       cache: 64 * 2 ** 20,
       timeout: 6e4,
       stall: 3e4,
+      deadline: 3e5,
       concurrency: 6,
       depth: 3,
       pins: 2e3,
@@ -282,7 +299,9 @@ var init_http = __esm({
       nesting: 64,
       retry: 3e4,
       pageRequests: 4e4,
-      pageBytes: 256 * 2 ** 20
+      pageBytes: 256 * 2 ** 20,
+      runFiles: 2e5,
+      runBytes: 16 * 2 ** 30
     };
     FetchError = class extends Error {
       constructor(kind, url, detail, status = null) {
@@ -307,7 +326,7 @@ var init_http = __esm({
       }, spent = {
         requests: 0,
         bytes: 0
-      } } = {}) {
+      }, counts = null, upstream = null } = {}) {
         this.fetchImpl = fetch2;
         this.run = run;
         this.large = large;
@@ -320,12 +339,14 @@ var init_http = __esm({
         this.bytesRead = 0;
         this.budget = budget;
         this.spent = spent;
+        this.counts = counts;
+        this.upstream = upstream;
       }
       newPage() {
         this.spent.requests = 0;
         this.spent.bytes = 0;
       }
-      another({ budget = this.budget } = {}) {
+      another({ budget = this.budget, counts = null, upstream = null } = {}) {
         return new _Http({
           fetch: this.fetchImpl,
           timeout: this.timeout,
@@ -334,7 +355,9 @@ var init_http = __esm({
           large: this.large,
           cacheLimit: this.cacheLimit,
           budget,
-          spent: budget === this.budget ? this.spent : void 0
+          spent: budget === this.budget ? this.spent : void 0,
+          counts,
+          upstream
         });
       }
       checkUrl(url) {
@@ -373,10 +396,14 @@ var init_http = __esm({
         }
       }
       async attempt(url, method, limit, signal, canRetry, headers) {
-        const room = this.budget ? this.budget.bytes - this.spent.bytes : Infinity;
-        if (this.budget && (this.spent.requests >= this.budget.requests || room <= 0)) {
+        const pageRoom = this.budget ? this.budget.bytes - this.spent.bytes : Infinity;
+        const runRoom = this.counts ? LIMITS.runBytes - this.counts.bytes : Infinity;
+        const room = Math.min(pageRoom, runRoom);
+        if (this.budget && (this.spent.requests >= this.budget.requests || pageRoom <= 0)) {
           throw new FetchError("budget", url, `not read: this page has made ${this.spent.requests} requests and read ${this.spent.bytes} bytes, the most allowed for one page`);
         }
+        const runOut = () => new FetchError("budget", url, `not read: the copies of this run have brought ${LIMITS.runFiles} files or ${LIMITS.runBytes} bytes (section 15.2)`);
+        if (this.counts && (this.counts.files >= LIMITS.runFiles || runRoom <= 0)) throw runOut();
         const dog = watchdog();
         const both = signal ? AbortSignal.any([
           signal,
@@ -384,6 +411,8 @@ var init_http = __esm({
         ]) : dog.signal;
         this.requests++;
         this.spent.requests++;
+        if (this.upstream) this.upstream.requests++;
+        dog.within(LIMITS.deadline, `not read in ${LIMITS.deadline / 1e3} seconds`);
         dog.arm(this.timeout, `no answer in ${this.timeout / 1e3} s`);
         try {
           let response;
@@ -423,9 +452,15 @@ var init_http = __esm({
             });
             this.bytesRead += bytes.length;
             this.spent.bytes += bytes.length;
+            if (this.upstream) this.upstream.bytesRead += bytes.length;
+            if (this.counts) {
+              this.counts.files++;
+              this.counts.bytes += bytes.length;
+            }
             return bytes;
           } catch (error) {
             if (error?.kind === "too-large" && room < limit) {
+              if (runRoom < pageRoom) throw runOut();
               throw new FetchError("budget", url, `not read whole: this page may read ${this.budget.bytes} bytes at most`);
             }
             if (error instanceof FetchError && error.kind !== "aborted") throw error;
@@ -9984,10 +10019,19 @@ var init_resolve = __esm({
       }
     };
     Resolver = class _Resolver {
-      constructor(http, home = null, { local = false } = {}) {
-        this.http = http;
+      constructor(http, home = null, { local = false, contents = true } = {}) {
+        this.http = http.another({
+          budget: http.budget,
+          counts: {
+            files: 0,
+            bytes: 0
+          },
+          upstream: http
+        });
         this.home = home;
         this.local = local;
+        this.readContents = contents;
+        this.checked = /* @__PURE__ */ new Map();
         this.archives = /* @__PURE__ */ new Map();
         this.logs = /* @__PURE__ */ new Map();
         this.notes = [];
@@ -9995,7 +10039,8 @@ var init_resolve = __esm({
       }
       again() {
         const fresh = new _Resolver(this.http.another(), null, {
-          local: this.local
+          local: this.local,
+          contents: this.readContents
         });
         if (this.home) fresh.home = this.home;
         return fresh;
@@ -10262,26 +10307,82 @@ var init_resolve = __esm({
           const d = n ? c.digest(n) : null;
           if (d && d !== digest) this.note("warning", `${c.where}: ${objectId(name2, owner)} ${version} does not match the pin (section 12.3)`);
         }
-        for (const c of copies) {
-          if (n && c.digest(n) === digest) return found(MEMBER_STATUS[c.status(n)] || "not a version", c, version, digest, copies);
+        for (const c of [
+          ...copies
+        ]) {
+          if (!n || c.digest(n) !== digest) continue;
+          const status = MEMBER_STATUS[c.status(n)] || "not a version";
+          if ((status === "verified" || status === "contested") && await this.contents(c, n, options)) {
+            copies.splice(copies.indexOf(c), 1);
+            continue;
+          }
+          return found(status, c, version, digest, copies);
         }
         if (copies.length) return found("mismatch", null, version, digest, copies);
         return found(await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable", null, version, digest, copies);
       }
+      async contents(c, n, options = {}) {
+        if (!this.readContents || c.archive === this.home) return null;
+        const key = JSON.stringify([
+          c.where,
+          c.id,
+          n
+        ]);
+        if (!this.checked.has(key)) {
+          const problem = await this.contentsProblem(c, n, options);
+          if (problem) this.note("warning", `${c.where}: ${c.id} v${n}: ${problem}: not read (section 12.3)`);
+          this.checked.set(key, problem);
+        }
+        return this.checked.get(key);
+      }
+      async contentsProblem(c, n, options) {
+        const inv = c.line.inv;
+        const state = inv.versions?.[`v${n}`]?.state;
+        if (!state || typeof state !== "object") return `v${n} has no state in its inventory`;
+        for (const dig of Object.keys(state)) {
+          for (const cp of Array.isArray(inv.manifest?.[dig]) ? inv.manifest[dig] : []) {
+            const k = typeof cp === "string" ? /^v([1-9][0-9]*)\//.exec(cp) : null;
+            let url = null;
+            try {
+              if (k && Number(k[1]) <= c.head) url = c.archive.contentUrl(c.id, inv, cp);
+            } catch {
+              url = null;
+            }
+            if (!url) return `a content path out of the object: '${cp}'`;
+            let bytes = null;
+            try {
+              bytes = await c.archive.http.request(url, {
+                limit: LIMITS.file,
+                signal: options.signal
+              });
+            } catch (error) {
+              if (error?.kind === "aborted") throw error;
+            }
+            if (!bytes || await sha512(bytes) !== dig) return `${cp} is missing, or does not have its digest`;
+          }
+        }
+        return null;
+      }
       async latest(name2, owner, where2 = [], options = {}) {
-        const copies = await this.copies(name2, owner, where2, options);
-        const signed = copies.filter((c) => c.latestSigned).sort((a, b) => b.latestSigned - a.latestSigned);
-        if (!signed.length) {
-          const status = copies.length ? "not a version" : await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable";
-          return found(status, null, null, null, copies);
+        let copies = await this.copies(name2, owner, where2, options);
+        for (; ; ) {
+          const signed = copies.filter((c) => c.latestSigned).sort((a, b) => b.latestSigned - a.latestSigned);
+          if (!signed.length) {
+            const status = copies.length ? "not a version" : await this.tombstoned(objectId(name2, owner), where2, options) ? "removed" : "unavailable";
+            return found(status, null, null, null, copies);
+          }
+          const top = signed[0];
+          const forks = signed.filter((c) => !top.agrees(c));
+          for (const c of forks) {
+            this.note("result", `a fork of the line ${top.id}: the copy at ${c.where} (latest signed v${c.latestSigned}) does not agree with the copy at ${top.where} (latest signed v${top.latestSigned}) (section 7.4)`);
+          }
+          if (forks.length) return found("fork", null, null, null, copies);
+          if (await this.contents(top, top.latestSigned, options)) {
+            copies = copies.filter((c) => c !== top);
+            continue;
+          }
+          return found("verified", top, `v${top.latestSigned}`, top.digest(top.latestSigned), copies);
         }
-        const top = signed[0];
-        const forks = signed.filter((c) => !top.agrees(c));
-        for (const c of forks) {
-          this.note("result", `a fork of the line ${top.id}: the copy at ${c.where} (latest signed v${c.latestSigned}) does not agree with the copy at ${top.where} (latest signed v${top.latestSigned}) (section 7.4)`);
-        }
-        if (forks.length) return found("fork", null, null, null, copies);
-        return found("verified", top, `v${top.latestSigned}`, top.digest(top.latestSigned), copies);
       }
       async documentVersion(name2, owner, n, where2 = [], options = {}) {
         const latest = await this.latest(name2, owner, where2, options);
@@ -10291,7 +10392,11 @@ var init_resolve = __esm({
         for (const h of historyOf(c.line.inv, objOf2, latest.version)) {
           if (objOf2(h)?.documentVersion === n) {
             const k = versionNumber(h);
-            return found(MEMBER_STATUS[c.status(k)] || "not a version", c, h, c.digest(k), latest.copies);
+            const status = MEMBER_STATUS[c.status(k)] || "not a version";
+            if ((status === "verified" || status === "contested") && await this.contents(c, k, options)) {
+              return found("unavailable", null, null, null, latest.copies);
+            }
+            return found(status, c, h, c.digest(k), latest.copies);
           }
         }
         this.note("warning", `${c.id}: no document version ${n} in the history of ${latest.version}`);
@@ -10350,7 +10455,9 @@ var init_resolve = __esm({
           found: await this.documentVersion(name2, owner, u.version, where2, options)
         };
         const copies = await this.copies(name2, owner, where2, options);
-        for (const c of copies) {
+        for (const c of [
+          ...copies
+        ]) {
           const k = c.find(u.sha512);
           if (k === null) continue;
           const held2 = c.obj(k)?.documentVersion;
@@ -10361,9 +10468,14 @@ var init_resolve = __esm({
               found: found("mismatch", c, `v${k}`, u.sha512)
             };
           }
+          const status2 = MEMBER_STATUS[c.status(k)] || "not a version";
+          if ((status2 === "verified" || status2 === "contested") && await this.contents(c, k, options)) {
+            copies.splice(copies.indexOf(c), 1);
+            continue;
+          }
           return {
             id,
-            found: found(MEMBER_STATUS[c.status(k)] || "not a version", c, `v${k}`, u.sha512)
+            found: found(status2, c, `v${k}`, u.sha512)
           };
         }
         const status = copies.length ? "mismatch" : await this.tombstoned(id, where2, options) ? "removed" : "unavailable";
@@ -10574,7 +10686,9 @@ var init_verify = __esm({
         this.logs = /* @__PURE__ */ new Map();
         this.statuses = /* @__PURE__ */ new Map();
         this.tombstoned = new Set(archive.tombstones().map((t) => t.id));
-        this.resolver = context.remote ? new Resolver(context.http, archive) : null;
+        this.resolver = context.remote ? new Resolver(context.http, archive, {
+          contents: context.digests
+        }) : null;
       }
       where(id) {
         return this.archive.where(id);
