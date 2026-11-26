@@ -383,8 +383,7 @@ async function showRepositories() {
     el("p", { class: "signed-in" }, "Signed in as ", el("strong", {}, state.user.login),
        state.auth.kind === "pat" ? " (personal access token)" : "", " ",
        el("button", { class: "small", onclick: signOut }, "Sign out"),
-       state.auth.kind === "app" ? el("span", { class: "small muted" }, " (also ends the sign-in on your other " +
-         "devices; GitHub asks to authorise the app again at the next sign-in)") : null),
+       state.auth.kind === "app" ? el("span", { class: "small muted" }, " (also ends the sign-in on your other devices)") : null),
     el("form", { class: "controls", onsubmit: (ev) => {
       ev.preventDefault();
       const repo = typed.value.trim() || select.value;
