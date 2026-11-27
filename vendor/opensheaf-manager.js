@@ -1,4 +1,4 @@
-// opensheaf-js 2999b3eb0892f772d6e9d04520994982aa185910: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 8bee63c47342b96b40a850aea5a0fc6f0e9642dc: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -3293,7 +3293,7 @@ var init_storage = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/hash-wasm/4.12.0/dist/index.esm.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/hash-wasm/4.12.0/dist/index.esm.js
 var index_esm_exports = {};
 __export(index_esm_exports, {
   adler32: () => adler32,
@@ -4919,21 +4919,21 @@ function createRIPEMD160() {
     return obj;
   });
 }
-function calculateKeyBuffer(hasher, key) {
-  const { blockSize } = hasher;
+function calculateKeyBuffer(hasher2, key) {
+  const { blockSize } = hasher2;
   const buf = getUInt8Buffer(key);
   if (buf.length > blockSize) {
-    hasher.update(buf);
-    const uintArr = hasher.digest("binary");
-    hasher.init();
+    hasher2.update(buf);
+    const uintArr = hasher2.digest("binary");
+    hasher2.init();
     return uintArr;
   }
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.length);
 }
-function calculateHmac(hasher, key) {
-  hasher.init();
-  const { blockSize } = hasher;
-  const keyBuf = calculateKeyBuffer(hasher, key);
+function calculateHmac(hasher2, key) {
+  hasher2.init();
+  const { blockSize } = hasher2;
+  const keyBuf = calculateKeyBuffer(hasher2, key);
   const keyBuffer = new Uint8Array(blockSize);
   keyBuffer.set(keyBuf);
   const opad = new Uint8Array(blockSize);
@@ -4942,23 +4942,23 @@ function calculateHmac(hasher, key) {
     opad[i] = v ^ 92;
     keyBuffer[i] = v ^ 54;
   }
-  hasher.update(keyBuffer);
+  hasher2.update(keyBuffer);
   const obj = {
     init: () => {
-      hasher.init();
-      hasher.update(keyBuffer);
+      hasher2.init();
+      hasher2.update(keyBuffer);
       return obj;
     },
     update: (data2) => {
-      hasher.update(data2);
+      hasher2.update(data2);
       return obj;
     },
     digest: (outputType) => {
-      const uintArr = hasher.digest("binary");
-      hasher.init();
-      hasher.update(opad);
-      hasher.update(uintArr);
-      return hasher.digest(outputType);
+      const uintArr = hasher2.digest("binary");
+      hasher2.init();
+      hasher2.update(opad);
+      hasher2.update(uintArr);
+      return hasher2.digest(outputType);
     },
     save: () => {
       throw new Error("save() not supported");
@@ -4966,8 +4966,8 @@ function calculateHmac(hasher, key) {
     load: () => {
       throw new Error("load() not supported");
     },
-    blockSize: hasher.blockSize,
-    digestSize: hasher.digestSize
+    blockSize: hasher2.blockSize,
+    digestSize: hasher2.digestSize
   };
   return obj;
 }
@@ -4975,7 +4975,7 @@ function createHMAC(hash2, key) {
   if (!hash2 || !hash2.then) {
     throw new Error('Invalid hash function is provided! Usage: createHMAC(createMD5(), "key").');
   }
-  return hash2.then((hasher) => calculateHmac(hasher, key));
+  return hash2.then((hasher2) => calculateHmac(hasher2, key));
 }
 function calculatePBKDF2(digest, salt, iterations, hashLength, outputType) {
   return __awaiter(this, void 0, void 0, function* () {
@@ -5178,7 +5178,7 @@ function createSM3() {
 }
 var name$l, data$l, hash$l, wasmJson$l, Mutex, _a, globalObject, nodeBuffer, textEncoder, alpha, digit, getUInt8Buffer, base64Chars, base64Lookup, MAX_HEAP, WASM_FUNC_HASH_LENGTH, wasmMutex, wasmModuleCache, mutex$l, wasmCache$l, name$k, data$k, hash$k, wasmJson$k, name$j, data$j, hash$j, wasmJson$j, mutex$k, wasmCache$k, uint32View, validateOptions$3, getHashParameters, validateVerifyOptions$1, name$i, data$i, hash$i, wasmJson$i, mutex$j, wasmCache$j, name$h, data$h, hash$h, wasmJson$h, mutex$i, wasmCache$i, name$g, data$g, hash$g, wasmJson$g, mutex$h, wasmCache$h, name$f, data$f, hash$f, wasmJson$f, mutex$g, wasmCache$g, polyBuffer, name$e, data$e, hash$e, wasmJson$e, mutex$f, wasmCache$f, name$d, data$d, hash$d, wasmJson$d, mutex$e, wasmCache$e, name$c, data$c, hash$c, wasmJson$c, mutex$d, wasmCache$d, name$b, data$b, hash$b, wasmJson$b, mutex$c, wasmCache$c, mutex$b, wasmCache$b, name$a, data$a, hash$a, wasmJson$a, mutex$a, wasmCache$a, mutex$9, wasmCache$9, name$9, data$9, hash$9, wasmJson$9, mutex$8, wasmCache$8, mutex$7, wasmCache$7, name$8, data$8, hash$8, wasmJson$8, mutex$6, wasmCache$6, name$7, data$7, hash$7, wasmJson$7, mutex$5, wasmCache$5, seedBuffer$2, name$6, data$6, hash$6, wasmJson$6, mutex$4, wasmCache$4, seedBuffer$1, name$5, data$5, hash$5, wasmJson$5, mutex$3, wasmCache$3, seedBuffer, name$4, data$4, hash$4, wasmJson$4, mutex$2, wasmCache$2, validateOptions$2, name$3, data$3, hash$3, wasmJson$3, isPowerOfTwo, validateOptions$1, name$2, data$2, hash$2, wasmJson$2, validateOptions, validateHashCharacters, validateVerifyOptions, name$1, data$1, hash$1, wasmJson$1, mutex$1, wasmCache$1, name, data, hash, wasmJson, mutex, wasmCache;
 var init_index_esm = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/hash-wasm/4.12.0/dist/index.esm.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/hash-wasm/4.12.0/dist/index.esm.js"() {
     name$l = "adler32";
     data$l = "AGFzbQEAAAABDANgAAF/YAAAYAF/AAMHBgABAgEAAgUEAQECAgYOAn8BQYCJBQt/AEGACAsHcAgGbWVtb3J5AgAOSGFzaF9HZXRCdWZmZXIAAAlIYXNoX0luaXQAAQtIYXNoX1VwZGF0ZQACCkhhc2hfRmluYWwAAw1IYXNoX0dldFN0YXRlAAQOSGFzaF9DYWxjdWxhdGUABQpTVEFURV9TSVpFAwEK6wkGBQBBgAkLCgBBAEEBNgKECAvjCAEHf0EAKAKECCIBQf//A3EhAiABQRB2IQMCQAJAIABBAUcNACACQQAtAIAJaiIBQY+AfGogASABQfD/A0sbIgEgA2oiBEEQdCIFQYCAPGogBSAEQfD/A0sbIAFyIQEMAQsCQAJAAkACQAJAIABBEEkNAEGACSEGIABBsCtJDQFBgAkhBgNAQQAhBQNAIAYgBWoiASgCACIEQf8BcSACaiICIANqIAIgBEEIdkH/AXFqIgJqIAIgBEEQdkH/AXFqIgJqIAIgBEEYdmoiAmogAiABQQRqKAIAIgRB/wFxaiICaiACIARBCHZB/wFxaiICaiACIARBEHZB/wFxaiICaiACIARBGHZqIgJqIAIgAUEIaigCACIEQf8BcWoiAmogAiAEQQh2Qf8BcWoiAmogAiAEQRB2Qf8BcWoiAmogAiAEQRh2aiIEaiAEIAFBDGooAgAiAUH/AXFqIgRqIAQgAUEIdkH/AXFqIgRqIAQgAUEQdkH/AXFqIgRqIAQgAUEYdmoiAmohAyAFQRBqIgVBsCtHDQALIANB8f8DcCEDIAJB8f8DcCECIAZBsCtqIQYgAEHQVGoiAEGvK0sNAAsgAEUNBCAAQQ9LDQEMAgsCQCAARQ0AAkACQCAAQQNxIgUNAEGACSEBIAAhBAwBCyAAQXxxIQRBACEBA0AgAiABQYAJai0AAGoiAiADaiEDIAUgAUEBaiIBRw0ACyAFQYAJaiEBCyAAQQRJDQADQCACIAEtAABqIgUgAS0AAWoiBiABLQACaiIAIAFBA2otAABqIgIgACAGIAUgA2pqamohAyABQQRqIQEgBEF8aiIEDQALCyACQY+AfGogAiACQfD/A0sbIANB8f8DcEEQdHIhAQwECwNAIAYoAgAiAUH/AXEgAmoiBCADaiAEIAFBCHZB/wFxaiIEaiAEIAFBEHZB/wFxaiIEaiAEIAFBGHZqIgRqIAQgBkEEaigCACIBQf8BcWoiBGogBCABQQh2Qf8BcWoiBGogBCABQRB2Qf8BcWoiBGogBCABQRh2aiIEaiAEIAZBCGooAgAiAUH/AXFqIgRqIAQgAUEIdkH/AXFqIgRqIAQgAUEQdkH/AXFqIgRqIAQgAUEYdmoiBGogBCAGQQxqKAIAIgFB/wFxaiIEaiAEIAFBCHZB/wFxaiIEaiAEIAFBEHZB/wFxaiIEaiAEIAFBGHZqIgJqIQMgBkEQaiEGIABBcGoiAEEPSw0ACyAARQ0BCyAAQX9qIQcCQCAAQQNxIgVFDQAgAEF8cSEAIAUhBCAGIQEDQCACIAEtAABqIgIgA2ohAyABQQFqIQEgBEF/aiIEDQALIAYgBWohBgsgB0EDSQ0AA0AgAiAGLQAAaiIBIAYtAAFqIgQgBi0AAmoiBSAGQQNqLQAAaiICIAUgBCABIANqampqIQMgBkEEaiEGIABBfGoiAA0ACwsgA0Hx/wNwIQMgAkHx/wNwIQILIAIgA0EQdHIhAQtBACABNgKECAsxAQF/QQBBACgChAgiAEEYdCAAQYD+A3FBCHRyIABBCHZBgP4DcSAAQRh2cnI2AoAJCwUAQYQICzsAQQBBATYChAggABACQQBBACgChAgiAEEYdCAAQYD+A3FBCHRyIABBCHZBgP4DcSAAQRh2cnI2AoAJCwsVAgBBgAgLBAQAAAAAQYQICwQBAAAA";
     hash$l = "02ddbd17";
@@ -5667,9 +5667,9 @@ var require_deno_browser_disabled_crypto = __commonJS({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/tweetnacl/1.0.3/nacl-fast.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/tweetnacl/1.0.3/nacl-fast.js
 var require_nacl_fast = __commonJS({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/tweetnacl/1.0.3/nacl-fast.js"(exports, module) {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/tweetnacl/1.0.3/nacl-fast.js"(exports, module) {
     (function(nacl) {
       "use strict";
       var gf = function(init2) {
@@ -8857,12 +8857,12 @@ async function removeTree(storage, path) {
 }
 async function removeStage(storage, path) {
   if (!/^zenodo-staging\/./.test(path)) throw new Error(`not a staging folder of Zenodo: ${path}`);
-  const walk = async (p) => {
+  const walk2 = async (p) => {
     const kind = await storage.kind(p);
-    if (kind === "dir") for (const entry of await storage.list(p) || []) await walk(joinPath(p, entry.name));
+    if (kind === "dir") for (const entry of await storage.list(p) || []) await walk2(joinPath(p, entry.name));
     if (kind) await storage.remove(p);
   };
-  await walk(path);
+  await walk2(path);
   for (let p = path.slice(0, path.lastIndexOf("/")); p; p = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "") {
     if (await storage.kind(p) !== "dir" || (await storage.list(p) || []).length) break;
     await storage.remove(p);
@@ -9098,7 +9098,7 @@ var init_folder = __esm({
       }
       async objects() {
         const out = [];
-        const walk = async (dir) => {
+        const walk2 = async (dir) => {
           for (const entry of await this.storage.list(dir) || []) {
             if (entry.kind !== "dir") continue;
             const child = joinPath(dir, entry.name);
@@ -9110,11 +9110,11 @@ var init_folder = __esm({
                 inv
               });
             } else if (!(dir === "ocfl" && entry.name === "extensions")) {
-              await walk(child);
+              await walk2(child);
             }
           }
         };
-        if (await this.storage.kind("ocfl") === "dir") await walk("ocfl");
+        if (await this.storage.kind("ocfl") === "dir") await walk2("ocfl");
         const idOf = (o) => typeof o.id === "string" ? o.id : "None";
         return out.sort((a, b) => compareText(idOf(a), idOf(b)) || compareText(a.dir, b.dir));
       }
@@ -13184,7 +13184,7 @@ var init_takedown = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/identity.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/identity.js
 function isCollection(node) {
   if (node && typeof node === "object") switch (node[NODE_TYPE]) {
     case MAP:
@@ -13205,7 +13205,7 @@ function isNode(node) {
 }
 var ALIAS, DOC, MAP, PAIR, SCALAR, SEQ, NODE_TYPE, isAlias, isDocument, isMap2, isPair, isScalar, isSeq, hasAnchor;
 var init_identity = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/identity.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/identity.js"() {
     ALIAS = Symbol.for("yaml.alias");
     DOC = Symbol.for("yaml.document");
     MAP = Symbol.for("yaml.map");
@@ -13223,7 +13223,7 @@ var init_identity = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/visit.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/visit.js
 function visit(node, visitor) {
   const visitor_ = initVisitor(visitor);
   if (isDocument(node)) {
@@ -13345,7 +13345,7 @@ function replaceNode(key, path, node) {
 }
 var BREAK, SKIP, REMOVE;
 var init_visit = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/visit.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/visit.js"() {
     init_identity();
     BREAK = Symbol("break visit");
     SKIP = Symbol("skip children");
@@ -13359,10 +13359,10 @@ var init_visit = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/directives.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/directives.js
 var escapeChars, escapeTagName, Directives;
 var init_directives = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/directives.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/directives.js"() {
     init_identity();
     init_visit();
     escapeChars = {
@@ -13529,7 +13529,7 @@ var init_directives = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/anchors.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/anchors.js
 function anchorIsValid(anchor) {
   if (/[\x00-\x19\s,[\]{}]/.test(anchor)) {
     const sa = JSON.stringify(anchor);
@@ -13586,13 +13586,13 @@ function createNodeAnchors(doc, prefix) {
   };
 }
 var init_anchors = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/anchors.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/anchors.js"() {
     init_identity();
     init_visit();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/applyReviver.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/applyReviver.js
 function applyReviver(reviver, obj, key, val) {
   if (val && typeof val === "object") {
     if (Array.isArray(val)) {
@@ -13629,11 +13629,11 @@ function applyReviver(reviver, obj, key, val) {
   return reviver.call(obj, key, val);
 }
 var init_applyReviver = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/applyReviver.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/applyReviver.js"() {
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/toJS.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/toJS.js
 function toJS(value, arg, ctx) {
   if (Array.isArray(value)) return value.map((v, i) => toJS(v, String(i), ctx));
   if (value && typeof value.toJSON === "function") {
@@ -13656,15 +13656,15 @@ function toJS(value, arg, ctx) {
   return value;
 }
 var init_toJS = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/toJS.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/toJS.js"() {
     init_identity();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Node.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Node.js
 var NodeBase;
 var init_Node = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Node.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Node.js"() {
     init_applyReviver();
     init_identity();
     init_toJS();
@@ -13701,7 +13701,7 @@ var init_Node = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Alias.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Alias.js
 function getAliasCount(doc, node, anchors) {
   if (isAlias(node)) {
     const source = node.resolve(doc);
@@ -13723,7 +13723,7 @@ function getAliasCount(doc, node, anchors) {
 }
 var Alias;
 var init_Alias = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Alias.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Alias.js"() {
     init_anchors();
     init_visit();
     init_identity();
@@ -13808,10 +13808,10 @@ var init_Alias = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Scalar.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Scalar.js
 var isScalarValue, Scalar;
 var init_Scalar = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Scalar.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Scalar.js"() {
     init_identity();
     init_Node();
     init_toJS();
@@ -13836,7 +13836,7 @@ var init_Scalar = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/createNode.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/createNode.js
 function findTagObject(value, tagName, tags) {
   if (tagName) {
     const match = tags.filter((t) => t.tag === tagName);
@@ -13897,7 +13897,7 @@ function createNode(value, tagName, ctx) {
 }
 var defaultTagPrefix;
 var init_createNode = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/createNode.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/createNode.js"() {
     init_Alias();
     init_identity();
     init_Scalar();
@@ -13905,7 +13905,7 @@ var init_createNode = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Collection.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Collection.js
 function collectionFromPath(schema4, path, value) {
   let v = value;
   for (let i = path.length - 1; i >= 0; --i) {
@@ -13935,7 +13935,7 @@ function collectionFromPath(schema4, path, value) {
 }
 var isEmptyPath, Collection;
 var init_Collection = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Collection.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Collection.js"() {
     init_createNode();
     init_identity();
     init_Node();
@@ -14034,20 +14034,20 @@ var init_Collection = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyComment.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyComment.js
 function indentComment(comment, indent) {
   if (/^\n+$/.test(comment)) return comment.substring(1);
   return indent ? comment.replace(/^(?! *$)/gm, indent) : comment;
 }
 var stringifyComment, lineComment;
 var init_stringifyComment = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyComment.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyComment.js"() {
     stringifyComment = (str) => str.replace(/^(?!$)(?: $)?/gm, "#");
     lineComment = (str, indent, comment) => str.endsWith("\n") ? indentComment(comment, indent) : comment.includes("\n") ? "\n" + indentComment(comment, indent) : (str.endsWith(" ") ? "" : " ") + comment;
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/foldFlowLines.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/foldFlowLines.js
 function foldFlowLines(text3, indent, mode = "flow", { indentAtStart, lineWidth = 80, minContentWidth = 20, onFold, onOverflow } = {}) {
   if (!lineWidth || lineWidth < 0) return text3;
   if (lineWidth < minContentWidth) minContentWidth = 0;
@@ -14158,14 +14158,14 @@ function consumeMoreIndentedLines(text3, i, indent) {
 }
 var FOLD_FLOW, FOLD_BLOCK, FOLD_QUOTED;
 var init_foldFlowLines = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/foldFlowLines.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/foldFlowLines.js"() {
     FOLD_FLOW = "flow";
     FOLD_BLOCK = "block";
     FOLD_QUOTED = "quoted";
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyString.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyString.js
 function lineLengthOverLimit(str, lineWidth, indentLength) {
   if (!lineWidth || lineWidth < 0) return false;
   const limit = lineWidth - indentLength;
@@ -14405,7 +14405,7 @@ function stringifyString(item, ctx, onComment, onChompKeep) {
 }
 var getFoldOptions, containsDocumentMarker, blockEndNewlines;
 var init_stringifyString = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyString.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyString.js"() {
     init_Scalar();
     init_foldFlowLines();
     getFoldOptions = (ctx, isBlock2) => ({
@@ -14422,7 +14422,7 @@ var init_stringifyString = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringify.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringify.js
 function createStringifyContext(doc, options) {
   const opt = Object.assign({
     blockQuote: true,
@@ -14528,7 +14528,7 @@ function stringify(item, ctx, onComment, onChompKeep) {
 ${ctx.indent}${str}`;
 }
 var init_stringify = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringify.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringify.js"() {
     init_anchors();
     init_identity();
     init_stringifyComment();
@@ -14536,7 +14536,7 @@ var init_stringify = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyPair.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyPair.js
 function stringifyPair({ key, value }, ctx, onComment, onChompKeep) {
   const { allNullValues, doc, indent, indentStep, options: { commentString, indentSeq, simpleKeys } } = ctx;
   let keyComment = isNode(key) && key.comment || null;
@@ -14647,7 +14647,7 @@ ${ctx.indent}`;
   return str;
 }
 var init_stringifyPair = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyPair.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyPair.js"() {
     init_identity();
     init_Scalar();
     init_stringify();
@@ -14655,18 +14655,18 @@ var init_stringifyPair = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/log.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/log.js
 function warn(logLevel, warning) {
   if (logLevel === "debug" || logLevel === "warn") {
     console.warn(warning);
   }
 }
 var init_log = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/log.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/log.js"() {
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/merge.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/merge.js
 function addMergeToJSMap(ctx, map2, value) {
   value = ctx && isAlias(value) ? value.resolve(ctx.doc) : value;
   if (isSeq(value)) for (const it of value.items) mergeValue(ctx, map2, it);
@@ -14695,7 +14695,7 @@ function mergeValue(ctx, map2, value) {
 }
 var MERGE_KEY, merge, isMergeKey;
 var init_merge = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/merge.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/merge.js"() {
     init_identity();
     init_Scalar();
     MERGE_KEY = "<<";
@@ -14713,7 +14713,7 @@ var init_merge = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/addPairToJSMap.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/addPairToJSMap.js
 function addPairToJSMap(ctx, map2, { key, value }) {
   if (isNode(key) && key.addToJSMap) key.addToJSMap(ctx, map2, value);
   else if (isMergeKey(ctx, key)) addMergeToJSMap(ctx, map2, value);
@@ -14758,7 +14758,7 @@ function stringifyKey(key, jsKey, ctx) {
   return JSON.stringify(jsKey);
 }
 var init_addPairToJSMap = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/addPairToJSMap.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/addPairToJSMap.js"() {
     init_log();
     init_merge();
     init_stringify();
@@ -14767,7 +14767,7 @@ var init_addPairToJSMap = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Pair.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Pair.js
 function createPair(key, value, ctx) {
   const k = createNode(key, void 0, ctx);
   const v = createNode(value, void 0, ctx);
@@ -14775,7 +14775,7 @@ function createPair(key, value, ctx) {
 }
 var Pair;
 var init_Pair = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Pair.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/Pair.js"() {
     init_createNode();
     init_stringifyPair();
     init_addPairToJSMap();
@@ -14805,7 +14805,7 @@ var init_Pair = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyCollection.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyCollection.js
 function stringifyCollection(collection2, ctx, options) {
   const flow = ctx.inFlow ?? collection2.flow;
   const stringify4 = flow ? stringifyFlowCollection : stringifyBlockCollection;
@@ -14924,14 +14924,14 @@ function addCommentBefore({ indent, options: { commentString } }, lines2, commen
   }
 }
 var init_stringifyCollection = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyCollection.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyCollection.js"() {
     init_identity();
     init_stringify();
     init_stringifyComment();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLMap.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLMap.js
 function findPair(items, key) {
   const k = isScalar(key) ? key.value : key;
   for (const it of items) {
@@ -14944,7 +14944,7 @@ function findPair(items, key) {
 }
 var YAMLMap;
 var init_YAMLMap = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLMap.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLMap.js"() {
     init_stringifyCollection();
     init_addPairToJSMap();
     init_Collection();
@@ -15058,10 +15058,10 @@ var init_YAMLMap = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/map.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/map.js
 var map;
 var init_map = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/map.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/map.js"() {
     init_identity();
     init_YAMLMap();
     map = {
@@ -15078,7 +15078,7 @@ var init_map = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLSeq.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLSeq.js
 function asItemIndex(key) {
   let idx = isScalar(key) ? key.value : key;
   if (idx && typeof idx === "string") idx = Number(idx);
@@ -15086,7 +15086,7 @@ function asItemIndex(key) {
 }
 var YAMLSeq;
 var init_YAMLSeq = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLSeq.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/nodes/YAMLSeq.js"() {
     init_createNode();
     init_stringifyCollection();
     init_Collection();
@@ -15187,10 +15187,10 @@ var init_YAMLSeq = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/seq.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/seq.js
 var seq;
 var init_seq = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/seq.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/seq.js"() {
     init_identity();
     init_YAMLSeq();
     seq = {
@@ -15207,10 +15207,10 @@ var init_seq = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/string.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/string.js
 var string;
 var init_string = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/string.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/string.js"() {
     init_stringifyString();
     string = {
       identify: (value) => typeof value === "string",
@@ -15227,10 +15227,10 @@ var init_string = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/null.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/null.js
 var nullTag;
 var init_null = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/null.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/common/null.js"() {
     init_Scalar();
     nullTag = {
       identify: (value) => value == null,
@@ -15244,10 +15244,10 @@ var init_null = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/bool.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/bool.js
 var boolTag;
 var init_bool = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/bool.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/bool.js"() {
     init_Scalar();
     boolTag = {
       identify: (value) => typeof value === "boolean",
@@ -15266,7 +15266,7 @@ var init_bool = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyNumber.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyNumber.js
 function stringifyNumber({ format, minFractionDigits, tag, value }) {
   if (typeof value === "bigint") return String(value);
   const num = typeof value === "number" ? value : Number(value);
@@ -15284,14 +15284,14 @@ function stringifyNumber({ format, minFractionDigits, tag, value }) {
   return n;
 }
 var init_stringifyNumber = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyNumber.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyNumber.js"() {
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/float.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/float.js
 var floatNaN, floatExp, float;
 var init_float = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/float.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/float.js"() {
     init_Scalar();
     init_stringifyNumber();
     floatNaN = {
@@ -15330,7 +15330,7 @@ var init_float = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/int.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/int.js
 function intStringify(node, radix, prefix) {
   const { value } = node;
   if (intIdentify(value) && value >= 0) return prefix + value.toString(radix);
@@ -15338,7 +15338,7 @@ function intStringify(node, radix, prefix) {
 }
 var intIdentify, intResolve, intOct, int, intHex;
 var init_int = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/int.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/int.js"() {
     init_stringifyNumber();
     intIdentify = (value) => typeof value === "bigint" || Number.isInteger(value);
     intResolve = (str, offset, radix, { intAsBigInt }) => intAsBigInt ? BigInt(str) : parseInt(str.substring(offset), radix);
@@ -15371,10 +15371,10 @@ var init_int = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/schema.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/schema.js
 var schema;
 var init_schema2 = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/schema.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/core/schema.js"() {
     init_map();
     init_null();
     init_seq();
@@ -15398,13 +15398,13 @@ var init_schema2 = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/json/schema.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/json/schema.js
 function intIdentify2(value) {
   return typeof value === "bigint" || Number.isInteger(value);
 }
 var stringifyJSON, jsonScalars, jsonError, schema2;
 var init_schema3 = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/json/schema.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/json/schema.js"() {
     init_Scalar();
     init_map();
     init_seq();
@@ -15467,10 +15467,10 @@ var init_schema3 = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/binary.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/binary.js
 var binary;
 var init_binary = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/binary.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/binary.js"() {
     init_Scalar();
     init_stringifyString();
     binary = {
@@ -15527,7 +15527,7 @@ var init_binary = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/pairs.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/pairs.js
 function resolvePairs(seq2, onError) {
   if (isSeq(seq2)) {
     for (let i = 0; i < seq2.items.length; ++i) {
@@ -15580,7 +15580,7 @@ function createPairs(schema4, iterable, ctx) {
 }
 var pairs;
 var init_pairs = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/pairs.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/pairs.js"() {
     init_identity();
     init_Pair();
     init_Scalar();
@@ -15595,10 +15595,10 @@ var init_pairs = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/omap.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/omap.js
 var YAMLOMap, omap;
 var init_omap = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/omap.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/omap.js"() {
     init_identity();
     init_toJS();
     init_YAMLMap();
@@ -15668,7 +15668,7 @@ var init_omap = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/bool.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/bool.js
 function boolStringify({ value, source }, ctx) {
   const boolObj = value ? trueTag : falseTag;
   if (source && boolObj.test.test(source)) return source;
@@ -15676,7 +15676,7 @@ function boolStringify({ value, source }, ctx) {
 }
 var trueTag, falseTag;
 var init_bool2 = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/bool.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/bool.js"() {
     init_Scalar();
     trueTag = {
       identify: (value) => value === true,
@@ -15697,10 +15697,10 @@ var init_bool2 = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/float.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/float.js
 var floatNaN2, floatExp2, float2;
 var init_float2 = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/float.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/float.js"() {
     init_Scalar();
     init_stringifyNumber();
     floatNaN2 = {
@@ -15742,7 +15742,7 @@ var init_float2 = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/int.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/int.js
 function intResolve2(str, offset, radix, { intAsBigInt }) {
   const sign = str[0];
   if (sign === "-" || sign === "+") offset += 1;
@@ -15775,7 +15775,7 @@ function intStringify2(node, radix, prefix) {
 }
 var intIdentify3, intBin, intOct2, int2, intHex2;
 var init_int2 = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/int.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/int.js"() {
     init_stringifyNumber();
     intIdentify3 = (value) => typeof value === "bigint" || Number.isInteger(value);
     intBin = {
@@ -15816,10 +15816,10 @@ var init_int2 = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/set.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/set.js
 var YAMLSet, set;
 var init_set = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/set.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/set.js"() {
     init_identity();
     init_Pair();
     init_YAMLMap();
@@ -15892,7 +15892,7 @@ var init_set = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/timestamp.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/timestamp.js
 function parseSexagesimal(str, asBigInt) {
   const sign = str[0];
   const parts = sign === "-" || sign === "+" ? str.substring(1) : str;
@@ -15928,7 +15928,7 @@ function stringifySexagesimal(node) {
 }
 var intTime, floatTime, timestamp;
 var init_timestamp = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/timestamp.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/timestamp.js"() {
     init_stringifyNumber();
     intTime = {
       identify: (value) => typeof value === "bigint" || Number.isInteger(value),
@@ -15975,10 +15975,10 @@ var init_timestamp = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/schema.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/schema.js
 var schema3;
 var init_schema4 = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/schema.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/yaml-1.1/schema.js"() {
     init_map();
     init_null();
     init_seq();
@@ -16018,7 +16018,7 @@ var init_schema4 = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/tags.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/tags.js
 function getTags(customTags, schemaName, addMergeTag) {
   const schemaTags = schemas.get(schemaName);
   if (schemaTags && !customTags) {
@@ -16051,7 +16051,7 @@ function getTags(customTags, schemaName, addMergeTag) {
 }
 var schemas, tagsByName, coreKnownTags;
 var init_tags = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/tags.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/tags.js"() {
     init_map();
     init_null();
     init_seq();
@@ -16125,10 +16125,10 @@ var init_tags = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/Schema.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/Schema.js
 var sortMapEntriesByKey, Schema;
 var init_Schema = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/Schema.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/schema/Schema.js"() {
     init_identity();
     init_map();
     init_seq();
@@ -16162,7 +16162,7 @@ var init_Schema = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyDocument.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyDocument.js
 function stringifyDocument(doc, options) {
   const lines2 = [];
   let hasDirectives = options.directives === true;
@@ -16225,21 +16225,21 @@ function stringifyDocument(doc, options) {
   return lines2.join("\n") + "\n";
 }
 var init_stringifyDocument = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyDocument.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/stringify/stringifyDocument.js"() {
     init_identity();
     init_stringify();
     init_stringifyComment();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/Document.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/Document.js
 function assertCollection(contents) {
   if (isCollection(contents)) return true;
   throw new Error("Expected a YAML collection as document contents");
 }
 var Document;
 var init_Document = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/Document.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/doc/Document.js"() {
     init_Alias();
     init_Collection();
     init_identity();
@@ -16543,10 +16543,10 @@ var init_Document = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/errors.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/errors.js
 var YAMLError, YAMLParseError, YAMLWarning, prettifyError;
 var init_errors = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/errors.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/errors.js"() {
     YAMLError = class extends Error {
       constructor(name2, pos, code, message2) {
         super();
@@ -16601,7 +16601,7 @@ ${pointer}
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-props.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-props.js
 function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIndent, startOnNewline }) {
   let spaceBefore = false;
   let atNewline = startOnNewline;
@@ -16714,11 +16714,11 @@ function resolveProps(tokens, { flow, indicator, next, offset, onError, parentIn
   };
 }
 var init_resolve_props = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-props.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-props.js"() {
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-contains-newline.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-contains-newline.js
 function containsNewline(key) {
   if (!key) return null;
   switch (key.type) {
@@ -16745,11 +16745,11 @@ function containsNewline(key) {
   }
 }
 var init_util_contains_newline = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-contains-newline.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-contains-newline.js"() {
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-flow-indent-check.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-flow-indent-check.js
 function flowIndentCheck(indent, fc, onError) {
   if (fc?.type === "flow-collection") {
     const end2 = fc.end[0];
@@ -16760,12 +16760,12 @@ function flowIndentCheck(indent, fc, onError) {
   }
 }
 var init_util_flow_indent_check = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-flow-indent-check.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-flow-indent-check.js"() {
     init_util_contains_newline();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-map-includes.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-map-includes.js
 function mapIncludes(ctx, items, search) {
   const { uniqueKeys } = ctx.options;
   if (uniqueKeys === false) return false;
@@ -16773,12 +16773,12 @@ function mapIncludes(ctx, items, search) {
   return items.some((pair) => isEqual(pair.key, search));
 }
 var init_util_map_includes = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-map-includes.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-map-includes.js"() {
     init_identity();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-map.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-map.js
 function resolveBlockMap({ composeNode: composeNode2, composeEmptyNode: composeEmptyNode2 }, ctx, bm, onError, tag) {
   const NodeClass = tag?.nodeClass ?? YAMLMap;
   const map2 = new NodeClass(ctx.schema);
@@ -16862,7 +16862,7 @@ function resolveBlockMap({ composeNode: composeNode2, composeEmptyNode: composeE
 }
 var startColMsg;
 var init_resolve_block_map = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-map.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-map.js"() {
     init_Pair();
     init_YAMLMap();
     init_resolve_props();
@@ -16873,7 +16873,7 @@ var init_resolve_block_map = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-seq.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-seq.js
 function resolveBlockSeq({ composeNode: composeNode2, composeEmptyNode: composeEmptyNode2 }, ctx, bs, onError, tag) {
   const NodeClass = tag?.nodeClass ?? YAMLSeq;
   const seq2 = new NodeClass(ctx.schema);
@@ -16913,14 +16913,14 @@ function resolveBlockSeq({ composeNode: composeNode2, composeEmptyNode: composeE
   return seq2;
 }
 var init_resolve_block_seq = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-seq.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-seq.js"() {
     init_YAMLSeq();
     init_resolve_props();
     init_util_flow_indent_check();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-end.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-end.js
 function resolveEnd(end2, offset, reqSpace, onError) {
   let comment = "";
   if (end2) {
@@ -16956,11 +16956,11 @@ function resolveEnd(end2, offset, reqSpace, onError) {
   };
 }
 var init_resolve_end = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-end.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-end.js"() {
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-collection.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-collection.js
 function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: composeEmptyNode2 }, ctx, fc, onError, tag) {
   const isMap3 = fc.start.source === "{";
   const fcName = isMap3 ? "flow map" : "flow sequence";
@@ -17118,7 +17118,7 @@ function resolveFlowCollection({ composeNode: composeNode2, composeEmptyNode: co
 }
 var blockMsg, isBlock;
 var init_resolve_flow_collection = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-collection.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-collection.js"() {
     init_identity();
     init_Pair();
     init_YAMLMap();
@@ -17132,7 +17132,7 @@ var init_resolve_flow_collection = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-collection.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-collection.js
 function resolveCollection(CN2, ctx, token, onError, tagName, tag) {
   const coll = token.type === "block-map" ? resolveBlockMap(CN2, ctx, token, onError, tag) : token.type === "block-seq" ? resolveBlockSeq(CN2, ctx, token, onError, tag) : resolveFlowCollection(CN2, ctx, token, onError, tag);
   const Coll = coll.constructor;
@@ -17184,7 +17184,7 @@ function composeCollection(CN2, ctx, token, props, onError) {
   return node;
 }
 var init_compose_collection = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-collection.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-collection.js"() {
     init_identity();
     init_Scalar();
     init_YAMLMap();
@@ -17195,7 +17195,7 @@ var init_compose_collection = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-scalar.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-scalar.js
 function resolveBlockScalar(ctx, scalar, onError) {
   const start = scalar.offset;
   const header = parseBlockScalarHeader(scalar, ctx.options.strict, onError);
@@ -17394,12 +17394,12 @@ function splitLines(source) {
   return lines2;
 }
 var init_resolve_block_scalar = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-scalar.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-block-scalar.js"() {
     init_Scalar();
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-scalar.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-scalar.js
 function resolveFlowScalar(scalar, strict, onError) {
   const { offset, type, source, end: end2 } = scalar;
   let _type;
@@ -17578,7 +17578,7 @@ function parseCharCode(source, offset, length, onError) {
 }
 var escapeCodes;
 var init_resolve_flow_scalar = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-scalar.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/resolve-flow-scalar.js"() {
     init_Scalar();
     init_resolve_end();
     escapeCodes = {
@@ -17604,7 +17604,7 @@ var init_resolve_flow_scalar = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-scalar.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-scalar.js
 function composeScalar(ctx, token, tagToken, onError) {
   const { value, type, comment, range } = token.type === "block-scalar" ? resolveBlockScalar(ctx, token, onError) : resolveFlowScalar(token, ctx.options.strict, onError);
   const tagName = tagToken ? ctx.directives.tagName(tagToken.source, (msg) => onError(tagToken, "TAG_RESOLVE_FAILED", msg)) : null;
@@ -17666,7 +17666,7 @@ function findScalarTagByTest({ atKey, directives, schema: schema4 }, value, toke
   return tag;
 }
 var init_compose_scalar = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-scalar.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-scalar.js"() {
     init_identity();
     init_Scalar();
     init_resolve_block_scalar();
@@ -17674,7 +17674,7 @@ var init_compose_scalar = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-empty-scalar-position.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-empty-scalar-position.js
 function emptyScalarPosition(offset, before, pos) {
   if (before) {
     pos ?? (pos = before.length);
@@ -17698,11 +17698,11 @@ function emptyScalarPosition(offset, before, pos) {
   return offset;
 }
 var init_util_empty_scalar_position = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-empty-scalar-position.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/util-empty-scalar-position.js"() {
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-node.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-node.js
 function composeNode(ctx, token, props, onError) {
   const atKey = ctx.atKey;
   const { spaceBefore, comment, anchor, tag } = props;
@@ -17781,7 +17781,7 @@ function composeAlias({ options }, { offset, source, end: end2 }, onError) {
 }
 var CN;
 var init_compose_node = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-node.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-node.js"() {
     init_Alias();
     init_identity();
     init_compose_collection();
@@ -17795,7 +17795,7 @@ var init_compose_node = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-doc.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-doc.js
 function composeDoc(options, directives, { offset, start, value, end: end2 }, onError) {
   const opts = Object.assign({
     _directives: directives
@@ -17832,7 +17832,7 @@ function composeDoc(options, directives, { offset, start, value, end: end2 }, on
   return doc;
 }
 var init_compose_doc = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-doc.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/compose-doc.js"() {
     init_Document();
     init_compose_node();
     init_resolve_end();
@@ -17840,7 +17840,7 @@ var init_compose_doc = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/composer.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/composer.js
 function getErrorPos(src) {
   if (typeof src === "number") return [
     src,
@@ -17884,7 +17884,7 @@ function parsePrelude(prelude) {
 }
 var Composer;
 var init_composer = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/composer.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/compose/composer.js"() {
     init_directives();
     init_Document();
     init_errors();
@@ -18049,7 +18049,7 @@ ${end2.comment}` : end2.comment;
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-scalar.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-scalar.js
 function resolveAsScalar(token, strict = true, onError) {
   if (token) {
     const _onError = (pos, code, message2) => {
@@ -18299,7 +18299,7 @@ function setFlowScalarValue(token, source, type) {
   }
 }
 var init_cst_scalar = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-scalar.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-scalar.js"() {
     init_resolve_block_scalar();
     init_resolve_flow_scalar();
     init_errors();
@@ -18307,7 +18307,7 @@ var init_cst_scalar = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-stringify.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-stringify.js
 function stringifyToken(token) {
   switch (token.type) {
     case "block-scalar": {
@@ -18349,12 +18349,12 @@ function stringifyItem({ start, key, sep, value }) {
 }
 var stringify2;
 var init_cst_stringify = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-stringify.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-stringify.js"() {
     stringify2 = (cst) => "type" in cst ? stringifyToken(cst) : stringifyItem(cst);
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-visit.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-visit.js
 function visit2(cst, visitor) {
   if ("type" in cst && cst.type === "document") cst = {
     start: cst.start,
@@ -18392,7 +18392,7 @@ function _visit(path, item, visitor) {
 }
 var BREAK2, SKIP2, REMOVE2;
 var init_cst_visit = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-visit.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst-visit.js"() {
     BREAK2 = Symbol("break visit");
     SKIP2 = Symbol("skip children");
     REMOVE2 = Symbol("remove item");
@@ -18419,7 +18419,7 @@ var init_cst_visit = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst.js
 var cst_exports = {};
 __export(cst_exports, {
   BOM: () => BOM,
@@ -18511,7 +18511,7 @@ function tokenType(source) {
 }
 var BOM, DOCUMENT, FLOW_END, SCALAR2, isCollection2, isScalar2;
 var init_cst = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/cst.js"() {
     init_cst_scalar();
     init_cst_stringify();
     init_cst_visit();
@@ -18524,7 +18524,7 @@ var init_cst = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/lexer.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/lexer.js
 function isEmpty(ch) {
   switch (ch) {
     case void 0:
@@ -18539,7 +18539,7 @@ function isEmpty(ch) {
 }
 var hexDigits, tagChars, flowIndicatorChars, invalidAnchorChars, isNotAnchorChar, Lexer;
 var init_lexer = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/lexer.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/lexer.js"() {
     init_cst();
     hexDigits = new Set("0123456789ABCDEFabcdef");
     tagChars = new Set("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-#;/?:@&=+$_.!~*'()");
@@ -19044,10 +19044,10 @@ var init_lexer = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/line-counter.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/line-counter.js
 var LineCounter;
 var init_line_counter = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/line-counter.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/line-counter.js"() {
     LineCounter = class {
       constructor() {
         this.lineStarts = [];
@@ -19079,7 +19079,7 @@ var init_line_counter = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/parser.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/parser.js
 function includesToken(list2, type) {
   for (let i = 0; i < list2.length; ++i) if (list2[i].type === type) return true;
   return false;
@@ -19158,7 +19158,7 @@ function fixFlowSeqItems(fc) {
 }
 var Parser;
 var init_parser = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/parser.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/parse/parser.js"() {
     init_cst();
     init_lexer();
     Parser = class {
@@ -20071,7 +20071,7 @@ var init_parser = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/public-api.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/public-api.js
 function parseOptions(options) {
   const prettyErrors = options.prettyErrors !== false;
   const lineCounter = options.lineCounter || prettyErrors && new LineCounter() || null;
@@ -20154,7 +20154,7 @@ function stringify3(value, replacer, options) {
   return new Document(value, _replacer, options).toString(options);
 }
 var init_public_api = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/public-api.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/public-api.js"() {
     init_composer();
     init_Document();
     init_errors();
@@ -20165,7 +20165,7 @@ var init_public_api = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/index.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/index.js
 var dist_exports = {};
 __export(dist_exports, {
   Alias: () => Alias,
@@ -20199,7 +20199,7 @@ __export(dist_exports, {
   visitAsync: () => visitAsync
 });
 var init_dist = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/index.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/dist/index.js"() {
     init_composer();
     init_Document();
     init_Schema();
@@ -20219,7 +20219,7 @@ var init_dist = __esm({
   }
 });
 
-// ../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/index.js
+// ../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/index.js
 var browser_exports = {};
 __export(browser_exports, {
   Alias: () => Alias,
@@ -20255,7 +20255,7 @@ __export(browser_exports, {
 });
 var browser_default;
 var init_browser = __esm({
-  "../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/index.js"() {
+  "../../../../../../../../Users/mgubi/Library/Caches/deno/npm/registry.npmjs.org/yaml/2.8.1/browser/index.js"() {
     init_dist();
     init_dist();
     browser_default = dist_exports;
@@ -22502,7 +22502,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
     fmembers = (await fline.json("members.json", fline.signed) || {}).members || [];
   }
   const pages = /* @__PURE__ */ new Map(), followed = /* @__PURE__ */ new Set();
-  const walk = async (queue) => {
+  const walk2 = async (queue) => {
     while (queue.length) {
       const qm = queue.shift();
       const line = await site.held(qm);
@@ -22516,7 +22516,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
     }
   };
   fmembers = fmembers.filter((m) => !removed(f, m));
-  await walk([
+  await walk2([
     ...members,
     ...fmembers
   ]);
@@ -22532,7 +22532,7 @@ async function render(f, members, { home = true, featured = null, keeperFetch = 
       "document",
       "collection"
     ].includes(line.state.kind)) {
-      await walk([
+      await walk2([
         {
           kind: line.state.kind,
           name: nm,
@@ -22865,7 +22865,7 @@ async function remoteSource(site, at) {
   if (!site.remotes.has(at)) {
     site.remotes.set(at, (async () => {
       const url = at.endsWith("/") ? at : at + "/";
-      const get = async (rel) => {
+      const get2 = async (rel) => {
         try {
           return await site.http.cached(url + rel.split("/").map(encodeURIComponent).join("/"));
         } catch (error) {
@@ -22873,11 +22873,11 @@ async function remoteSource(site, at) {
           throw error;
         }
       };
-      const raw = await get("opensheaf.json");
+      const raw = await get2("opensheaf.json");
       if (raw === null) throw new Error("no discovery document");
       const disc = parseJson(raw, url + "opensheaf.json");
       if (disc === null || typeof disc !== "object" || disc.specification !== "0.2") throw new Error("not 0.2");
-      if (Object.hasOwn(disc, "objectPages")) disc.objects = await listedObjects(disc, get);
+      if (Object.hasOwn(disc, "objectPages")) disc.objects = await listedObjects(disc, get2);
       const root = disc.storageRoot ?? "ocfl/";
       if (typeof root !== "string" || root.includes(":") || !safePath(root.replace(/\/+$/, "")) || !root.endsWith("/")) {
         throw new Error("storage root");
@@ -22886,7 +22886,7 @@ async function remoteSource(site, at) {
       return {
         disc,
         root,
-        get,
+        get: get2,
         at: hint
       };
     })());
@@ -23812,7 +23812,7 @@ var GitHubStorage = class _GitHubStorage {
       ...e,
       path: prefix ? `${prefix}/${e.path}` : e.path
     });
-    const walk = async (sha, prefix) => {
+    const walk2 = async (sha, prefix) => {
       const whole = await this.github.request("GET", `${r}/trees/${sha}?recursive=1`);
       if (!whole.truncated) {
         for (const e of whole.tree) entries.push(under2(prefix, e));
@@ -23821,11 +23821,11 @@ var GitHubStorage = class _GitHubStorage {
       const t = await this.github.request("GET", `${r}/trees/${sha}`);
       if (t.truncated) throw new GitHubError(`${this.repo}: the folder ${prefix || "/"} is too large for GitHub's API`);
       for (const e of t.tree) {
-        if (e.type === "tree") await walk(e.sha, under2(prefix, e).path);
+        if (e.type === "tree") await walk2(e.sha, under2(prefix, e).path);
         else entries.push(under2(prefix, e));
       }
     };
-    await walk(this.tree, "");
+    await walk2(this.tree, "");
     this.base = /* @__PURE__ */ new Map();
     for (const e of entries) {
       if (e.type === "blob") this.base.set(e.path, {
@@ -24144,6 +24144,2886 @@ init_names();
 init_versions();
 init_folder();
 init_deposit();
+init_paths();
+
+// core/ocfl.js
+init_http();
+init_storage();
+var MESSAGES = {
+  E001a: [
+    [
+      "file"
+    ],
+    "OCFL Object root contains unexpected file: %s"
+  ],
+  E001b: [
+    [
+      "dir"
+    ],
+    "OCFL Object root contains unexpected directory: %s"
+  ],
+  E001c: [
+    [
+      "entry"
+    ],
+    "OCFL Object root contains unexpected entry that isn't a file or directory: %s"
+  ],
+  E003a: [
+    [
+      "assumed_version"
+    ],
+    "OCFL Object version declaration file is missing (assuming version %s)"
+  ],
+  E003b: [
+    [
+      "files",
+      "using_version"
+    ],
+    "OCFL Object includes more that one file that looks like an object declaration (got %s), using version %s"
+  ],
+  E003c: [
+    [
+      "assumed_version"
+    ],
+    "OCFL Object includes one or more object declaration files (starting 0=) but no valid version number could be extracted from any of them (assuming version %s)"
+  ],
+  E003d: [
+    [
+      "path"
+    ],
+    "OCFL Storage Root hierarchy includes directory %s with more that one file that looks like an object declaration, ignoring"
+  ],
+  E003e: [
+    [
+      "path"
+    ],
+    "No OCFL Object to validate at path %s. The root of an OCFL Object must be a directory containing an object declaration"
+  ],
+  E004a: [
+    [
+      "path",
+      "version"
+    ],
+    "OCFL Storage Root hierarchy includes directory %s with an object declaration giving unknown version %s, ignoring"
+  ],
+  E004b: [
+    [
+      "path",
+      "declaration"
+    ],
+    "OCFL Storage Root hierarchy includes directory %s with an unrecognized object declaration %s, ignoring"
+  ],
+  E006: [
+    [
+      "filename"
+    ],
+    "The OCFL object conformance declaration filename must be 0=ocfl_object_, followed by the OCFL specification version number, got %s instead"
+  ],
+  E007: [
+    [
+      "filename"
+    ],
+    "OCFL Object declaration file %s contents do not match file name without leading 0= (the 'dvalue')"
+  ],
+  E008: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory versions block does not contain any versions, there must be at least version 1"
+  ],
+  E009: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory versions block does not contain v1 or a zero padded equivalent"
+  ],
+  E010: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory versions block includes an out-of-sequence version"
+  ],
+  E015: [
+    [
+      "where",
+      "entry"
+    ],
+    "OCFL Object version directory %s includes an illegal file (%s)"
+  ],
+  E017: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory contentDirectory must be a string and must not contain a forward slash (/)"
+  ],
+  E018: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory contentDirectory must not be either . or .."
+  ],
+  E019: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory sets contentDirectory whereas it was not set in the first version inventory"
+  ],
+  E020: [
+    [
+      "where",
+      "version_content_directory",
+      "root_content_directory"
+    ],
+    "OCFL Object %s inventory contentDirectory %s does not match root contentDirectory %s"
+  ],
+  E023a: [
+    [
+      "where",
+      "extra_files"
+    ],
+    "OCFL Object includes one or more files that are not mentioned in the  %s inventory manifest (%s)"
+  ],
+  E023b: [
+    [
+      "where",
+      "missing_filepaths"
+    ],
+    "OCFL Object %s manifest does not include files listed in previous version manifests (%s)"
+  ],
+  E024: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object version %s content directory includes empty path %s"
+  ],
+  E025a: [
+    [
+      "where",
+      "digest_algorithm"
+    ],
+    "OCFL Object %s inventory `digestAlgorithm` attribute not an allowed digest type (got '%s')"
+  ],
+  E025b: [
+    [
+      "where",
+      "digest",
+      "algorithm"
+    ],
+    "OCFL Object %s inventory manifest block includes a digest (%s) that doesn't have the correct form for the %s algorithm"
+  ],
+  E026a: [
+    [
+      "where",
+      "digest"
+    ],
+    "OCFL Object %s inventory uses unknown digest type %s"
+  ],
+  E033: [
+    [
+      "where",
+      "explanation"
+    ],
+    "OCFL Object %s inventory is not valid JSON (%s)"
+  ],
+  E036a: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory missing `id` attribute"
+  ],
+  E036b: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory missing `type` attribute"
+  ],
+  E036c: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory missing `digestAlgorithm` attribute"
+  ],
+  E036d: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory missing `head` attribute"
+  ],
+  E037a: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory `id` attribute is empty or badly formed"
+  ],
+  E037b: [
+    [
+      "where",
+      "version_id",
+      "root_id"
+    ],
+    "OCFL Object %s inventory id `%s` does not match the value in the root inventory `%s`"
+  ],
+  E038a: [
+    [
+      "where",
+      "expected",
+      "got"
+    ],
+    "OCFL Object %s inventory `type` attribute has wrong value (expected %s, got %s)"
+  ],
+  E038b: [
+    [
+      "where",
+      "got",
+      "assumed_spec_version"
+    ],
+    "OCFL Object %s inventory `type` attribute does not look like a valid specification URI (got %s), will proceed as if using version %s"
+  ],
+  E038c: [
+    [
+      "where",
+      "got",
+      "assumed_spec_version"
+    ],
+    "OCFL Object %s inventory `type` attribute has an unsupported specification version number (%s), will proceed as if using version %s"
+  ],
+  E038d: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory `type` attribute does not have a string value"
+  ],
+  E040: [
+    [
+      "where",
+      "got",
+      "expected"
+    ],
+    "OCFL Object %s inventory head attribute doesn't match versions (got %s, expected %s)"
+  ],
+  E041a: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory missing `manifest` attribute"
+  ],
+  E041b: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory missing `versions` attribute"
+  ],
+  E041c: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory manifest block is not a JSON object"
+  ],
+  E042a: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object %s inventory manifest includes invalid content path %s"
+  ],
+  E042b: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object %s inventory manifest includes content path %s with invalid version directory"
+  ],
+  E042c: [
+    [
+      "where",
+      "path",
+      "content_directory"
+    ],
+    "OCFL Object %s inventory manifest includes invalid content path %s that doesn't match the content directory name %s"
+  ],
+  E044: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory versions block is not a JSON object"
+  ],
+  E046a: [
+    [
+      "version_dir"
+    ],
+    "OCFL Object root inventory describes version %s but no corresponding version directory is present"
+  ],
+  E046b: [
+    [
+      "dir"
+    ],
+    "OCFL Object includes directory %s that looks like a version directory but isn't a valid version in the inventory"
+  ],
+  E048: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block does not include a created date or it is malformed"
+  ],
+  E048c: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block does not include a state block"
+  ],
+  E049a: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block created date SHOULD include a timezone designator"
+  ],
+  E049b: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block created date SHOULD be granular to the seconds level"
+  ],
+  E049c: [
+    [
+      "where",
+      "version",
+      "description"
+    ],
+    "OCFL Object %s inventory %s version block has bad created date, must be IS8601 (%s)"
+  ],
+  E049d: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block created value is not a JSON string"
+  ],
+  E050a: [
+    [
+      "where",
+      "digests"
+    ],
+    "OCFL Object %s inventory state refers to one or more digests that are not in the manifest (%s)"
+  ],
+  E050c: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block state block is not a JSON object"
+  ],
+  E050d: [
+    [
+      "where",
+      "version",
+      "digest"
+    ],
+    "OCFL Object %s inventory %s version state block includes a bad digest (%s)"
+  ],
+  E050e: [
+    [
+      "where",
+      "version",
+      "digest"
+    ],
+    "OCFL Object %s inventory %s version block state block value for digest %s is not list"
+  ],
+  E050f: [
+    [
+      "where",
+      "version",
+      "digest"
+    ],
+    "OCFL Object %s inventory version %s state includes digest value %s that is not listed in the manifest block"
+  ],
+  E052: [
+    [
+      "where",
+      "version",
+      "path"
+    ],
+    "OCFL Object %s inventory %s version block state block includes an invalid path %s that starts or ends with /"
+  ],
+  E053: [
+    [
+      "where",
+      "version",
+      "path"
+    ],
+    "OCFL Object %s inventory %s version block state block includes an invalid path %s that includes . .. or //"
+  ],
+  E054a: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block has user key with value that isn't a JSON object"
+  ],
+  E054b: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block has user/name key with value that isn't a string"
+  ],
+  E054c: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block has user/address key with value that isn't a string"
+  ],
+  E056a: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory includes a fixity key with value that isn't a JSON object"
+  ],
+  E056b: [
+    [
+      "where",
+      "algorithm"
+    ],
+    "OCFL Object %s inventory fixity block includes a key that is not a known digest algorithm name: %s"
+  ],
+  E057a: [
+    [
+      "where",
+      "algorithm"
+    ],
+    "OCFL Object %s inventory fixity block entry for digest algorithm name %s is not a JSON object"
+  ],
+  E057b: [
+    [
+      "where",
+      "algorithm",
+      "digest"
+    ],
+    "OCFL Object %s inventory fixity block entry for digest algorithm %s includes digest %s which has the wrong form"
+  ],
+  E057c: [
+    [
+      "where",
+      "algorithm",
+      "digest"
+    ],
+    "OCFL Object %s inventory fixity block entry for digest algorithm %s, digest %s is not a JSON list"
+  ],
+  E057d: [
+    [
+      "where",
+      "algorithm",
+      "digest",
+      "path"
+    ],
+    "OCFL Object %s inventory fixity block entry for digest algorithm %s, digest %s includes a content path %s that is not in the manifest"
+  ],
+  E058a: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object %s inventory is missing sidecar digest file at %s"
+  ],
+  E058b: [
+    [
+      "inv_digest_file"
+    ],
+    "Cannot extract digest type from inventory digest file name %s"
+  ],
+  E060: [
+    [
+      "inv_file",
+      "actual",
+      "recorded",
+      "inv_digest_file"
+    ],
+    "Mismatch between actual and recorded inventory digests for %s (calculated %s but read %s from %s)"
+  ],
+  E061: [
+    [
+      "description"
+    ],
+    "Cannot extract digest from inventory digest file (%s)"
+  ],
+  E063: [
+    null,
+    "OCFL Object root inventory is missing"
+  ],
+  E064: [
+    [
+      "root_inv_file",
+      "inv_file"
+    ],
+    "Object root inventory and copy in last version MUST be identical but are not (%s and %s)"
+  ],
+  E066a: [
+    [
+      "prior_head",
+      "where"
+    ],
+    "OCFL Object inventory for %s doesn't have a subset of version blocks of inventory for %s"
+  ],
+  E066b: [
+    [
+      "prior_head",
+      "version",
+      "where",
+      "logical_paths",
+      "only_in"
+    ],
+    "OCFL Object %s inventory %s version state doesn't have same logical paths as same version in %s inventory (paths %s only in %s inventory)"
+  ],
+  E066c: [
+    [
+      "prior_head",
+      "version",
+      "logical_path",
+      "prior_content",
+      "where",
+      "current_content"
+    ],
+    "OCFL Object %s inventory %s version state has logical path %s that maps to content path %s, but in %s inventory it maps to content path %s"
+  ],
+  E066d: [
+    [
+      "where",
+      "version",
+      "digest",
+      "logical_files",
+      "prior_head"
+    ],
+    "OCFL Object %s inventory %s version state has digest %s (mapping to logical files %s) that does not appear in the %s inventory"
+  ],
+  E066e: [
+    [
+      "prior_head",
+      "version",
+      "digest",
+      "logical_files",
+      "where"
+    ],
+    "OCFL Object %s inventory %s version state has digest %s (mapping to logical files %s) that does not appear in the %s inventory"
+  ],
+  E067: [
+    [
+      "entry"
+    ],
+    "OCFL Object extensions direct contains an unexpected non-directory entry: %s"
+  ],
+  E069a: [
+    [
+      "root"
+    ],
+    "OCFL Storage Root %s lacks required 0= declaration file"
+  ],
+  E069b: [
+    [
+      "root"
+    ],
+    "OCFL Storage Root %s has more than one 0= declaration file"
+  ],
+  E069c: [
+    [
+      "root",
+      "namaste_file"
+    ],
+    "OCFL Storage Root %s has unrecognized 0= declaration file %s"
+  ],
+  E069e: [
+    [
+      "root",
+      "namaste_file"
+    ],
+    "OCFL Storage Root %s required declaration file %s has invalid content"
+  ],
+  E070a: [
+    [
+      "root",
+      "message"
+    ],
+    "OCFL Storage Root %s includes ocfl_layout.json with unknown layout %s"
+  ],
+  E070b: [
+    [
+      "root",
+      "message"
+    ],
+    "OCFL Storage Root %s has an ocfl_layout.json file that isn't a JSON object"
+  ],
+  E070c: [
+    [
+      "root",
+      "message"
+    ],
+    "OCFL Storage Root %s Storage root %s has layout file doesn't have required extension and description string entries"
+  ],
+  E071: [
+    [
+      "root",
+      "layout_name"
+    ],
+    "OCFL Storage Root %s includes ocfl_layout.json with unknown layout %s"
+  ],
+  E072: [
+    [
+      "path"
+    ],
+    "OCFL storage root hierarchy include directory %s with at least one file but no object declaration. Such additional files are not allowed"
+  ],
+  E073: [
+    [
+      "path"
+    ],
+    "OCFL storage root hierarchy contains an empty directory: %s"
+  ],
+  E086: [
+    [
+      "entry"
+    ],
+    "OCFL Storage Root extensions direct contains an unexpected non-directory entry: %s"
+  ],
+  E092a: [
+    [
+      "where",
+      "digest_algorithm",
+      "digest",
+      "content_path",
+      "content_digest"
+    ],
+    "OCFL Object %s inventory manifest using digest algorithm %s has digest %s for file %s which doesn't match calculated digest %s for that file"
+  ],
+  E092b: [
+    [
+      "where",
+      "content_path"
+    ],
+    "OCFL Object %s inventory manifest refers to a file path that is not present in the object (%s)"
+  ],
+  E093a: [
+    [
+      "where",
+      "digest_algorithm",
+      "digest",
+      "content_path",
+      "content_digest"
+    ],
+    "OCFL Object %s inventory fixity block for digest algorithm %s has digest %s for file %s which doesn't match calculated digest %s for that file"
+  ],
+  E093b: [
+    [
+      "where",
+      "digest_algorithm",
+      "digest",
+      "content_path"
+    ],
+    "OCFL Object %s inventory fixity block for digest algorithm %s has digest %s for a file %s which does not exist in the object"
+  ],
+  E094: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block has message key with value that isn't a string"
+  ],
+  E095a: [
+    [
+      "where",
+      "version",
+      "path"
+    ],
+    "OCFL Object %s inventory version %s state has logical path %s used more than once"
+  ],
+  E095b: [
+    [
+      "where",
+      "version",
+      "path"
+    ],
+    "OCFL Object %s inventory version %s state has logical path %s used as both a directory and a file path."
+  ],
+  E096: [
+    [
+      "where",
+      "digest"
+    ],
+    "OCFL Object %s inventory manifest block includes digest %s more than once with different normalizations"
+  ],
+  E097: [
+    [
+      "where",
+      "algorithm",
+      "digest"
+    ],
+    "OCFL Object %s inventory fixity block for digest algorithm %s, includes digest %s more than once with different normalizations"
+  ],
+  E099: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object %s inventory manifest content path %s includes invalid element ., .., or empty (//)."
+  ],
+  E100: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object %s inventory manifest content path %s must not begin or end with /."
+  ],
+  E101a: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object %s inventory manifest content path %s is repeated"
+  ],
+  E101b: [
+    [
+      "where",
+      "path"
+    ],
+    "OCFL Object %s inventory manifest content path %s used as both a directory and a file path"
+  ],
+  E103: [
+    [
+      "where",
+      "this_spec_version",
+      "prev_version_dir",
+      "prev_spec_version"
+    ],
+    "OCFL Object %s inventory conforms to specification version %s which is an earlier version than the %s inventory which conforms to specification version %s"
+  ],
+  E107: [
+    [
+      "where",
+      "digests"
+    ],
+    "OCFL Object %s inventory manifest contains digest(s) (%s) that are not used in the object state"
+  ],
+  E111: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory includes a fixity key with value that isn't a JSON object"
+  ],
+  W001: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory version numbers SHOULD NOT be zero-padded"
+  ],
+  W002: [
+    [
+      "where",
+      "entry"
+    ],
+    "OCFL Object version directory %s SHOULD NOT contain any directory except the designated content directory (found %s)"
+  ],
+  W003: [
+    [
+      "where"
+    ],
+    "OCFL Object version directory %s SHOULD NOT contain an empty content directory"
+  ],
+  W004: [
+    [
+      "where"
+    ],
+    "OCFL Object %s inventory SHOULD use sha512 but uses sha256 as the DigestAlgorithm"
+  ],
+  W005: [
+    [
+      "where",
+      "id"
+    ],
+    "OCFL Object %s inventory id SHOULD be a URI (got %s)"
+  ],
+  W007a: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block SHOULD include a message key"
+  ],
+  W007b: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block SHOULD include a user key"
+  ],
+  W008: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block user description SHOULD have an address"
+  ],
+  W009: [
+    [
+      "where",
+      "version"
+    ],
+    "OCFL Object %s inventory %s version block user description SHOULD be a mailto: or person identifier URI"
+  ],
+  W010: [
+    [
+      "where"
+    ],
+    "OCFL Object %s SHOULD have an inventory file but does not"
+  ],
+  W011: [
+    [
+      "key",
+      "version",
+      "prior_head",
+      "where"
+    ],
+    "OCFL Object version metadata '%s' for %s in %s inventory does not match that in %s inventory"
+  ],
+  W013: [
+    [
+      "entry"
+    ],
+    "OCFL Object includes unregistered extension directory '%s'"
+  ],
+  W901: [
+    [
+      "entry"
+    ],
+    "OCFL Storage Root includes unregistered extension directory '%s'"
+  ],
+  E901: [
+    [
+      "path",
+      "limit"
+    ],
+    "OCFL Object file %s is larger than %s bytes, the limit of this validator (LIMITS.file): its digests are not checked"
+  ],
+  E902: [
+    [
+      "path",
+      "explanation"
+    ],
+    "OCFL file %s is not read: %s, the limits of this validator (LIMITS.json, LIMITS.nesting)"
+  ],
+  E903: [
+    [
+      "limit"
+    ],
+    "OCFL Storage Root holds more than %s objects, the limit of this validator (LIMITS.objects): the others are not checked"
+  ],
+  E904: [
+    [
+      "explanation"
+    ],
+    "The validation stops here, where ocfl-py would stop with an exception of Python (%s)"
+  ]
+};
+var ValidationLog = class {
+  constructor({ logWarnings = false, logErrors = true, specVersion = DEFAULT_SPEC_VERSION } = {}) {
+    this.logWarnings = logWarnings;
+    this.logErrors = logErrors;
+    this.specVersion = specVersion;
+    this.codes = {};
+    this.messages = [];
+    this.errors = [];
+    this.warnings = [];
+    this.numErrors = 0;
+    this.numWarnings = 0;
+  }
+  get specUrl() {
+    return `https://ocfl.io/${this.specVersion}/spec/`;
+  }
+  log(code, isError, args) {
+    const severity = isError ? "error" : "warning";
+    let message2;
+    if (Object.hasOwn(MESSAGES, code)) {
+      const [params, text3] = MESSAGES[code];
+      let desc = text3;
+      if (params) {
+        const values = params.map((p) => Object.hasOwn(args, p) ? pyStr(args[p]) : "???");
+        const holes = (text3.match(/%s/g) || []).length;
+        if (holes === values.length) {
+          let k = 0;
+          desc = text3.replace(/%s/g, () => values[k++]);
+        } else {
+          desc = `${text3} ${pyRepr3(args)}`;
+        }
+      }
+      message2 = `[${code}] ${desc}`;
+    } else {
+      message2 = `Unknown ${severity}: ${code} - params (${pyRepr3(args)})`;
+    }
+    const m = /^([EW](\d\d\d))/.exec(code);
+    if (m && Number(m[2]) < 200) message2 += ` (see ${this.specUrl}#${m[1]})`;
+    this.codes[code] = message2;
+    if (isError && this.logErrors || !isError && this.logWarnings) this.messages.push(message2);
+    (isError ? this.errors : this.warnings).push({
+      code,
+      message: message2
+    });
+  }
+  error(code, args = {}) {
+    this.log(code, true, args);
+    this.numErrors++;
+  }
+  warning(code, args = {}) {
+    this.log(code, false, args);
+    this.numWarnings++;
+  }
+  statusStr(prefix = "") {
+    return [
+      ...this.messages
+    ].sort(compareCodePoints).map((m) => prefix + m).join("\n");
+  }
+};
+function compareCodePoints(a, b) {
+  const x = [
+    ...a
+  ], y = [
+    ...b
+  ];
+  for (let k = 0; k < Math.min(x.length, y.length); k++) {
+    const d = x[k].codePointAt(0) - y[k].codePointAt(0);
+    if (d) return d;
+  }
+  return x.length - y.length;
+}
+var PyFloat = class {
+  constructor(value) {
+    this.value = value;
+  }
+};
+var PyStop = class extends Error {
+};
+var isDict = (x) => x !== null && typeof x === "object" && !Array.isArray(x) && !(x instanceof PyFloat);
+var isList = (x) => Array.isArray(x);
+var isStr = (x) => typeof x === "string";
+function pyType(x) {
+  if (x === null || x === void 0) return "NoneType";
+  if (typeof x === "boolean") return "bool";
+  if (typeof x === "number" || typeof x === "bigint") return "int";
+  if (x instanceof PyFloat) return "float";
+  if (isStr(x)) return "str";
+  return isList(x) ? "list" : "dict";
+}
+function has(container, key) {
+  if (isDict(container)) return isStr(key) && Object.hasOwn(container, key);
+  if (isList(container)) return container.some((x) => pyEq(x, key));
+  if (isStr(container)) return container.includes(key);
+  throw new PyStop(`TypeError: argument of type '${pyType(container)}' is not iterable`);
+}
+function get(container, key) {
+  if (isDict(container)) {
+    if (!Object.hasOwn(container, key)) throw new PyStop(`KeyError: ${pyRepr3(key)}`);
+    return container[key];
+  }
+  if (isList(container) || isStr(container)) throw new PyStop(`TypeError: ${pyType(container)} indices must be integers or slices, not str`);
+  throw new PyStop(`TypeError: '${pyType(container)}' object is not subscriptable`);
+}
+function pyIter(x) {
+  if (isDict(x)) return Object.keys(x);
+  if (isList(x)) return x;
+  if (isStr(x)) return [
+    ...x
+  ];
+  throw new PyStop(`TypeError: '${pyType(x)}' object is not iterable`);
+}
+function pyText(x, what = "startswith") {
+  if (!isStr(x)) throw new PyStop(`AttributeError: '${pyType(x)}' object has no attribute '${what}'`);
+  return x;
+}
+function hashable(x) {
+  if (isDict(x) || isList(x)) throw new PyStop(`TypeError: unhashable type: '${pyType(x)}'`);
+  return x;
+}
+function pyNumber(x) {
+  if (typeof x === "boolean") return x ? 1 : 0;
+  if (typeof x === "number" || typeof x === "bigint") return x;
+  if (x instanceof PyFloat) return x.value;
+  return null;
+}
+function pyEq(a, b) {
+  const [x, y] = [
+    pyNumber(a),
+    pyNumber(b)
+  ];
+  if (x !== null || y !== null) return x !== null && y !== null && x == y;
+  if (isList(a) || isList(b)) return isList(a) && isList(b) && a.length === b.length && a.every((v, k) => pyEq(v, b[k]));
+  if (isDict(a) || isDict(b)) {
+    if (!isDict(a) || !isDict(b)) return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    return ka.length === kb.length && ka.every((k) => Object.hasOwn(b, k) && pyEq(a[k], b[k]));
+  }
+  return a === b;
+}
+function pyStr(x) {
+  return isStr(x) ? x : pyRepr3(x);
+}
+function pyRepr3(x) {
+  if (x === null || x === void 0) return "None";
+  if (x === true) return "True";
+  if (x === false) return "False";
+  if (typeof x === "number" || typeof x === "bigint") return String(x);
+  if (x instanceof PyFloat) return floatRepr(x.value);
+  if (isStr(x)) return stringRepr(x);
+  if (isList(x)) return `[${x.map(pyRepr3).join(", ")}]`;
+  return `{${Object.entries(x).map(([k, v]) => `${stringRepr(k)}: ${pyRepr3(v)}`).join(", ")}}`;
+}
+function floatRepr(v) {
+  if (Number.isNaN(v)) return "nan";
+  if (!Number.isFinite(v)) return v > 0 ? "inf" : "-inf";
+  const [mantissa, exp] = v.toExponential().split("e");
+  const e = Number(exp);
+  const negative = mantissa.startsWith("-");
+  const digits = mantissa.replace(/^-/, "").replace(".", "");
+  let body;
+  if (e >= -4 && e < 16) {
+    if (e >= 0) {
+      body = digits.length <= e + 1 ? `${digits.padEnd(e + 1, "0")}.0` : `${digits.slice(0, e + 1)}.${digits.slice(e + 1)}`;
+    } else {
+      body = `0.${"0".repeat(-e - 1)}${digits}`;
+    }
+  } else {
+    const m = digits.length > 1 ? `${digits[0]}.${digits.slice(1)}` : digits;
+    body = `${m}e${e < 0 ? "-" : "+"}${String(Math.abs(e)).padStart(2, "0")}`;
+  }
+  return (negative ? "-" : "") + body;
+}
+function stringRepr(s) {
+  const quote = s.includes("'") && !s.includes('"') ? '"' : "'";
+  let out = quote;
+  for (const ch of s) {
+    const c = ch.codePointAt(0);
+    if (ch === "\\" || ch === quote) out += "\\" + ch;
+    else if (ch === "	") out += "\\t";
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch !== " " && /[\p{C}\p{Z}]/u.test(ch)) {
+      out += c < 256 ? `\\x${c.toString(16).padStart(2, "0")}` : c < 65536 ? `\\u${c.toString(16).padStart(4, "0")}` : `\\U${c.toString(16).padStart(8, "0")}`;
+    } else out += ch;
+  }
+  return out + quote;
+}
+var PyJsonError = class extends Error {
+  constructor(msg, doc, pos) {
+    const cp = (k) => [
+      ...doc.slice(0, k)
+    ].length;
+    const at = cp(pos);
+    const nl = pos > 0 ? doc.lastIndexOf("\n", pos - 1) : -1;
+    const lineno = (doc.slice(0, pos).match(/\n/g) || []).length + 1;
+    const colno = nl < 0 ? at + 1 : at - cp(nl);
+    super(`${msg}: line ${lineno} column ${colno} (char ${at})`);
+  }
+};
+var WS = " 	\n\r";
+var NUMBER = /(-?(?:0|[1-9][0-9]*))(\.[0-9]+)?([eE][-+]?[0-9]+)?/y;
+var ESCAPES = {
+  '"': '"',
+  "\\": "\\",
+  "/": "/",
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "	"
+};
+function pyJson2(doc) {
+  if (doc.startsWith("\uFEFF")) throw new PyJsonError("Unexpected UTF-8 BOM (decode using utf-8-sig)", doc, 0);
+  const skip = (k) => {
+    while (k < doc.length && WS.includes(doc[k])) k++;
+    return k;
+  };
+  const string2 = (end3) => {
+    const begin = end3 - 1;
+    let out = "";
+    for (; ; ) {
+      let k = end3;
+      while (k < doc.length && doc[k] !== '"' && doc[k] !== "\\" && doc.charCodeAt(k) >= 32) k++;
+      if (k >= doc.length) throw new PyJsonError("Unterminated string starting at", doc, begin);
+      out += doc.slice(end3, k);
+      const t = doc[k];
+      end3 = k + 1;
+      if (t === '"') return [
+        out,
+        end3
+      ];
+      if (t !== "\\") throw new PyJsonError("Invalid control character at", doc, k);
+      if (end3 >= doc.length) throw new PyJsonError("Unterminated string starting at", doc, begin);
+      const esc2 = doc[end3];
+      if (esc2 !== "u") {
+        if (!Object.hasOwn(ESCAPES, esc2)) throw new PyJsonError("Invalid \\escape", doc, end3 - 1);
+        out += ESCAPES[esc2];
+        end3++;
+        continue;
+      }
+      const hex4 = (at) => {
+        const h = doc.slice(at, at + 4);
+        if (!/^[0-9A-Fa-f]{4}$/.test(h)) throw new PyJsonError("Invalid \\uXXXX escape", doc, at - 1);
+        return parseInt(h, 16);
+      };
+      let u = hex4(end3 + 1);
+      end3 += 5;
+      if (u >= 55296 && u <= 56319 && doc.slice(end3, end3 + 2) === "\\u") {
+        const u2 = hex4(end3 + 2);
+        if (u2 >= 56320 && u2 <= 57343) {
+          u = 65536 + (u - 55296 << 10 | u2 - 56320);
+          end3 += 6;
+        }
+      }
+      out += String.fromCodePoint(u);
+    }
+  };
+  const value = (k) => {
+    const c = doc[k];
+    if (c === '"') return string2(k + 1);
+    if (c === "{") return object(k + 1);
+    if (c === "[") return array(k + 1);
+    if (c === "n" && doc.startsWith("null", k)) return [
+      null,
+      k + 4
+    ];
+    if (c === "t" && doc.startsWith("true", k)) return [
+      true,
+      k + 4
+    ];
+    if (c === "f" && doc.startsWith("false", k)) return [
+      false,
+      k + 5
+    ];
+    if (c === "N" && doc.startsWith("NaN", k)) return [
+      new PyFloat(NaN),
+      k + 3
+    ];
+    if (c === "I" && doc.startsWith("Infinity", k)) return [
+      new PyFloat(Infinity),
+      k + 8
+    ];
+    if (c === "-" && doc.startsWith("-Infinity", k)) return [
+      new PyFloat(-Infinity),
+      k + 9
+    ];
+    NUMBER.lastIndex = k;
+    const m = k < doc.length ? NUMBER.exec(doc) : null;
+    if (!m) throw new PyJsonError("Expecting value", doc, k);
+    const end3 = k + m[0].length;
+    if (m[2] || m[3]) return [
+      new PyFloat(Number(m[0])),
+      end3
+    ];
+    const n = Number(m[1]);
+    return [
+      Number.isSafeInteger(n) ? n : BigInt(m[1]),
+      end3
+    ];
+  };
+  const object = (k) => {
+    const out = /* @__PURE__ */ Object.create(null);
+    k = skip(k);
+    if (doc[k] === "}") return [
+      out,
+      k + 1
+    ];
+    if (doc[k] !== '"') throw new PyJsonError("Expecting property name enclosed in double quotes", doc, k);
+    for (; ; ) {
+      let key;
+      [key, k] = string2(k + 1);
+      k = skip(k);
+      if (doc[k] !== ":") throw new PyJsonError("Expecting ':' delimiter", doc, k);
+      k = skip(k + 1);
+      let v2;
+      [v2, k] = value(k);
+      out[key] = v2;
+      k = skip(k);
+      if (doc[k] === "}") return [
+        out,
+        k + 1
+      ];
+      if (doc[k] !== ",") throw new PyJsonError("Expecting ',' delimiter", doc, k);
+      const comma = k;
+      k = skip(k + 1);
+      if (doc[k] !== '"') {
+        if (doc[k] === "}") throw new PyJsonError("Illegal trailing comma before end of object", doc, comma);
+        throw new PyJsonError("Expecting property name enclosed in double quotes", doc, k);
+      }
+    }
+  };
+  const array = (k) => {
+    const out = [];
+    k = skip(k);
+    if (doc[k] === "]") return [
+      out,
+      k + 1
+    ];
+    for (; ; ) {
+      let v2;
+      [v2, k] = value(k);
+      out.push(v2);
+      k = skip(k);
+      if (doc[k] === "]") return [
+        out,
+        k + 1
+      ];
+      if (doc[k] !== ",") throw new PyJsonError("Expecting ',' delimiter", doc, k);
+      const comma = k;
+      k = skip(k + 1);
+      if (doc[k] === "]") throw new PyJsonError("Illegal trailing comma before end of array", doc, comma);
+    }
+  };
+  const [v, end2] = value(skip(0));
+  const rest = skip(end2);
+  if (rest !== doc.length) throw new PyJsonError("Extra data", doc, rest);
+  return v;
+}
+var TooLarge = class extends Error {
+};
+function textOf(bytes) {
+  const bad = utf8Problem(bytes);
+  if (bad) throw new PyStop(`UnicodeDecodeError: ${bad}`);
+  return new TextDecoder("utf-8", {
+    ignoreBOM: true
+  }).decode(bytes).replace(/\r\n?/g, "\n");
+}
+function jsonText2(text3) {
+  if (nesting(text3) > LIMITS.nesting) throw new TooLarge(`nested deeper than ${LIMITS.nesting} levels`);
+  return pyJson2(text3);
+}
+var DateError = class extends Error {
+};
+function strToDatetime(s) {
+  if (s === "") throw new DateError("Attempt to set empty datetime");
+  let m = /^\d\d\d\d(-\d\d(-\d\d)?)?(?=\n?$)/.exec(s);
+  if (m) {
+    if (m[1] === void 0) s += "-01-01";
+    else if (m[2] === void 0) s += "-01";
+    s += "T00:00:00Z";
+  }
+  m = /^(.*\d{2}:\d{2}:\d{2})(\.\d+)([^\d].*)?(?=\n?$)/.exec(s);
+  if (m) s = m[1] + (m[3] ?? "");
+  m = /^(\d\d\d\d-\d\d-\d\dT\d\d:\d\d(:\d\d)?)(Z|([+-])(\d\d):(\d\d))?(?=\n?$)/.exec(s);
+  if (!m) throw new DateError(`Bad datetime format (${s})`);
+  const given = m[1] + "Z";
+  const [year, month, day, hour, minute, second] = m[1].split(/[-T:]/).map(Number).concat(0).slice(0, 6);
+  const days = [
+    31,
+    year % 4 === 0 && year % 100 !== 0 || year % 400 === 0 ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31
+  ];
+  const problem = year < 1 ? `year ${year} is out of range` : month < 1 || month > 12 ? "month must be in 1..12" : day < 1 || day > days[month - 1] ? "day is out of range for month" : hour > 23 ? "hour must be in 0..23" : minute > 59 ? "minute must be in 0..59" : second > 59 ? "second must be in 0..59" : null;
+  if (problem) throw new DateError(`${problem}: ${given}`);
+  if (m[3] && m[3] !== "Z" && (Number(m[5]) > 23 || Number(m[6]) > 59)) throw new DateError(`Bad timezone offset (${s})`);
+}
+var DIGEST_FORMS = {
+  sha512: /^[0-9a-fA-F]{128}(?=\n?$)/,
+  sha256: /^[0-9a-fA-F]{64}(?=\n?$)/,
+  sha1: /^[0-9a-fA-F]{40}(?=\n?$)/,
+  md5: /^[0-9a-fA-F]{32}(?=\n?$)/,
+  "blake2b-512": /^[0-9a-fA-F]{128}(?=\n?$)/,
+  "blake2b-384": /^[0-9a-fA-F]{96}(?=\n?$)/,
+  "blake2b-256": /^[0-9a-fA-F]{64}(?=\n?$)/,
+  "blake2b-160": /^[0-9a-fA-F]{40}(?=\n?$)/,
+  "sha512-spec-ex": /^[0-9a-f]{6}\.\.\.[0-9a-f]{3}(?=\n?$)/,
+  "sha256-spec-ex": /^[0-9a-f]{6}\.\.\.[0-9a-f]{3}(?=\n?$)/
+};
+function digestForm(alg) {
+  if (!isStr(alg) || !Object.hasOwn(DIGEST_FORMS, alg)) return null;
+  return DIGEST_FORMS[alg];
+}
+function normalizedDigest(digest, alg) {
+  if (alg === "sha512-spec-ex" || alg === "sha256-spec-ex") return digest;
+  return pyText(digest, "lower").toLowerCase();
+}
+async function hasher(alg) {
+  const h = await Promise.resolve().then(() => (init_index_esm(), index_esm_exports));
+  switch (alg) {
+    case "sha512":
+    case "sha512-spec-ex":
+      return h.createSHA512();
+    case "sha256":
+    case "sha256-spec-ex":
+      return h.createSHA256();
+    case "sha1":
+      return h.createSHA1();
+    case "md5":
+      return h.createMD5();
+    case "blake2b-512":
+      return h.createBLAKE2b(512);
+    case "blake2b-384":
+      return h.createBLAKE2b(384);
+    case "blake2b-256":
+      return h.createBLAKE2b(256);
+    case "blake2b-160":
+      return h.createBLAKE2b(160);
+    default:
+      return null;
+  }
+}
+var SUBTLE = {
+  sha512: "SHA-512",
+  "sha512-spec-ex": "SHA-512",
+  sha256: "SHA-256",
+  "sha256-spec-ex": "SHA-256",
+  sha1: "SHA-1"
+};
+async function digestsOf(chunks, algs) {
+  const wanted = [
+    ...new Set(algs)
+  ];
+  const it = (chunks[Symbol.asyncIterator] ?? chunks[Symbol.iterator]).call(chunks);
+  const first = await it.next();
+  const second = first.done ? first : await it.next();
+  const raw = {};
+  if (second.done) {
+    const bytes = first.done ? new Uint8Array() : first.value;
+    for (const alg of wanted) {
+      if (SUBTLE[alg] && globalThis.crypto?.subtle) {
+        raw[alg] = Array.from(new Uint8Array(await crypto.subtle.digest(SUBTLE[alg], bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+      } else {
+        const h = await hasher(alg);
+        if (h) raw[alg] = h.init().update(bytes).digest("hex");
+      }
+    }
+  } else {
+    const hs = /* @__PURE__ */ new Map();
+    for (const alg of wanted) {
+      const h = await hasher(alg);
+      if (h) hs.set(alg, h.init());
+    }
+    const feed = (chunk) => {
+      for (const h of hs.values()) h.update(chunk);
+    };
+    feed(first.value);
+    feed(second.value);
+    for (let next = await it.next(); !next.done; next = await it.next()) feed(next.value);
+    for (const [alg, h] of hs) raw[alg] = h.digest("hex");
+  }
+  const out = {};
+  for (const [alg, d] of Object.entries(raw)) {
+    out[alg] = alg === "sha512-spec-ex" ? `${d.slice(0, 15)}...${d.slice(-3)}` : alg === "sha256-spec-ex" ? `${d.slice(0, 6)}...${d.slice(-3)}` : d;
+  }
+  return out;
+}
+var Folder = class {
+  constructor(storage, base) {
+    this.storage = storage;
+    this.base = base;
+  }
+  at(p) {
+    return joinPath(this.base, p);
+  }
+  async kind(p) {
+    try {
+      return await this.storage.kind(this.at(p));
+    } catch {
+      return null;
+    }
+  }
+  async exists(p) {
+    return await this.kind(p) !== null;
+  }
+  async isdir(p) {
+    return await this.kind(p) === "dir";
+  }
+  async listdir(p) {
+    let entries = null;
+    try {
+      entries = await this.storage.list(this.at(p));
+    } catch {
+      entries = null;
+    }
+    if (entries === null) return null;
+    return entries.map((e) => ({
+      name: e.name,
+      type: e.kind === "dir" ? "directory" : e.kind === "file" ? "file" : "other"
+    }));
+  }
+  async bytes(p, limit = LIMITS.json) {
+    let bytes;
+    try {
+      bytes = await this.storage.read(this.at(p));
+    } catch (error) {
+      throw new PyStop(`OSError: ${p} cannot be read (${error.message})`);
+    }
+    if (bytes === null) return null;
+    if (bytes.length > limit) throw new TooLarge(`larger than ${limit} bytes`);
+    return bytes;
+  }
+  async chunks(p, limit = LIMITS.file) {
+    let source;
+    try {
+      source = this.storage.stream ? await this.storage.stream(this.at(p)) : null;
+      if (!source) {
+        const whole = await this.storage.read(this.at(p));
+        source = whole === null ? null : [
+          whole
+        ];
+      }
+    } catch (error) {
+      throw new PyStop(`OSError: ${p} cannot be read (${error.message})`);
+    }
+    if (source === null) throw new PyStop(`FileNotFoundError: ${p}`);
+    return async function* () {
+      let total = 0;
+      for await (const chunk of source) {
+        total += chunk.length;
+        if (total > limit) throw new TooLarge(`larger than ${limit} bytes`);
+        yield chunk;
+      }
+    }();
+  }
+};
+var SPEC_VERSIONS = [
+  "1.0",
+  "1.1"
+];
+var DEFAULT_SPEC_VERSION = "1.1";
+var DEFAULT_CONTENT_DIRECTORY = "content";
+var InventoryValidator = class {
+  constructor({ log = new ValidationLog(), where: where2 = "???", defaultSpecVersion = DEFAULT_SPEC_VERSION } = {}) {
+    this.log = log;
+    this.where = where2;
+    this.defaultSpecVersion = defaultSpecVersion;
+    this.inventory = null;
+    this.id = null;
+    this.specVersion = defaultSpecVersion;
+    this.digestAlgorithm = "sha512";
+    this.contentDirectory = DEFAULT_CONTENT_DIRECTORY;
+    this.contentDirectorySet = false;
+    this.allVersions = [];
+    this.manifestFiles = null;
+    this.unnormalizedDigests = null;
+    this.head = "UNKNOWN";
+  }
+  error(code, args = {}) {
+    this.log.error(code, {
+      where: this.where,
+      ...args
+    });
+  }
+  warning(code, args = {}) {
+    this.log.warning(code, {
+      where: this.where,
+      ...args
+    });
+  }
+  validate(inventory, forceSpecVersion = null) {
+    const start = this.log.numErrors;
+    this.inventory = inventory;
+    this.specVersion = forceSpecVersion ?? this.defaultSpecVersion;
+    this.log.specVersion = this.specVersion;
+    if (has(inventory, "id")) {
+      const iid = get(inventory, "id");
+      if (!isStr(iid) || iid === "") {
+        this.error("E037a");
+      } else {
+        if (!/^[a-z][a-z\d+\-.]*:./i.test(iid)) this.warning("W005", {
+          id: iid
+        });
+        this.id = iid;
+      }
+    } else {
+      this.error("E036a");
+    }
+    if (!has(inventory, "type")) {
+      this.error("E036b");
+    } else if (!isStr(get(inventory, "type"))) {
+      this.error("E038d");
+    } else if (forceSpecVersion && inventory.type !== `https://ocfl.io/${forceSpecVersion}/spec/#inventory`) {
+      this.error("E038a", {
+        expected: `https://ocfl.io/${forceSpecVersion}/spec/#inventory`,
+        got: inventory.type
+      });
+    } else {
+      const m = /^https:\/\/ocfl.io\/(\d+.\d)\/spec\/#inventory/.exec(inventory.type);
+      if (!m) {
+        this.error("E038b", {
+          got: inventory.type,
+          assumed_spec_version: this.specVersion
+        });
+      } else if (SPEC_VERSIONS.includes(m[1])) {
+        this.specVersion = m[1];
+        this.log.specVersion = this.specVersion;
+      } else {
+        this.error("E038c", {
+          got: m[1],
+          assumed_spec_version: this.specVersion
+        });
+      }
+    }
+    if (!has(inventory, "digestAlgorithm")) {
+      this.error("E036c");
+    } else if (pyEq(get(inventory, "digestAlgorithm"), "sha512")) {
+    } else if (pyEq(inventory.digestAlgorithm, "sha256")) {
+      this.warning("W004");
+      this.digestAlgorithm = "sha256";
+    } else {
+      this.error("E025a", {
+        digest_algorithm: inventory.digestAlgorithm
+      });
+      return false;
+    }
+    if (has(inventory, "contentDirectory")) {
+      const cd = get(inventory, "contentDirectory");
+      if (!isStr(cd) || cd.includes("/")) {
+        this.error("E017");
+      } else if (cd === "." || cd === "..") {
+        this.error("E018");
+      } else {
+        this.contentDirectory = cd;
+        this.contentDirectorySet = true;
+      }
+    }
+    let manifestFilesCorrectFormat = null;
+    if (!has(inventory, "manifest")) {
+      this.error("E041a");
+    } else {
+      [this.manifestFiles, manifestFilesCorrectFormat, this.unnormalizedDigests] = this.validateManifest(get(inventory, "manifest"));
+    }
+    let digestsUsed = [];
+    if (!has(inventory, "versions")) {
+      this.error("E041b");
+    } else {
+      this.allVersions = this.validateVersionSequence(get(inventory, "versions"));
+      digestsUsed = this.validateVersions(inventory.versions, this.allVersions, this.unnormalizedDigests);
+    }
+    if (!has(inventory, "head")) {
+      this.error("E036d");
+    } else if (this.allVersions.length > 0) {
+      this.head = this.allVersions[this.allVersions.length - 1];
+      if (!pyEq(get(inventory, "head"), this.head)) this.error("E040", {
+        got: inventory.head,
+        expected: this.head
+      });
+    }
+    if (this.allVersions.length === 0) {
+      if (this.log.numErrors - start === 0) this.error("E008");
+      return false;
+    }
+    if (manifestFilesCorrectFormat !== null) this.checkContentPathsMapToVersions(manifestFilesCorrectFormat, this.allVersions);
+    if (this.manifestFiles !== null) this.checkDigestsPresentAndUsed(this.manifestFiles, digestsUsed);
+    if (has(inventory, "fixity")) this.validateFixity(get(inventory, "fixity"), this.manifestFiles);
+    return this.log.numErrors - start === 0;
+  }
+  validateAsPriorVersion(prior) {
+    const start = this.log.numErrors;
+    const mine = new Set(this.allVersions);
+    if (!(prior.allVersions.every((v) => mine.has(v)) && prior.allVersions.length < mine.size)) {
+      this.error("E066a", {
+        prior_head: prior.head
+      });
+    } else {
+      for (const version of prior.allVersions) {
+        if (prior.digestAlgorithm === this.digestAlgorithm) this.compareStatesForVersion(prior, version);
+        const priorMap = logicalPathMap(prior.inventory, version);
+        const selfMap = logicalPathMap(this.inventory, version);
+        const onlyInPrior = [
+          ...priorMap.keys()
+        ].filter((p) => !selfMap.has(p));
+        const onlyInSelf = [
+          ...selfMap.keys()
+        ].filter((p) => !priorMap.has(p));
+        if (onlyInPrior.length || onlyInSelf.length) {
+          if (onlyInPrior.length) {
+            this.error("E066b", {
+              version,
+              prior_head: prior.head,
+              only_in: prior.head,
+              logical_paths: onlyInPrior.join(",")
+            });
+          }
+          if (onlyInSelf.length) {
+            this.error("E066b", {
+              version,
+              prior_head: prior.head,
+              only_in: this.where,
+              logical_paths: onlyInSelf.join(",")
+            });
+          }
+        } else {
+          for (const [logicalPath, thisMap] of priorMap) {
+            const theirs = selfMap.get(logicalPath);
+            if (![
+              ...thisMap
+            ].every((p) => theirs.has(p))) {
+              this.error("E066c", {
+                version,
+                prior_head: prior.head,
+                logical_path: logicalPath,
+                prior_content: [
+                  ...thisMap
+                ].join(","),
+                current_content: [
+                  ...theirs
+                ].join(",")
+              });
+            }
+          }
+        }
+        const priorVersion = get(get(prior.inventory, "versions"), version);
+        const selfVersion = get(get(this.inventory, "versions"), version);
+        for (const key of [
+          "created",
+          "message",
+          "user"
+        ]) {
+          if (!isDict(priorVersion) || !isDict(selfVersion)) throw new PyStop(`AttributeError: '${pyType(isDict(priorVersion) ? selfVersion : priorVersion)}' object has no attribute 'get'`);
+          if (!pyEq(priorVersion[key] ?? null, selfVersion[key] ?? null)) this.warning("W011", {
+            version,
+            prior_head: prior.head,
+            key
+          });
+        }
+      }
+    }
+    return this.log.numErrors - start === 0;
+  }
+  validateManifest(manifest) {
+    const manifestFiles = /* @__PURE__ */ new Map();
+    const correctFormat = [];
+    const unnormalized = /* @__PURE__ */ new Set();
+    const seen = /* @__PURE__ */ new Set();
+    if (!isDict(manifest)) {
+      this.error("E041c");
+    } else {
+      const contentPaths = /* @__PURE__ */ new Set();
+      const contentDirectories = /* @__PURE__ */ new Set();
+      const form = this.digestRegex();
+      for (const digest of Object.keys(manifest)) {
+        if (!form.test(digest)) {
+          this.error("E025b", {
+            digest,
+            algorithm: this.digestAlgorithm
+          });
+        } else if (!isList(manifest[digest])) {
+          this.error("E092", {
+            digest
+          });
+        } else {
+          unnormalized.add(digest);
+          const norm = normalizedDigest(digest, this.digestAlgorithm);
+          if (seen.has(norm)) this.error("E096", {
+            digest: norm
+          });
+          else seen.add(norm);
+          for (const file of manifest[digest]) {
+            manifestFiles.set(hashable(file), norm);
+            if (this.checkContentPath(file, contentPaths, contentDirectories)) correctFormat.push(file);
+          }
+        }
+      }
+      for (const p of contentDirectories) if (contentPaths.has(p)) this.error("E101b", {
+        path: p
+      });
+    }
+    return [
+      manifestFiles,
+      correctFormat,
+      unnormalized
+    ];
+  }
+  validateFixity(fixity, manifestFiles) {
+    if (!isDict(fixity)) {
+      this.error(this.specVersion === "1.0" ? "E056a" : "E111");
+      return;
+    }
+    for (const alg of Object.keys(fixity)) {
+      const form = digestForm(alg);
+      if (!form) {
+        this.error("E056b", {
+          algorithm: this.digestAlgorithm
+        });
+        continue;
+      }
+      const block = fixity[alg];
+      if (!isDict(block)) {
+        this.error("E057a", {
+          algorithm: this.digestAlgorithm
+        });
+        continue;
+      }
+      const seen = /* @__PURE__ */ new Set();
+      for (const digest of Object.keys(block)) {
+        if (!form.test(digest)) {
+          this.error("E057b", {
+            digest,
+            algorithm: alg
+          });
+        } else if (!isList(block[digest])) {
+          this.error("E057c", {
+            digest,
+            algorithm: alg
+          });
+        } else {
+          const norm = normalizedDigest(digest, alg);
+          if (seen.has(norm)) this.error("E097", {
+            digest: norm,
+            algorithm: alg
+          });
+          else seen.add(norm);
+          for (const file of block[digest]) {
+            if (!manifestFiles || !manifestFiles.has(hashable(file))) this.error("E057d", {
+              digest: norm,
+              algorithm: alg,
+              path: file
+            });
+          }
+        }
+      }
+    }
+  }
+  validateVersionSequence(versions2) {
+    const all = [];
+    if (!isDict(versions2)) {
+      this.error("E044");
+      return all;
+    }
+    const count = Object.keys(versions2).length;
+    if (count === 0) {
+      this.error("E008");
+      return all;
+    }
+    let width = 0, max = 999999;
+    if (Object.hasOwn(versions2, "v1")) {
+      all.push("v1");
+    } else {
+      for (let n = 2; n < 11; n++) {
+        if (Object.hasOwn(versions2, `v${"1".padStart(n, "0")}`)) {
+          all.push(`v${"1".padStart(n, "0")}`);
+          width = n;
+          max = 10 ** (n - 1) - 1;
+          break;
+        }
+      }
+      if (!width) {
+        this.error("E009");
+        return all;
+      }
+    }
+    if (width) this.warning("W001");
+    for (let n = 2; n <= max; n++) {
+      const v = `v${String(n).padStart(width, "0")}`;
+      if (Object.hasOwn(versions2, v)) {
+        all.push(v);
+      } else {
+        if (count !== n - 1) this.error("E010");
+        return all;
+      }
+    }
+    if (count > max) this.error("E011");
+    return all;
+  }
+  validateVersions(versions2, all, unnormalized) {
+    let used = [];
+    for (const v of all) {
+      const version = versions2[v];
+      if (!has(version, "created")) {
+        this.error("E048", {
+          version: v
+        });
+      } else if (!isStr(get(version, "created"))) {
+        this.error("E049d", {
+          version: v
+        });
+      } else {
+        const created = version.created;
+        try {
+          strToDatetime(created);
+          if (!/(Z|[+-]\d\d:\d\d)(?=\n?$)/.test(created)) this.error("E049a", {
+            version: v
+          });
+          if (!/T\d\d:\d\d:\d\d/.test(created)) this.error("E049b", {
+            version: v
+          });
+        } catch (error) {
+          if (!(error instanceof DateError)) throw error;
+          this.error("E049c", {
+            version: v,
+            description: error.message
+          });
+        }
+      }
+      if (has(version, "state")) {
+        used = used.concat(this.validateStateBlock(get(version, "state"), v, unnormalized));
+      } else {
+        this.error("E048c", {
+          version: v
+        });
+      }
+      if (!has(version, "message")) this.warning("W007a", {
+        version: v
+      });
+      else if (!isStr(get(version, "message"))) this.error("E094", {
+        version: v
+      });
+      if (!has(version, "user")) {
+        this.warning("W007b", {
+          version: v
+        });
+      } else {
+        const user = get(version, "user");
+        if (!isDict(user)) {
+          this.error("E054a", {
+            version: v
+          });
+        } else {
+          if (!Object.hasOwn(user, "name") || !isStr(user.name)) this.error("E054b", {
+            version: v
+          });
+          if (!Object.hasOwn(user, "address")) this.warning("W008", {
+            version: v
+          });
+          else if (!isStr(user.address)) this.error("E054c", {
+            version: v
+          });
+          else if (!/^[\p{L}\p{N}_]{3,6}:/u.test(user.address)) this.warning("W009", {
+            version: v
+          });
+        }
+      }
+    }
+    return used;
+  }
+  validateStateBlock(state, version, unnormalized) {
+    const digests = [];
+    const logicalPaths = /* @__PURE__ */ new Set();
+    const logicalDirectories = /* @__PURE__ */ new Set();
+    if (!isDict(state)) {
+      this.error("E050c", {
+        version
+      });
+      return digests;
+    }
+    const form = this.digestRegex();
+    for (const digest of Object.keys(state)) {
+      if (!form.test(digest)) {
+        this.error("E050d", {
+          version,
+          digest
+        });
+      } else if (!isList(state[digest])) {
+        this.error("E050e", {
+          version,
+          digest
+        });
+      } else {
+        for (const p of state[digest]) {
+          if (logicalPaths.has(hashable(p))) this.error("E095a", {
+            version,
+            path: p
+          });
+          else this.checkLogicalPath(p, version, logicalPaths, logicalDirectories);
+        }
+        if (!unnormalized) throw new PyStop("TypeError: argument of type 'NoneType' is not iterable");
+        if (!unnormalized.has(digest)) this.error("E050f", {
+          version,
+          digest
+        });
+        digests.push(normalizedDigest(digest, this.digestAlgorithm));
+      }
+    }
+    for (const p of logicalDirectories) if (logicalPaths.has(p)) this.error("E095b", {
+      version,
+      path: p
+    });
+    return digests;
+  }
+  checkContentPathsMapToVersions(files, all) {
+    for (const p of files) if (!all.includes(p.split("/")[0])) this.error("E042b", {
+      path: p
+    });
+  }
+  checkDigestsPresentAndUsed(manifestFiles, used) {
+    const inManifest = new Set(manifestFiles.values());
+    const inState = new Set(used);
+    const notInManifest = [
+      ...inState
+    ].filter((d) => !inManifest.has(d)).sort(compareCodePoints);
+    if (notInManifest.length) this.error("E050a", {
+      digests: notInManifest.join(", ")
+    });
+    const notInState = [
+      ...inManifest
+    ].filter((d) => !inState.has(d)).sort(compareCodePoints);
+    if (notInState.length) this.error("E107", {
+      digests: notInState.join(", ")
+    });
+  }
+  digestRegex() {
+    const form = digestForm(this.digestAlgorithm);
+    if (form) return form;
+    this.error("E026a", {
+      digest: this.digestAlgorithm
+    });
+    return /^/;
+  }
+  checkLogicalPath(p, version, logicalPaths, logicalDirectories) {
+    if (pyText(p).startsWith("/") || p.endsWith("/")) {
+      this.error("E053", {
+        version,
+        path: p
+      });
+      return;
+    }
+    const elements = p.split("/");
+    if (elements.some((e) => e === "." || e === ".." || e === "")) {
+      this.error("E052", {
+        version,
+        path: p
+      });
+      return;
+    }
+    logicalPaths.add(p);
+    logicalDirectories.add(elements.slice(0, -1).join("/"));
+  }
+  checkContentPath(p, contentPaths, contentDirectories) {
+    if (pyText(p).startsWith("/") || p.endsWith("/")) {
+      this.error("E100", {
+        path: p
+      });
+      return false;
+    }
+    const m = /^(v\d+)\/([^/]+)\/(.+)/.exec(p);
+    if (!m) {
+      this.error("E042a", {
+        path: p
+      });
+      return false;
+    }
+    if (m[2] !== this.contentDirectory) {
+      this.error("E042c", {
+        path: p,
+        content_directory: this.contentDirectory
+      });
+      return false;
+    }
+    const elements = m[3].split("/");
+    if (elements.some((e) => e === "" || e === "." || e === "..")) {
+      this.error("E099", {
+        path: p
+      });
+      return false;
+    }
+    if (contentPaths.has(p)) {
+      this.error("E101a", {
+        path: p
+      });
+      return false;
+    }
+    contentPaths.add(p);
+    contentDirectories.add([
+      m[1],
+      m[2],
+      ...elements.slice(0, -1)
+    ].join("/"));
+    return true;
+  }
+  compareStatesForVersion(prior, version) {
+    const selfState = get(get(get(this.inventory, "versions"), version), "state");
+    const priorState = get(get(get(prior.inventory, "versions"), version), "state");
+    const digests = [
+      .../* @__PURE__ */ new Set([
+        ...pyIter(selfState),
+        ...pyIter(priorState)
+      ])
+    ];
+    for (const digest of digests) {
+      if (!has(priorState, digest)) {
+        this.error("E066d", {
+          version,
+          prior_head: prior.head,
+          digest,
+          logical_files: pyIter(get(selfState, digest)).join(", ")
+        });
+      } else if (!has(selfState, digest)) {
+        this.error("E066e", {
+          version,
+          prior_head: prior.head,
+          digest,
+          logical_files: pyIter(get(priorState, digest)).join(", ")
+        });
+      }
+    }
+  }
+};
+function logicalPathMap(inventory, version) {
+  const state = get(get(get(inventory, "versions"), version), "state");
+  const manifest = get(inventory, "manifest");
+  const out = /* @__PURE__ */ new Map();
+  for (const digest of pyIter(state)) {
+    if (has(manifest, digest)) {
+      for (const file of pyIter(get(state, digest))) out.set(hashable(file), new Set(pyIter(get(manifest, digest))));
+    }
+  }
+  return out;
+}
+var INVENTORY = "inventory.json";
+var REGISTERED_OBJECT_EXTENSIONS = [
+  "0001-digest-algorithms",
+  "0002-flat-direct-storage-layout",
+  "0003-hash-and-id-n-tuple-storage-layout",
+  "0004-hashed-n-tuple-storage-layout",
+  "0005-mutable-head"
+];
+var Abort = class extends Error {
+};
+var DigestFileError = class extends Error {
+};
+async function validateObject(storage, dir, { logWarnings = false, checkDigests = true, log = null } = {}) {
+  const v = new ObjectValidator(storage, dir, {
+    logWarnings,
+    checkDigests,
+    log
+  });
+  const valid = await v.validate();
+  return {
+    valid,
+    log: v.log,
+    id: v.id,
+    specVersion: v.specVersion
+  };
+}
+var ObjectValidator = class {
+  constructor(storage, dir, { logWarnings, checkDigests, log }) {
+    this.fs = new Folder(storage, dir);
+    this.dir = dir;
+    this.checkDigests = checkDigests;
+    this.log = log ?? new ValidationLog({
+      logWarnings
+    });
+    this.id = null;
+    this.specVersion = DEFAULT_SPEC_VERSION;
+    this.log.specVersion = this.specVersion;
+    this.digestAlgorithm = "sha512";
+    this.contentDirectory = DEFAULT_CONTENT_DIRECTORY;
+    this.contentDirectorySet = false;
+    this.inventoryDigestFiles = /* @__PURE__ */ new Map();
+    this.rootInvValidator = null;
+  }
+  async validate() {
+    const start = this.log.numErrors;
+    try {
+      await this.run();
+    } catch (error) {
+      if (error instanceof Abort) {
+      } else if (error instanceof PyStop) {
+        this.log.error("E904", {
+          explanation: error.message
+        });
+      } else {
+        throw error;
+      }
+    }
+    return this.log.numErrors === start;
+  }
+  async run() {
+    const fs = this.fs;
+    if (!await fs.isdir("")) {
+      this.log.error("E003e", {
+        path: this.dir
+      });
+      throw new Abort();
+    }
+    const names = (await fs.listdir("")).map((e) => e.name).filter((n) => n.startsWith("0=")).sort(compareCodePoints);
+    if (names.length === 0) {
+      this.log.error("E003a", {
+        assumed_version: this.specVersion
+      });
+    } else {
+      let spec = null;
+      for (const name2 of names) {
+        const version = SPEC_VERSIONS.find((x) => name2 === `0=ocfl_object_${x}`) ?? null;
+        if (version === null) {
+          this.log.error("E006", {
+            filename: name2
+          });
+        } else if (spec === null || version > spec) {
+          spec = version;
+          if (!await namasteContentOk(fs, name2)) this.log.error("E007", {
+            filename: name2
+          });
+        }
+      }
+      if (spec === null) {
+        this.log.error("E003c", {
+          assumed_version: this.specVersion
+        });
+      } else {
+        this.specVersion = spec;
+        this.log.specVersion = spec;
+        if (names.length > 1) this.log.error("E003b", {
+          files: names.length,
+          using_version: this.specVersion
+        });
+      }
+    }
+    if (!await fs.exists(INVENTORY)) {
+      this.log.error("E063");
+      throw new Abort();
+    }
+    const [inventory, inv] = await this.validateInventory(INVENTORY);
+    const inventoryIsValid = this.log.numErrors === 0;
+    this.rootInvValidator = inv;
+    const all = inv.allVersions;
+    this.id = inv.id;
+    this.contentDirectory = inv.contentDirectory;
+    this.contentDirectorySet = inv.contentDirectorySet;
+    this.digestAlgorithm = inv.digestAlgorithm;
+    await this.validateInventoryDigest(INVENTORY, this.digestAlgorithm);
+    await this.validateObjectRoot(all, names);
+    const [priorManifest, priorFixity] = await this.validateVersionInventories(all);
+    if (inventoryIsValid) await this.validateContent(inventory, all, priorManifest, priorFixity);
+  }
+  async validateInventory(file, where2 = "root") {
+    let inventory;
+    try {
+      const bytes = await this.fs.bytes(file);
+      if (bytes === null) {
+        this.log.error("E033", {
+          where: where2,
+          explanation: "Inventory not present"
+        });
+        throw new Abort();
+      }
+      inventory = jsonText2(textOf(bytes));
+    } catch (error) {
+      if (error instanceof PyJsonError) {
+        this.log.error("E033", {
+          where: where2,
+          explanation: error.message
+        });
+        throw new Abort();
+      }
+      if (error instanceof TooLarge) {
+        this.log.error("E902", {
+          path: file,
+          explanation: error.message
+        });
+        throw new Abort();
+      }
+      throw error;
+    }
+    const inv = new InventoryValidator({
+      log: this.log,
+      where: where2,
+      defaultSpecVersion: this.specVersion
+    });
+    inv.validate(inventory);
+    return [
+      inventory,
+      inv
+    ];
+  }
+  async validateInventoryDigest(file, alg, where2 = "root") {
+    const sidecar2 = `${file}.${alg}`;
+    if (!await this.fs.exists(sidecar2)) this.log.error("E058a", {
+      where: where2,
+      path: sidecar2
+    });
+    else await this.validateInventoryDigestMatch(file, sidecar2);
+  }
+  async validateInventoryDigestMatch(file, sidecar2) {
+    if (!this.checkDigests) return;
+    const m = /^.*\.(\w+)$/.exec(sidecar2);
+    if (!m) {
+      this.log.error("E058b", {
+        inv_digest_file: sidecar2
+      });
+      return;
+    }
+    let recorded;
+    try {
+      recorded = await this.readInventoryDigest(sidecar2);
+    } catch (error) {
+      if (!(error instanceof DigestFileError)) throw error;
+      this.log.error("E061", {
+        description: error.message
+      });
+      return;
+    }
+    const bytes = await this.fs.bytes(file).catch((error) => {
+      if (error instanceof TooLarge) throw new PyStop(`${file} is larger than ${LIMITS.json} bytes`);
+      throw error;
+    });
+    if (!digestForm(m[1])) {
+      this.log.error("E061", {
+        description: `Unsupport digest type ${m[1]}`
+      });
+      return;
+    }
+    const actual = (await digestsOf([
+      bytes
+    ], [
+      m[1]
+    ]))[m[1]];
+    if (actual !== recorded) this.log.error("E060", {
+      inv_file: file,
+      actual,
+      recorded,
+      inv_digest_file: sidecar2
+    });
+  }
+  async readInventoryDigest(sidecar2) {
+    let text3;
+    try {
+      const bytes = await this.fs.bytes(sidecar2);
+      if (bytes === null) throw new PyStop(`FileNotFoundError: ${sidecar2}`);
+      text3 = textOf(bytes);
+    } catch (error) {
+      if (error instanceof TooLarge) throw new DigestFileError(`Bad inventory digest file ${sidecar2}, wrong format`);
+      throw error;
+    }
+    const nl = text3.indexOf("\n");
+    const line = nl < 0 ? text3 : text3.slice(0, nl + 1);
+    const m = /^([\p{L}\p{N}_]+)\s+(\S+)\s*$/u.exec(line);
+    if (!m) throw new DigestFileError(`Bad inventory digest file ${sidecar2}, wrong format`);
+    if (m[2] !== INVENTORY) throw new DigestFileError(`Bad inventory name in inventory digest file ${sidecar2}`);
+    return m[1];
+  }
+  async validateObjectRoot(versionDirs, alreadyChecked) {
+    const expected = [
+      `0=ocfl_object_${this.specVersion}`,
+      INVENTORY,
+      `${INVENTORY}.${this.digestAlgorithm}`
+    ];
+    for (const { name: name2, type } of await this.fs.listdir("")) {
+      if (type === "file") {
+        if (!expected.includes(name2) && !alreadyChecked.includes(name2)) this.log.error("E001a", {
+          file: name2
+        });
+      } else if (type === "directory") {
+        if (versionDirs.includes(name2) || name2 === "logs") continue;
+        if (name2 === "extensions") await this.validateExtensionsDir();
+        else if (/^v\d+$/.test(name2)) this.log.error("E046b", {
+          dir: name2
+        });
+        else this.log.error("E001b", {
+          dir: name2
+        });
+      } else {
+        this.log.error("E001c", {
+          entry: name2
+        });
+      }
+    }
+  }
+  async validateExtensionsDir() {
+    for (const { name: name2, type } of await this.fs.listdir("extensions")) {
+      if (type === "directory") {
+        if (!REGISTERED_OBJECT_EXTENSIONS.includes(name2)) this.log.warning("W013", {
+          entry: `extensions/${name2}`
+        });
+      } else {
+        this.log.error("E067", {
+          entry: `extensions/${name2}`
+        });
+      }
+    }
+  }
+  async validateVersionInventories(versionDirs) {
+    const priorManifest = /* @__PURE__ */ new Map(), priorFixity = /* @__PURE__ */ new Map();
+    if (versionDirs.length === 0) return [
+      priorManifest,
+      priorFixity
+    ];
+    const last = versionDirs[versionDirs.length - 1];
+    let prevVersionDir = "NONE", prevSpecVersion = "1.0";
+    const record = (table, file, alg, digest, versionDir) => {
+      if (!table.has(file)) table.set(file, /* @__PURE__ */ new Map());
+      const byAlg = table.get(file);
+      if (!byAlg.has(alg)) byAlg.set(alg, /* @__PURE__ */ new Map());
+      const byDigest = byAlg.get(alg);
+      if (!byDigest.has(digest)) byDigest.set(digest, []);
+      byDigest.get(digest).push(versionDir);
+    };
+    for (const versionDir of versionDirs) {
+      const file = `${versionDir}/${INVENTORY}`;
+      if (!await this.fs.exists(file)) {
+        this.log.warning("W010", {
+          where: versionDir
+        });
+        continue;
+      }
+      let thisSpecVersion;
+      if (versionDir === last) {
+        if (!await this.filesIdentical(file, INVENTORY)) {
+          this.log.error("E064", {
+            root_inv_file: INVENTORY,
+            inv_file: file
+          });
+        } else {
+          await this.validateInventoryDigest(file, this.digestAlgorithm, versionDir);
+        }
+        this.inventoryDigestFiles.set(versionDir, `${INVENTORY}.${this.digestAlgorithm}`);
+        thisSpecVersion = this.specVersion;
+      } else {
+        const [versionInventory, inv] = await this.validateInventory(file, versionDir);
+        thisSpecVersion = inv.specVersion;
+        const alg = inv.digestAlgorithm;
+        await this.validateInventoryDigest(file, alg, versionDir);
+        this.inventoryDigestFiles.set(versionDir, `${INVENTORY}.${alg}`);
+        if (this.id && has(versionInventory, "id") && !pyEq(get(versionInventory, "id"), this.id)) {
+          this.log.error("E037b", {
+            where: versionDir,
+            root_id: this.id,
+            version_id: versionInventory.id
+          });
+        }
+        if (!inv.contentDirectorySet && this.contentDirectorySet) this.log.error("E019", {
+          where: "root"
+        });
+        if (this.contentDirectory !== inv.contentDirectory) {
+          this.log.error("E020", {
+            where: versionDir,
+            root_content_directory: this.contentDirectory,
+            version_content_directory: inv.contentDirectory
+          });
+        }
+        if (has(versionInventory, "manifest")) {
+          const manifest = get(versionInventory, "manifest");
+          const notSeen = new Set(priorManifest.keys());
+          for (const digest of pyIter(manifest)) {
+            for (const p of pyIter(get(manifest, digest))) notSeen.delete(hashable(p));
+          }
+          if (notSeen.size) {
+            this.log.error("E023b", {
+              where: versionDir,
+              missing_filepaths: [
+                ...notSeen
+              ].map(pyStr).sort(compareCodePoints).join(", ")
+            });
+          }
+          for (const digest of pyIter(manifest)) {
+            const norm = normalizedDigest(digest, alg);
+            for (const p of pyIter(get(manifest, digest))) record(priorManifest, hashable(p), alg, norm, versionDir);
+          }
+        }
+        if (this.rootInvValidator) this.rootInvValidator.validateAsPriorVersion(inv);
+        if (has(versionInventory, "fixity")) {
+          const fixity = get(versionInventory, "fixity");
+          for (const falg of pyIter(fixity)) {
+            const block = get(fixity, falg);
+            for (const digest of pyIter(block)) {
+              const norm = normalizedDigest(digest, falg);
+              for (const p of pyIter(get(block, digest))) record(priorFixity, hashable(p), falg, norm, versionDir);
+            }
+          }
+        }
+      }
+      if (prevSpecVersion > thisSpecVersion) {
+        this.log.error("E103", {
+          where: versionDir,
+          this_spec_version: thisSpecVersion,
+          prev_version_dir: prevVersionDir,
+          prev_spec_version: prevSpecVersion
+        });
+      }
+      prevVersionDir = versionDir;
+      prevSpecVersion = thisSpecVersion;
+    }
+    return [
+      priorManifest,
+      priorFixity
+    ];
+  }
+  async filesIdentical(a, b) {
+    const [x, y] = [
+      await this.fs.kind(a),
+      await this.fs.kind(b)
+    ];
+    if (x === null || y === null) throw new PyStop(`FileNotFoundError: ${x === null ? a : b}`);
+    if (x !== y) return false;
+    if (a === b) return true;
+    const read = (p2) => this.fs.bytes(p2).catch((error) => {
+      if (error instanceof TooLarge) return null;
+      throw error;
+    });
+    const [p, q] = [
+      await read(a),
+      await read(b)
+    ];
+    return p !== null && q !== null && p.length === q.length && p.every((byte, k) => byte === q[k]);
+  }
+  async validateContent(inventory, versionDirs, priorManifest, priorFixity) {
+    const filesSeen = /* @__PURE__ */ new Set();
+    for (const versionDir of versionDirs) {
+      const kind = await this.fs.kind(versionDir);
+      if (kind === null) {
+        this.log.error("E046a", {
+          version_dir: versionDir
+        });
+        continue;
+      }
+      if (kind !== "dir") {
+        this.log.error("E015", {
+          where: versionDir,
+          entry: "."
+        });
+        continue;
+      }
+      for (const { name: entry } of await this.fs.listdir(versionDir)) {
+        if (entry === INVENTORY || entry === this.inventoryDigestFiles.get(versionDir)) continue;
+        if (entry === this.contentDirectory) {
+          const contentPath3 = `${versionDir}/${this.contentDirectory}`;
+          let files = 0;
+          for await (const [dirpath, dirs, names] of walk(this.fs, contentPath3)) {
+            if (dirpath !== `/${contentPath3}` && dirs.length + names.length === 0) {
+              this.log.error("E024", {
+                where: versionDir,
+                path: dirpath
+              });
+            }
+            for (const name2 of names) {
+              filesSeen.add(`${dirpath}/${name2}`.replace(/^\/+/, ""));
+              files++;
+            }
+          }
+          if (files === 0) this.log.warning("W003", {
+            where: versionDir
+          });
+        } else if (await this.fs.isdir(`${versionDir}/${entry}`)) {
+          this.log.warning("W002", {
+            where: versionDir,
+            entry
+          });
+        } else {
+          this.log.error("E015", {
+            where: versionDir,
+            entry
+          });
+        }
+      }
+    }
+    const fixityDigests = /* @__PURE__ */ new Map();
+    if (Object.hasOwn(inventory, "fixity")) {
+      for (const alg of Object.keys(inventory.fixity)) {
+        for (const digest of Object.keys(inventory.fixity[alg])) {
+          for (const p of inventory.fixity[alg][digest]) {
+            if (filesSeen.has(p)) {
+              if (!fixityDigests.has(p)) fixityDigests.set(p, /* @__PURE__ */ new Map());
+              const byAlg = fixityDigests.get(p);
+              if (!byAlg.has(alg)) byAlg.set(alg, /* @__PURE__ */ new Map());
+              if (!byAlg.get(alg).has(digest)) byAlg.get(alg).set(digest, [
+                "root"
+              ]);
+            } else {
+              this.log.error("E093b", {
+                where: "root",
+                digest_algorithm: alg,
+                digest,
+                content_path: p
+              });
+            }
+          }
+        }
+      }
+    }
+    if (Object.hasOwn(inventory, "manifest")) {
+      const digested = this.checkDigests ? await this.digestAll(inventory.manifest, filesSeen, fixityDigests, priorManifest, priorFixity) : null;
+      for (const digest of Object.keys(inventory.manifest)) {
+        for (const p of inventory.manifest[digest]) {
+          if (!filesSeen.has(p)) {
+            this.log.error("E092b", {
+              where: "root",
+              content_path: p
+            });
+            continue;
+          }
+          if (this.checkDigests) this.checkFile(p, digest, digested.get(p), fixityDigests, priorManifest, priorFixity);
+          filesSeen.delete(p);
+        }
+      }
+    }
+    if (filesSeen.size) {
+      this.log.error("E023a", {
+        where: "root",
+        extra_files: [
+          ...filesSeen
+        ].sort(compareCodePoints).join(", ")
+      });
+    }
+  }
+  async digestAll(manifest, filesSeen, fixityDigests, priorManifest, priorFixity) {
+    const todo = [
+      ...new Set(Object.values(manifest).flat().filter((p) => filesSeen.has(p)))
+    ];
+    const out = /* @__PURE__ */ new Map();
+    let next = 0;
+    const work = async () => {
+      while (next < todo.length) {
+        const p = todo[next++];
+        const algs = [
+          this.digestAlgorithm
+        ];
+        for (const table of [
+          fixityDigests,
+          priorManifest,
+          priorFixity
+        ]) {
+          for (const alg of table.get(p)?.keys() ?? []) algs.push(alg);
+        }
+        try {
+          out.set(p, {
+            known: await digestsOf(await this.fs.chunks(p), algs.filter((a) => digestForm(a)))
+          });
+        } catch (error) {
+          if (!(error instanceof TooLarge) && !(error instanceof PyStop)) throw error;
+          out.set(p, {
+            error
+          });
+        }
+      }
+    };
+    await Promise.all(Array.from({
+      length: Math.min(LIMITS.concurrency, todo.length)
+    }, work));
+    return out;
+  }
+  checkFile(p, digest, { known, error }, fixityDigests, priorManifest, priorFixity) {
+    if (error instanceof TooLarge) {
+      this.log.error("E901", {
+        path: p,
+        limit: LIMITS.file
+      });
+      return;
+    }
+    if (error) throw error;
+    const contentDigest = known[this.digestAlgorithm];
+    if (contentDigest !== normalizedDigest(digest, this.digestAlgorithm)) {
+      this.log.error("E092a", {
+        where: "root",
+        digest_algorithm: this.digestAlgorithm,
+        digest,
+        content_path: p,
+        content_digest: contentDigest
+      });
+    }
+    this.checkAdditionalDigests(p, known, fixityDigests, "E093a");
+    this.checkAdditionalDigests(p, known, priorManifest, "E092a");
+    this.checkAdditionalDigests(p, known, priorFixity, "E093a");
+  }
+  checkAdditionalDigests(p, known, table, code) {
+    if (!table.has(p)) return;
+    for (const [alg, byDigest] of table.get(p)) {
+      if (!Object.hasOwn(known, alg)) throw new PyStop(`ValueError: Unsupport digest type ${pyStr(alg)}`);
+      for (const [digest, versions2] of byDigest) {
+        if (known[alg] !== normalizedDigest(digest, alg)) {
+          this.log.error(code, {
+            where: versions2.join(","),
+            digest_algorithm: alg,
+            digest,
+            content_path: p,
+            content_digest: known[alg]
+          });
+        }
+      }
+    }
+  }
+};
+async function namasteContentOk(fs, name2) {
+  try {
+    const bytes = await fs.bytes(name2);
+    if (bytes === null) return false;
+    const content = textOf(bytes).trim();
+    return name2.slice(2) === [
+      ...content
+    ].slice(0, 40).join("").replace(/[^\p{L}\p{N}_.\-:]/gu, "_");
+  } catch (error) {
+    if (error instanceof TooLarge) return false;
+    throw error;
+  }
+}
+async function* walk(fs, dir) {
+  const stack = [
+    `/${dir}`.replace(/^\/+/, "/")
+  ];
+  while (stack.length) {
+    const dirpath = stack.pop();
+    const dirs = [], files = [];
+    for (const { name: name2, type } of await fs.listdir(dirpath.replace(/^\/+/, "")) ?? []) {
+      (type === "directory" ? dirs : files).push(name2);
+    }
+    yield [
+      dirpath,
+      dirs,
+      files
+    ];
+    for (const name2 of [
+      ...dirs
+    ].reverse()) stack.push(dirpath === "/" ? `/${name2}` : `${dirpath}/${name2}`);
+  }
+}
+var LAYOUTS2 = {
+  "0002-flat-direct-storage-layout": [
+    "0002-flat-direct-storage-layout",
+    null
+  ],
+  "0002": [
+    "0002-flat-direct-storage-layout",
+    null
+  ],
+  "flat-direct": [
+    "0002-flat-direct-storage-layout",
+    null
+  ],
+  "0003-hash-and-id-n-tuple-storage-layout": [
+    "0003-hash-and-id-n-tuple-storage-layout",
+    checkHashedLayout
+  ],
+  "0003": [
+    "0003-hash-and-id-n-tuple-storage-layout",
+    checkHashedLayout
+  ],
+  "nnnn-flat-quoted-storage-layout": [
+    "nnnn-flat-quoted-storage-layout",
+    null
+  ],
+  "flat-quoted": [
+    "nnnn-flat-quoted-storage-layout",
+    null
+  ],
+  "nnnn-tuple-tree": [
+    "nnnn-tuple-tree-layout",
+    checkTupleTree
+  ],
+  "nnnn-uuid-quadtree": [
+    "nnnn-uuid-quadtree",
+    checkQuadtree
+  ]
+};
+var REGISTERED_ROOT_EXTENSIONS = [
+  "0002-flat-direct-storage-layout",
+  "0003-hash-and-id-n-tuple-storage-layout"
+];
+var RootError = class extends Error {
+  constructor(code, args) {
+    super(code);
+    this.code = code;
+    this.args = args;
+  }
+};
+async function validateStorageRoot(storage, root, { validateObjects = true, checkDigests = true, logWarnings = false } = {}) {
+  const fs = new Folder(storage, root);
+  const log = new ValidationLog({
+    logWarnings
+  });
+  const objects = [];
+  let traversal = 0;
+  const traversalError = (code, args) => {
+    traversal++;
+    log.error(code, args);
+  };
+  try {
+    log.specVersion = await checkRootStructure(fs, root);
+  } catch (error) {
+    if (error instanceof RootError) log.error(error.code, error.args);
+    else if (error instanceof PyStop) log.error("E904", {
+      explanation: error.message
+    });
+    else throw error;
+    return {
+      valid: false,
+      log,
+      objects
+    };
+  }
+  try {
+    for await (const dirpath of objectPaths(fs, log, traversalError)) {
+      if (objects.length >= LIMITS.objects) {
+        traversalError("E903", {
+          limit: LIMITS.objects
+        });
+        break;
+      }
+      const entry = {
+        path: dirpath
+      };
+      if (validateObjects) Object.assign(entry, await validateObject(storage, joinPath(root, dirpath), {
+        logWarnings,
+        checkDigests
+      }));
+      objects.push(entry);
+    }
+  } catch (error) {
+    if (!(error instanceof PyStop)) throw error;
+    traversalError("E904", {
+      explanation: error.message
+    });
+  }
+  return {
+    valid: traversal === 0,
+    log,
+    objects
+  };
+}
+async function checkRootStructure(fs, root) {
+  const listing2 = await fs.listdir("");
+  if (listing2 === null) throw new PyStop(`FileNotFoundError: no folder ${root}`);
+  const names = listing2.map((e) => e.name).filter((n) => n.startsWith("0=")).sort(compareCodePoints);
+  if (names.length === 0) throw new RootError("E069a", {
+    root
+  });
+  if (names.length > 1) throw new RootError("E069b", {
+    root
+  });
+  const spec = SPEC_VERSIONS.find((x) => names[0] === `0=ocfl_${x}`);
+  if (!spec) throw new RootError("E069c", {
+    root,
+    namaste_file: names[0]
+  });
+  if (!await namasteContentOk(fs, names[0])) throw new RootError("E069e", {
+    root,
+    namaste_file: names[0]
+  });
+  if (await fs.exists("ocfl_layout.json")) {
+    let layout;
+    try {
+      const bytes = await fs.bytes("ocfl_layout.json");
+      layout = jsonText2(textOf(bytes ?? new Uint8Array()));
+    } catch (error) {
+      if (error instanceof PyJsonError || error instanceof TooLarge || error instanceof PyStop) {
+        throw new RootError("E070a", {
+          root,
+          message: error.message
+        });
+      }
+      throw error;
+    }
+    if (!isDict(layout)) throw new RootError("E070b", {
+      root
+    });
+    if (!isStr(layout.extension) || !isStr(layout.description)) throw new RootError("E070c", {
+      root
+    });
+    if (!Object.hasOwn(LAYOUTS2, layout.extension)) throw new RootError("E071", {
+      root,
+      layout_name: layout.extension
+    });
+    const [name2, check2] = LAYOUTS2[layout.extension];
+    const file = `extensions/${name2}/config.json`;
+    if (await fs.exists(file)) {
+      let config;
+      try {
+        config = jsonText2(textOf(await fs.bytes(file) ?? new Uint8Array()));
+      } catch (error) {
+        if (error instanceof PyJsonError || error instanceof TooLarge || error instanceof PyStop) {
+          throw new PyStop(`LayoutException: Storage root extension config file ${file} exists but can't be read/parsed (${error.message})`);
+        }
+        throw error;
+      }
+      if (!isDict(config)) throw new PyStop(`LayoutException: Storage root extension config ${file} contents not a JSON object`);
+      if (!Object.hasOwn(config, "extensionName")) throw new PyStop("LayoutException: Storage root extension config missing extensionName");
+      if (config.extensionName !== name2) {
+        throw new PyStop(`LayoutException: Storage root extension config extensionName is ${pyStr(config.extensionName)}, expected ${name2}`);
+      }
+      if (!check2) throw new PyStop("AttributeError: 'NoneType' object has no attribute 'items'");
+      const problem = check2(config);
+      if (problem) throw new PyStop(`LayoutException: ${problem}`);
+    }
+  }
+  return spec;
+}
+var isInt = (x) => typeof x === "boolean" || typeof x === "bigint" || Number.isInteger(x);
+var HEX_LENGTHS = {
+  sha512: 128,
+  sha256: 64,
+  sha1: 40,
+  md5: 32
+};
+function checkHashedLayout(config) {
+  const alg = config.digestAlgorithm ?? null, size = config.tupleSize ?? null, count = config.numberOfTuples ?? null;
+  if (alg === null) return "digestAlgorithm parameter must be specified";
+  if (!Object.hasOwn(HEX_LENGTHS, alg)) return `digestAlgorithm parameter specifies unknown or unsupported digests ${pyStr(alg)} (Unsupport digest type ${pyStr(alg)})`;
+  if (size === null) return "tupleSize parameter must be specified";
+  if (!isInt(size) || size < 0 || size > 32) return "tupleSize parameter must be aninteger between 0 and 32 inclusive";
+  if (count === null) return "numberOfTuples parameter must be specified";
+  if (!isInt(count) || count < 0 || count > 32) return "numberOfTuples parameter must be aninteger between 0 and 32 inclusive";
+  if (Number(size) === 0 !== (Number(count) === 0)) {
+    return "Bad layout configuration: If tupleSize is set to 0, then numberOfTuples MUST also equal 0.";
+  }
+  if (Number(size) * Number(count) > HEX_LENGTHS[alg]) {
+    return "Bad layout configuration: The product of tupleSize and numberOfTuples MUST be less than or equal to the number of characters in the hex encoded digest.";
+  }
+  return null;
+}
+function checkTupleTree(config) {
+  const size = config.tupleSize ?? null;
+  if (size === null) return "tupleSize parameter must be specified";
+  if (!isInt(size) || size < 2 || size > 6) return "tupleSize parameter must be an integer between 2 and 6 inclusive";
+  return null;
+}
+function checkQuadtree(config) {
+  const prefix = config.prefix ?? null;
+  if (prefix === null) return "prefix parameter must be specified";
+  if (!isStr(prefix) || prefix === "") return "prefix parameter must be a non-empty string";
+  return null;
+}
+async function* objectPaths(fs, log, traversalError) {
+  for await (const [dirpath, dirs, files] of walk(fs, "")) {
+    if (dirpath === "/") {
+      const k = dirs.indexOf("extensions");
+      if (k >= 0) {
+        for (const { name: name2, type } of await fs.listdir("extensions")) {
+          if (type === "directory") {
+            if (!REGISTERED_ROOT_EXTENSIONS.includes(name2)) log.warning("W901", {
+              entry: `extensions/${name2}`
+            });
+          } else {
+            traversalError("E086", {
+              entry: `extensions/${name2}`
+            });
+          }
+        }
+        dirs.splice(k, 1);
+      }
+    } else if (dirs.length + files.length === 0) {
+      traversalError("E073", {
+        path: dirpath
+      });
+    } else if (files.length > 0) {
+      const declarations = files.filter((f) => f.startsWith("0="));
+      if (declarations.length > 1) {
+        traversalError("E003d", {
+          path: dirpath
+        });
+      } else if (declarations.length === 1) {
+        const m = /^0=ocfl_object_(\d+\.\d+)/.exec(declarations[0]);
+        if (m && SPEC_VERSIONS.includes(m[1])) yield dirpath.replace(/^\/+/, "");
+        else if (m) traversalError("E004a", {
+          path: dirpath,
+          version: m[1]
+        });
+        else traversalError("E004b", {
+          path: dirpath,
+          declaration: declarations[0]
+        });
+      } else {
+        traversalError("E072", {
+          path: dirpath
+        });
+      }
+    }
+    if (dirpath !== "/" && files.length > 0) dirs.length = 0;
+  }
+}
+
+// core/check.js
 async function verifyFolder(storage, { schemas: schemas2, remote = false, fetch: fetch2 = globalThis.fetch, digests = true, fetchJson = null } = {}) {
   let base = ORIGIN;
   try {
@@ -24194,7 +27074,7 @@ async function verifyFolder(storage, { schemas: schemas2, remote = false, fetch:
   if (!archive.old && f) {
     report.add(...await guarded("the keepers", () => keeperFindings(f, remote, fetchJson, schemas2)));
     report.add(...await guarded("the presentation files", () => presentationFindings(f, unread ? {} : archive.disc)));
-    report.add(...await guarded("the storage root", () => emptyFolders(f, report)));
+    report.add(...await guarded("the storage root", () => ocflFindings(f, report)));
   }
   if (!report.findings.some((f2) => f2.message === "specification 0.1: rebuild (section 16.1)")) {
     report.add(...await lookForKeys(storage));
@@ -24368,12 +27248,12 @@ async function landingNames(f, text3, name2, owner, id, dir) {
 var ROTATION_NAME = /^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt$/;
 async function lookForKeys(storage) {
   const found2 = [];
-  const walk = async (dir) => {
+  const walk2 = async (dir) => {
     for (const entry of await storage.list(dir) || []) {
       const path = joinPath(dir, entry.name);
       if (!dir && (entry.name === ".git" || entry.name.startsWith(".staging-"))) continue;
       if (entry.kind === "dir") {
-        await walk(path);
+        await walk2(path);
         continue;
       }
       if (entry.kind !== "file") continue;
@@ -24398,7 +27278,7 @@ async function lookForKeys(storage) {
       }
     }
   };
-  await walk("");
+  await walk2("");
   return found2;
 }
 var LINKS_SEARCHED = [
@@ -24413,63 +27293,63 @@ var LINKS_SEARCHED = [
 async function lookForLinks(storage) {
   const found2 = [];
   const say = (path) => found2.push(finding("error", path, "a symbolic link in the archive: never followed (section 15.2)"));
-  const walk = async (dir) => {
+  const walk2 = async (dir) => {
     for (const entry of await storage.list(dir) || []) {
       const path = joinPath(dir, entry.name);
       if (entry.kind === "link") say(path);
-      else if (entry.kind === "dir") await walk(path);
+      else if (entry.kind === "dir") await walk2(path);
     }
   };
   for (const top of LINKS_SEARCHED) {
     const kind = await storage.kind(top);
     if (kind === "link") say(top);
-    else if (kind === "dir") await walk(top);
+    else if (kind === "dir") await walk2(top);
   }
   return found2;
 }
-async function emptyFolders(f, report) {
-  const out = [];
+async function ocflFindings(f, report) {
   const s = f.storage;
-  const leaves = async (dir) => {
-    const entries = (await s.list(dir) || []).filter((e) => e.kind !== "link");
-    if (!entries.length) return [
-      dir
-    ];
-    const below = [];
-    for (const e of entries) if (e.kind === "dir") below.push(...await leaves(joinPath(dir, e.name)));
-    return below;
-  };
-  let rootEmpty = false;
-  const walk = async (dir) => {
-    for (const e of await s.list(dir) || []) {
-      if (e.kind !== "dir") continue;
-      const child = joinPath(dir, e.name);
-      if (await s.kind(joinPath(child, "0=ocfl_object_1.1")) === "file") continue;
-      if (!(await s.list(child) || []).length) rootEmpty = true;
-      else await walk(child);
+  if (typeof s.stream !== "function" || await s.kind("ocfl") !== "dir") return [];
+  const out = [];
+  const found2 = /* @__PURE__ */ new Map();
+  let unread = 0;
+  const checkedNoFurther = (id) => report.findings.some((x) => x.level === "error" && x.object === id && (x.message.endsWith("nor the object checked further") || x.message.endsWith("section 2: not checked further")));
+  for (const { id, dir, inv } of await f.objects()) {
+    if (!isObject(inv) || id === null || id === void 0) {
+      unread++;
+      continue;
     }
-  };
-  if (await s.kind("ocfl") === "dir") await walk("ocfl");
-  const unread = report.findings.some((x) => x.level === "error" && (x.message === "an object without a readable inventory" || x.message.endsWith("not checked further")));
+    try {
+      await pathOf(id, f.layout);
+    } catch {
+      continue;
+    }
+    found2.set(id, dir);
+    if (inventoryProblem(inv) || checkedNoFurther(id)) {
+      found2.delete(id);
+      unread++;
+    }
+  }
+  for (const [id, dir] of found2) {
+    const { valid, log } = await validateObject(s, dir);
+    if (!valid) out.push(finding("error", where(f, id), `OCFL validator: ${log.statusStr()}`));
+  }
   if (unread) {
     out.push(finding("warning", "ocfl", "the storage root as a whole is not given to the OCFL validator: it would read the files of the objects that cannot be read"));
-  } else if (rootEmpty) {
+  } else if (!(await validateStorageRoot(s, "ocfl", {
+    validateObjects: false
+  })).valid) {
     out.push(finding("error", "ocfl", "the OCFL validator rejects the storage root"));
   }
-  for (const { id, dir, inv } of await f.objects()) {
-    if (!inv || typeof id !== "string" || !isObject(inv.versions)) continue;
-    const cd = typeof inv.contentDirectory === "string" ? inv.contentDirectory : "content";
-    const empty = [];
-    for (const ver of Object.keys(inv.versions).sort((x, y) => (Number(x.slice(1)) || 0) - (Number(y.slice(1)) || 0))) {
-      const content = joinPath(dir, ver, cd);
-      if (await s.kind(content) !== "dir") continue;
-      for (const leaf of await leaves(content)) {
-        empty.push(`[E024] OCFL Object version ${ver} content directory includes empty path /${leaf.slice(dir.length + 1)} (see https://ocfl.io/1.1/spec/#E024)`);
-      }
-    }
-    if (empty.length) out.push(finding("error", where(f, id), `OCFL validator: ${empty.join("\n")}`));
-  }
   return out;
+}
+function inventoryProblem(inv) {
+  const pathsMap = (m) => isObject(m) && Object.values(m).every((v) => Array.isArray(v) && v.length > 0 && v.every((p) => typeof p === "string"));
+  if (!pathsMap(inv.manifest)) return true;
+  const versions2 = inv.versions;
+  if (!isObject(versions2) || !Object.keys(versions2).length || !Object.values(versions2).every(isObject)) return true;
+  if (typeof inv.head !== "string" || !Object.hasOwn(versions2, inv.head)) return true;
+  return Object.values(versions2).some((v) => !pathsMap(v.state) || "user" in v && !isObject(v.user) || "message" in v && typeof v.message !== "string" || "created" in v && typeof v.created !== "string");
 }
 
 // core/requests.js
