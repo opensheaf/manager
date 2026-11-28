@@ -1,4 +1,4 @@
-// opensheaf-js 8bee63c47342b96b40a850aea5a0fc6f0e9642dc: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js 91183ffcc56bcc6c9af71f6272a91c397f7bf9da: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -9811,7 +9811,7 @@ function indexEntries2(objects) {
     if (!lines2.has(owner)) lines2.set(owner, []);
     lines2.get(owner).push(name2);
     o.sidecars.forEach((digest, k) => {
-      if (digest !== null) out.sha512.push({
+      if (digest !== void 0) out.sha512.push({
         inventorySha512: digest,
         id: o.id,
         version: `v${k + 1}`,
@@ -11050,6 +11050,7 @@ var init_verify = __esm({
           objs: /* @__PURE__ */ new Map(),
           digests: [],
           sidecars: [],
+          stated: [],
           kind,
           draft
         };
@@ -11103,6 +11104,7 @@ var init_verify = __esm({
           });
           o.digests[k] = copy ? await sha512(copy) : "";
           o.sidecars[k] = copySc ? sidecarDigest(copySc) : null;
+          o.stated[k] = copySc ? sidecarDigest(copySc) : void 0;
           upper(copySc, `${ver}/inventory.json.sha512`);
           if (!copy || !copySc) {
             this.add("error", where2, "no copy of the inventory with its checksum file in the version folder (section 4.1)", at(ver));
@@ -11961,7 +11963,7 @@ var init_verify = __esm({
               genesis: log.genesis,
               status: "active",
               label: a.labelOf(id),
-              sidecars: o.sidecars,
+              sidecars: o.stated,
               carried: log.versions.filter((v) => v.forkRecord).flatMap((v) => v.carried)
             });
           } else if (o.rec) {
@@ -11971,7 +11973,7 @@ var init_verify = __esm({
               genesis: o.genesis,
               status: this.status(id, o),
               label: a.labelOf(id),
-              sidecars: o.sidecars
+              sidecars: o.stated
             });
           }
         }
@@ -11990,7 +11992,7 @@ var init_verify = __esm({
           if (!Object.hasOwn(INDEX_KEY2, index)) continue;
           const key = INDEX_KEY2[index];
           const want = expected[index];
-          const prefixes = new Set(want.map((e) => String(e[key]).slice(0, length)));
+          const prefixes = new Set(want.filter((e) => typeof e[key] === "string").map((e) => e[key].slice(0, length)));
           if (index === "names") for (const n of listedNames) prefixes.add(n.slice(0, length));
           for (const [id, o] of this.dropped) {
             const parts = parseId(id);
@@ -12006,10 +12008,12 @@ var init_verify = __esm({
             const k = index === "names" ? t.name : index === "owners" ? t.owner : t.inventorySha512;
             if (typeof k === "string") prefixes.add(k.slice(0, length));
           }
-          const held2 = [];
-          for (const p of [
+          const listing2 = a.lister ? await a.lister(`${a.base}${index}/`) : null;
+          const files = listing2 ? listing2.filter((e) => e.kind !== "dir" && e.name.endsWith(".json") && !e.name.startsWith(".")).map((e) => e.name.slice(0, -5)) : [
             ...prefixes
-          ].sort()) {
+          ].sort();
+          const held2 = [];
+          for (const p of files) {
             const place3 = `${index}/${p}.json`;
             let data2;
             try {
