@@ -1,4 +1,4 @@
-// opensheaf-js 9412e1659e460995009299de1cdfb7852738613f: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
+// opensheaf-js c8ee1f494bdee7b3e3c17229f67978f85fb16acf: web/manager.js bundled by tools/bundle.js (GPL-3.0-or-later)
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -2832,6 +2832,10 @@ var init_archive = __esm({
         const bytes = await this.http.cached(url, {
           ...options,
           limit: LIMITS.file
+        }).catch((error) => {
+          throw error?.kind === "not-found" ? Object.assign(error, {
+            logical
+          }) : error;
         });
         const digest = filesOf(inv, ver)[logical];
         if (typeof digest !== "string" || await sha512(bytes) !== digest.toLowerCase()) {
@@ -9913,6 +9917,14 @@ async function verdict(lv, obj, genesis, logs, depth = 0, resolve = null) {
         ]
       ];
     }
+    if (error?.kind === "not-found" && error.logical) {
+      return [
+        INCONSISTENT,
+        [
+          `the evidence of the branch point cannot be read: ${error.logical} is missing (section 4.1)`
+        ]
+      ];
+    }
     return [
       INCONSISTENT,
       [
@@ -11438,10 +11450,23 @@ var init_verify = __esm({
           for (const ver of versionsOf(o.inv)) {
             const obj = o.objs.get(ver);
             if (!obj || !filesOf(o.inv, ver)["datacite.json"]) continue;
-            const dc = await a.json(id, o.inv, ver, "datacite.json", this.options).catch((e) => {
+            let dc = null;
+            try {
+              dc = await a.json(id, o.inv, ver, "datacite.json", this.options);
+            } catch (e) {
               if (this.aborted(e)) throw e;
-              return null;
-            });
+              if ([
+                "json",
+                "too-large",
+                "html"
+              ].includes(e?.kind)) {
+                this.add("error", `${place3} ${ver}`, e.detail === "starts with a byte order mark (section 2)" ? "datacite.json starts with a byte order mark: JSON is UTF-8 without one (section 2)" : e.detail === "is not UTF-8 (section 2)" ? "datacite.json is not UTF-8 (section 2)" : "datacite.json is not JSON (section 2)", {
+                  object: id,
+                  ver
+                });
+                continue;
+              }
+            }
             for (const message2 of descriptionErrors(o.inv, ver, obj, dc)) this.add("error", `${place3} ${ver}`, message2, {
               object: id,
               ver
@@ -27505,17 +27530,25 @@ function where(f, id) {
   return f.labelOf(id) || id || "?";
 }
 async function landingNames(f, text3, name2, owner, id, dir) {
-  let originator = null;
+  const short2 = new RegExp(`sheaf:${name2}(?![a-z0-9:/])`).test(text3), long = text3.includes(`sheaf:${name2}:${owner}`);
+  let g = null;
   try {
     const inv = await f.inventory(dir);
-    const g = await f.readLogical(dir, inv, "genesis.json", "v1");
-    if (!g) return false;
-    originator = JSON.parse(new TextDecoder().decode(g)).originator ?? null;
+    const digest = Object.entries(inv?.versions?.v1?.state ?? {}).find(([, ps]) => Array.isArray(ps) && ps.includes("genesis.json"))?.[0];
+    g = typeof digest === "string" ? await f.readLogical(dir, inv, "genesis.json", "v1") : null;
+    if (g && await sha512(g) !== digest.toLowerCase()) g = null;
+  } catch {
+    g = null;
+  }
+  if (!g) return short2 || long;
+  let record;
+  try {
+    record = JSON.parse(new TextDecoder().decode(g));
   } catch {
     return false;
   }
-  if (originator === owner) return new RegExp(`sheaf:${name2}(?![a-z0-9:/])`).test(text3);
-  return text3.includes(`sheaf:${name2}:${owner}`);
+  const originator = isObject(record) ? record.originator ?? null : null;
+  return originator === owner ? short2 : long;
 }
 var ROTATION_NAME = /^rotation-[a-z2-7]{16}-[a-z2-7]{16}\.txt$/;
 async function lookForKeys(storage) {
